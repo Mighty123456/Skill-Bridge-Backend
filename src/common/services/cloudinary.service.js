@@ -8,11 +8,11 @@ const logger = require('../../config/logger');
  * @param {Object} options - Additional options (width, height, format, etc.)
  * @returns {Promise<Object>} Upload result with URL and public_id
  */
-const uploadImage = async (file, folder = 'skillbridge', options = {}) => {
+const uploadFile = async (file, folder = 'skillbridge', options = {}) => {
   try {
     const uploadOptions = {
       folder: folder,
-      resource_type: 'image',
+      resource_type: 'auto',
       ...options,
     };
 
@@ -69,7 +69,7 @@ const deleteImage = async (publicId) => {
     }
 
     const result = await cloudinary.uploader.destroy(publicId);
-    
+
     if (result.result === 'ok') {
       logger.info(`Image deleted successfully: ${publicId}`);
       return { success: true, message: 'Image deleted successfully' };
@@ -104,7 +104,7 @@ const uploadOptimizedImage = async (file, folder = 'skillbridge', maxWidth = 120
     ],
   };
 
-  return uploadImage(file, folder, options);
+  return uploadFile(file, folder, options);
 };
 
 /**
@@ -115,7 +115,7 @@ const uploadOptimizedImage = async (file, folder = 'skillbridge', maxWidth = 120
  */
 const uploadProfileImage = async (file, userId) => {
   const folder = `skillbridge/profiles/${userId}`;
-  
+
   const options = {
     transformation: [
       {
@@ -129,7 +129,7 @@ const uploadProfileImage = async (file, userId) => {
     ],
   };
 
-  return uploadImage(file, folder, options);
+  return uploadFile(file, folder, options);
 };
 
 /**
@@ -139,7 +139,7 @@ const uploadProfileImage = async (file, userId) => {
  */
 const extractPublicId = (url) => {
   if (!url) return null;
-  
+
   try {
     // Cloudinary URL format: https://res.cloudinary.com/{cloud_name}/image/upload/{version}/{public_id}.{format}
     const match = url.match(/\/upload\/(?:v\d+\/)?(.+?)(?:\.[^.]+)?$/);
@@ -151,7 +151,8 @@ const extractPublicId = (url) => {
 };
 
 module.exports = {
-  uploadImage,
+  uploadFile,
+  uploadImage: uploadFile, // keep alias for backward compatibility
   deleteImage,
   uploadOptimizedImage,
   uploadProfileImage,
