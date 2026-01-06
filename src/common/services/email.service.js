@@ -84,7 +84,9 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
     return { success: true, message: 'OTP sent successfully' };
   } catch (error) {
     logger.error(`Error sending OTP email: ${error.message}`);
-    throw new Error('Failed to send OTP email');
+    // Do not break the calling flow; surface a failure result instead.
+    // OTP is already generated/stored, so callers can decide how to proceed.
+    return { success: false, message: 'Failed to send OTP email' };
   }
 };
 
