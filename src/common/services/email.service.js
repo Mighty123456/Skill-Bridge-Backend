@@ -10,10 +10,17 @@ let transporter;
 
 if (config.EMAIL_USER && config.EMAIL_PASS) {
   logger.info(`Initializing email transporter with user: ${config.EMAIL_USER}`);
+
+  // Cast port to number and set TLS flags based on standard ports
+  const emailPort = Number(config.EMAIL_PORT);
+  const isImplicitTLS = emailPort === 465; // SMTPS
+  const isStartTLS = emailPort === 587;    // STARTTLS
+
   transporter = nodemailer.createTransport({
     host: config.EMAIL_HOST,
-    port: config.EMAIL_PORT,
-    secure: false, // true for 465, false for other ports
+    port: emailPort,
+    secure: isImplicitTLS, // true for 465 (implicit TLS)
+    requireTLS: isStartTLS, // enforce STARTTLS on 587
     auth: {
       user: config.EMAIL_USER,
       pass: config.EMAIL_PASS,
