@@ -9,6 +9,7 @@ const BACKEND_URL = config.VERCEL_BACKEND_URL || config.FRONTEND_URL;
 let transporter;
 
 if (config.EMAIL_USER && config.EMAIL_PASS) {
+  logger.info(`Initializing email transporter with user: ${config.EMAIL_USER}`);
   transporter = nodemailer.createTransport({
     host: config.EMAIL_HOST,
     port: config.EMAIL_PORT,
@@ -17,6 +18,15 @@ if (config.EMAIL_USER && config.EMAIL_PASS) {
       user: config.EMAIL_USER,
       pass: config.EMAIL_PASS,
     },
+  });
+
+  // Verify transporter on initialization
+  transporter.verify((error, success) => {
+    if (error) {
+      logger.error(`SMTP Connection Error: ${error.message}`);
+    } else {
+      logger.info('SMTP Server is ready to take our messages');
+    }
   });
 } else {
   logger.warn('Email credentials not configured. Email service will be disabled.');
@@ -29,8 +39,9 @@ if (config.EMAIL_USER && config.EMAIL_PASS) {
  * @param {String} purpose - Purpose (login, reset, etc.)
  */
 const sendOTPEmail = async (email, otp, purpose = 'login') => {
+  logger.info(`Attempting to send OTP email to: ${email} for purpose: ${purpose}`);
   if (!transporter) {
-    logger.warn(`Email service not configured. OTP for ${email}: ${otp}`);
+    logger.warn(`Email service not configured (transporter is null). OTP for ${email}: ${otp}`);
     return { success: true, message: 'OTP logged (email not configured)' };
   }
 
@@ -55,7 +66,7 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
     }
     const { getAuthURL } = require('../utils/backend-urls');
     const authBaseURL = getAuthURL('');
-    
+
     const mailOptions = {
       from: `"SkillBridge" <${config.EMAIL_USER}>`,
       to: email,
