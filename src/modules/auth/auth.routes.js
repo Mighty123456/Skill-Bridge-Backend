@@ -3,7 +3,7 @@ const { validationResult } = require('express-validator');
 const authController = require('./auth.controller');
 const authSchema = require('./auth.schema');
 const { authenticate } = require('../../common/middleware/auth.middleware');
-const { uploadSingle, handleUploadError } = require('../../common/middleware/upload.middleware');
+const { uploadSingle, uploadFields, handleUploadError } = require('../../common/middleware/upload.middleware');
 
 const router = express.Router();
 
