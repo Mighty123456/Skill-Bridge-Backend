@@ -35,7 +35,24 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
   }
 
   try {
-    const purposeText = purpose === 'login' ? 'login' : 'password reset';
+    // Human‑readable purpose text and action line for the email
+    let purposeText;
+    let actionLine;
+
+    if (purpose === 'login') {
+      purposeText = 'login';
+      actionLine = 'Use this code to login at';
+    } else if (purpose === 'reset') {
+      purposeText = 'password reset';
+      actionLine = 'Use this code to reset your password at';
+    } else if (purpose === 'registration') {
+      purposeText = 'email verification';
+      actionLine = 'Use this code to verify your email at';
+    } else {
+      // Fallback for any other custom purposes
+      purposeText = purpose;
+      actionLine = 'Use this code at';
+    }
     const { getAuthURL } = require('../utils/backend-urls');
     const authBaseURL = getAuthURL('');
     
@@ -52,7 +69,7 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
             <h1 style="color: #4A90E2; margin: 0; font-size: 32px; letter-spacing: 5px;">${otp}</h1>
           </div>
           <p>This code will expire in 10 minutes.</p>
-          <p>Use this code to ${purposeText === 'login' ? 'login' : 'reset your password'} at: <a href="${authBaseURL}">${authBaseURL}</a></p>
+          <p>${actionLine}: <a href="${authBaseURL}">${authBaseURL}</a></p>
           <p>If you didn't request this code, please ignore this email.</p>
           <p style="margin-top: 20px; font-size: 12px; color: #666;">
             Need help? Contact us at support@skillbridge.com
