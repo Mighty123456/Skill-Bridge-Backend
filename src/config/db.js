@@ -2,6 +2,9 @@ const mongoose = require('mongoose');
 const config = require('./env');
 const logger = require('./logger');
 
+// Fail fast instead of buffering operations when not connected
+mongoose.set('bufferCommands', false);
+
 const connectDB = async () => {
   try {
     // Check if already connected
