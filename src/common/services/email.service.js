@@ -42,7 +42,8 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
   logger.info(`Attempting to send OTP email to: ${email} for purpose: ${purpose}`);
   if (!transporter) {
     logger.warn(`Email service not configured (transporter is null). OTP for ${email}: ${otp}`);
-    return { success: true, message: 'OTP logged (email not configured)' };
+    // Treat as failure so callers can surface debug OTP in non-prod
+    return { success: false, message: 'Email service not configured' };
   }
 
   try {

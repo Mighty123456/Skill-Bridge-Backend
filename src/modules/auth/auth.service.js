@@ -3,6 +3,7 @@ const { generateToken } = require('../../common/utils/jwt');
 const { generateOTP, storeOTP, verifyOTP } = require('../../common/services/otp.service');
 const { sendOTPEmail, sendWelcomeEmail } = require('../../common/services/email.service');
 const { uploadProfileImage: uploadImageToCloudinary, deleteImage, extractPublicId } = require('../../common/services/cloudinary.service');
+const config = require('../../config/env');
 const logger = require('../../config/logger');
 const { ROLES } = require('../../common/constants/roles');
 
@@ -55,7 +56,8 @@ const register = async (userData) => {
   await storeOTP(email.toLowerCase(), otp, 'registration');
 
   // Send OTP via email
-  await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
   // Send welcome email (non-blocking)
   sendWelcomeEmail(user.email, user.name).catch(err => {
@@ -67,6 +69,7 @@ const register = async (userData) => {
   return {
     message: 'Registration successful. Please verify your email with the OTP sent to your email address.',
     email: user.email,
+    ...(debugOtp ? { debugOtp } : {}),
   };
 };
 
@@ -129,12 +132,14 @@ const sendLoginOTP = async (email) => {
   await storeOTP(email.toLowerCase(), otp, 'login');
 
   // Send OTP via email
-  await sendOTPEmail(email.toLowerCase(), otp, 'login');
+  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'login');
+  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
   logger.info(`Login OTP sent to: ${email}`);
 
   return {
     message: 'OTP sent to your email address',
+    ...(debugOtp ? { debugOtp } : {}),
   };
 };
 
@@ -200,12 +205,14 @@ const sendPasswordResetOTP = async (email) => {
   await storeOTP(email.toLowerCase(), otp, 'reset');
 
   // Send OTP via email
-  await sendOTPEmail(email.toLowerCase(), otp, 'reset');
+  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'reset');
+  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
   logger.info(`Password reset OTP sent to: ${email}`);
 
   return {
     message: 'If an account exists with this email, an OTP has been sent',
+    ...(debugOtp ? { debugOtp } : {}),
   };
 };
 
@@ -393,12 +400,14 @@ const resendOTP = async (email) => {
   await storeOTP(email.toLowerCase(), otp, 'registration');
 
   // Send OTP via email
-  await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
   logger.info(`Registration OTP resent to: ${email}`);
 
   return {
     message: 'OTP sent to your email address',
+    ...(debugOtp ? { debugOtp } : {}),
   };
 };
 
