@@ -296,8 +296,13 @@ const uploadProfileImage = async (userId, imageBuffer) => {
 
   logger.info(`Profile image uploaded for user: ${userId}`);
 
+  // Return the Render URL for the uploaded image endpoint
+  const { getUploadURL } = require('../../common/utils/backend-urls');
+  const uploadEndpoint = getUploadURL('/auth/upload-profile-image');
+
   return {
     profileImage: uploadResult.url,
+    uploadEndpoint: uploadEndpoint,
     message: 'Profile image uploaded successfully',
   };
 };

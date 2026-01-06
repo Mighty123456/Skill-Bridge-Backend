@@ -2,6 +2,9 @@ const nodemailer = require('nodemailer');
 const config = require('../../config/env');
 const logger = require('../../config/logger');
 
+// Use Vercel URL for OTP email links
+const BACKEND_URL = config.VERCEL_BACKEND_URL || config.FRONTEND_URL;
+
 // Create email transporter
 let transporter;
 
@@ -33,6 +36,8 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
 
   try {
     const purposeText = purpose === 'login' ? 'login' : 'password reset';
+    const { getAuthURL } = require('../utils/backend-urls');
+    const authBaseURL = getAuthURL('');
     
     const mailOptions = {
       from: `"SkillBridge" <${config.EMAIL_USER}>`,
@@ -47,7 +52,11 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
             <h1 style="color: #4A90E2; margin: 0; font-size: 32px; letter-spacing: 5px;">${otp}</h1>
           </div>
           <p>This code will expire in 10 minutes.</p>
+          <p>Use this code to ${purposeText === 'login' ? 'login' : 'reset your password'} at: <a href="${authBaseURL}">${authBaseURL}</a></p>
           <p>If you didn't request this code, please ignore this email.</p>
+          <p style="margin-top: 20px; font-size: 12px; color: #666;">
+            Need help? Contact us at support@skillbridge.com
+          </p>
           <p>Best regards,<br>The SkillBridge Team</p>
         </div>
       `,

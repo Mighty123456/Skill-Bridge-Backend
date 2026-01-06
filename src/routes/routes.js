@@ -5,6 +5,8 @@ const router = express.Router();
 
 // Root route
 router.get('/', (req, res) => {
+  const { getBackendURL } = require('../common/utils/backend-urls');
+  
   res.json({
     success: true,
     message: 'SkillBridge API is running',
@@ -13,6 +15,10 @@ router.get('/', (req, res) => {
     endpoints: {
       health: '/api/health',
       auth: '/api/auth',
+    },
+    services: {
+      otp: getBackendURL('otp'),
+      upload: getBackendURL('upload'),
     },
   });
 });

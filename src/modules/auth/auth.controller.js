@@ -131,6 +131,11 @@ const uploadProfileImage = async (req, res) => {
     }
 
     const result = await authService.uploadProfileImage(req.userId, req.file.buffer);
+    
+    // Add Render URL info for file uploads
+    const { getUploadURL } = require('../../common/utils/backend-urls');
+    result.uploadService = getUploadURL('');
+    
     return successResponse(res, 'Profile image uploaded successfully', result);
   } catch (error) {
     logger.error(`Upload profile image error: ${error.message}`);
