@@ -52,7 +52,7 @@ const register = async (userData) => {
 
   // Generate and send OTP for email verification
   const otp = generateOTP();
-  storeOTP(email.toLowerCase(), otp, 'registration');
+  await storeOTP(email.toLowerCase(), otp, 'registration');
 
   // Send OTP via email
   await sendOTPEmail(email.toLowerCase(), otp, 'registration');
@@ -126,7 +126,7 @@ const sendLoginOTP = async (email) => {
 
   // Generate and store OTP
   const otp = generateOTP();
-  storeOTP(email.toLowerCase(), otp, 'login');
+  await storeOTP(email.toLowerCase(), otp, 'login');
 
   // Send OTP via email
   await sendOTPEmail(email.toLowerCase(), otp, 'login');
@@ -143,7 +143,7 @@ const sendLoginOTP = async (email) => {
  */
 const loginWithOTP = async (email, otp) => {
   // Verify OTP
-  const isOTPValid = verifyOTP(email.toLowerCase(), otp, 'login');
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'login');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
@@ -197,7 +197,7 @@ const sendPasswordResetOTP = async (email) => {
 
   // Generate and store OTP
   const otp = generateOTP();
-  storeOTP(email.toLowerCase(), otp, 'reset');
+  await storeOTP(email.toLowerCase(), otp, 'reset');
 
   // Send OTP via email
   await sendOTPEmail(email.toLowerCase(), otp, 'reset');
@@ -213,7 +213,7 @@ const sendPasswordResetOTP = async (email) => {
  * Verify OTP for password reset
  */
 const verifyPasswordResetOTP = async (email, otp) => {
-  const isOTPValid = verifyOTP(email.toLowerCase(), otp, 'reset');
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'reset');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
@@ -229,7 +229,7 @@ const verifyPasswordResetOTP = async (email, otp) => {
  */
 const resetPassword = async (email, otp, newPassword) => {
   // Verify OTP first
-  const isOTPValid = verifyOTP(email.toLowerCase(), otp, 'reset');
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'reset');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
@@ -346,7 +346,7 @@ const deleteProfileImage = async (userId) => {
  */
 const verifyRegistration = async (email, otp) => {
   // Verify OTP
-  const isOTPValid = verifyOTP(email.toLowerCase(), otp, 'registration');
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'registration');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
@@ -390,7 +390,7 @@ const resendOTP = async (email) => {
 
   // Generate and store OTP
   const otp = generateOTP();
-  storeOTP(email.toLowerCase(), otp, 'registration');
+  await storeOTP(email.toLowerCase(), otp, 'registration');
 
   // Send OTP via email
   await sendOTPEmail(email.toLowerCase(), otp, 'registration');

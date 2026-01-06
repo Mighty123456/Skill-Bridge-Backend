@@ -1,9 +1,7 @@
 const crypto = require('crypto');
 const config = require('../../config/env');
 const logger = require('../../config/logger');
-
-// In-memory OTP storage (use Redis in production)
-const otpStore = new Map();
+const Otp = require('../../modules/auth/otp.model');
 
 /**
  * Generate a 6-digit OTP
@@ -13,70 +11,62 @@ const generateOTP = () => {
 };
 
 /**
- * Store OTP with expiration
+ * Store OTP with expiration (Mongo-backed)
  * @param {String} email - User email
  * @param {String} otp - OTP code
- * @param {String} purpose - Purpose of OTP (login, reset, etc.)
+ * @param {String} purpose - Purpose of OTP (login, reset, registration, etc.)
  */
-const storeOTP = (email, otp, purpose = 'login') => {
-  const key = `${email}:${purpose}`;
-  const expiresAt = Date.now() + config.OTP_EXPIRE;
+const storeOTP = async (email, otp, purpose = 'login') => {
+  const expiresAt = new Date(Date.now() + Number(config.OTP_EXPIRE));
 
-  otpStore.set(key, {
-    otp,
-    expiresAt,
-    attempts: 0
-  });
-
-  // Clean up expired OTPs periodically
-  setTimeout(() => {
-    otpStore.delete(key);
-  }, config.OTP_EXPIRE);
+  await Otp.findOneAndUpdate(
+    { email, purpose },
+    { otp, expiresAt, attempts: 0 },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
 
   logger.debug(`OTP stored for ${email} (${purpose})`);
 };
 
 /**
- * Verify OTP
+ * Verify OTP (Mongo-backed)
  * @param {String} email - User email
  * @param {String} otp - OTP to verify
  * @param {String} purpose - Purpose of OTP
- * @returns {Boolean} True if valid, false otherwise
+ * @returns {Promise<Boolean>} True if valid, false otherwise
  */
-const verifyOTP = (email, otp, purpose = 'login') => {
-  const key = `${email}:${purpose}`;
-  const stored = otpStore.get(key);
+const verifyOTP = async (email, otp, purpose = 'login') => {
+  const record = await Otp.findOne({ email, purpose });
 
-  if (!stored) {
+  if (!record) {
     logger.debug(`No OTP found for ${email} (${purpose})`);
     return false;
   }
 
-  // Check if expired
-  if (Date.now() > stored.expiresAt) {
-    otpStore.delete(key);
+  // Check expiry
+  if (record.expiresAt < new Date()) {
+    await Otp.deleteOne({ _id: record._id });
     logger.debug(`OTP expired for ${email} (${purpose})`);
     return false;
   }
 
   // Check attempts (max 5 attempts)
-  if (stored.attempts >= 5) {
-    otpStore.delete(key);
+  if (record.attempts >= 5) {
+    await Otp.deleteOne({ _id: record._id });
     logger.debug(`Max attempts reached for ${email} (${purpose})`);
     return false;
   }
 
-  // Increment attempts
-  stored.attempts += 1;
-
-  // Verify OTP
-  if (stored.otp !== otp) {
+  // Increment attempts for mismatches
+  if (record.otp !== otp) {
+    record.attempts += 1;
+    await record.save();
     logger.debug(`Invalid OTP for ${email} (${purpose})`);
     return false;
   }
 
   // OTP verified successfully, delete it
-  otpStore.delete(key);
+  await Otp.deleteOne({ _id: record._id });
   logger.debug(`OTP verified for ${email} (${purpose})`);
   return true;
 };
@@ -84,9 +74,8 @@ const verifyOTP = (email, otp, purpose = 'login') => {
 /**
  * Delete OTP (for cleanup)
  */
-const deleteOTP = (email, purpose = 'login') => {
-  const key = `${email}:${purpose}`;
-  otpStore.delete(key);
+const deleteOTP = async (email, purpose = 'login') => {
+  await Otp.deleteOne({ email, purpose });
 };
 
 module.exports = {
