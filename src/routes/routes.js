@@ -3,6 +3,20 @@ const authRoutes = require('../modules/auth/auth.routes');
 
 const router = express.Router();
 
+// Root route
+router.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'SkillBridge API is running',
+    version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      health: '/api/health',
+      auth: '/api/auth',
+    },
+  });
+});
+
 // Health check route
 router.get('/health', (req, res) => {
   res.json({
