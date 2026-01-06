@@ -14,7 +14,7 @@ const userSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: function() {
+      required: function () {
         // Password required only if not using OTP-only login
         return this.loginMethod !== 'otp-only';
       },
@@ -67,6 +67,13 @@ const userSchema = new mongoose.Schema(
     },
     // Profile image
     profileImage: {
+      type: String,
+    },
+    // Verification documents
+    governmentId: {
+      type: String,
+    },
+    selfie: {
       type: String,
     },
     // Account status

@@ -8,6 +8,24 @@ const { uploadSingle, handleUploadError } = require('../../common/middleware/upl
 const router = express.Router();
 
 /**
+ * Middleware to parse stringified JSON fields
+ */
+const parseJsonFields = (fields) => {
+  return (req, res, next) => {
+    fields.forEach(field => {
+      if (req.body[field] && typeof req.body[field] === 'string') {
+        try {
+          req.body[field] = JSON.parse(req.body[field]);
+        } catch (e) {
+          // Keep as string if parsing fails
+        }
+      }
+    });
+    next();
+  };
+};
+
+/**
  * Validation middleware
  */
 const validate = (validations) => {
@@ -32,7 +50,17 @@ const validate = (validations) => {
  * @desc    Register a new user (Worker, User, or Contractor)
  * @access  Public
  */
-router.post('/register', validate(authSchema.registerSchema), authController.register);
+router.post(
+  '/register',
+  uploadFields([
+    { name: 'governmentId', maxCount: 1 },
+    { name: 'selfie', maxCount: 1 }
+  ]),
+  handleUploadError,
+  parseJsonFields(['address', 'services', 'skills']),
+  validate(authSchema.registerSchema),
+  authController.register
+);
 
 /**
  * @route   POST /api/auth/login

@@ -8,7 +8,13 @@ const logger = require('../../config/logger');
  */
 const register = async (req, res) => {
   try {
-    const result = await authService.register(req.body);
+    const fileBuffers = {};
+    if (req.files) {
+      if (req.files.governmentId) fileBuffers.governmentId = req.files.governmentId[0].buffer;
+      if (req.files.selfie) fileBuffers.selfie = req.files.selfie[0].buffer;
+    }
+
+    const result = await authService.register(req.body, fileBuffers);
     return successResponse(res, 'Registration successful', result, 201);
   } catch (error) {
     logger.error(`Registration error: ${error.message}`);

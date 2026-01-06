@@ -10,7 +10,7 @@ const { ROLES } = require('../../common/constants/roles');
 /**
  * Register a new user
  */
-const register = async (userData) => {
+const register = async (userData, fileBuffers = {}) => {
   const { email, password, role, name, phone, dateOfBirth, address, services, skills, experience } = userData;
 
   // Check if user already exists
@@ -37,14 +37,33 @@ const register = async (userData) => {
 
   // Add role-specific fields
   if (role === ROLES.WORKER || role === ROLES.CONTRACTOR) {
-    if (services && services.length > 0) {
+    if (services) {
       userFields.services = services;
     }
-    if (skills && skills.length > 0) {
+    if (skills) {
       userFields.skills = skills;
     }
     if (experience !== undefined) {
       userFields.experience = experience;
+    }
+
+    // Handle verification documents if provided
+    if (fileBuffers.governmentId) {
+      try {
+        const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+        userFields.governmentId = uploadResult.url;
+      } catch (err) {
+        logger.error(`Failed to upload government ID: ${err.message}`);
+      }
+    }
+
+    if (fileBuffers.selfie) {
+      try {
+        const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+        userFields.selfie = uploadResult.url;
+      } catch (err) {
+        logger.error(`Failed to upload selfie: ${err.message}`);
+      }
     }
   }
 
