@@ -5,18 +5,15 @@ const logger = require('../../config/logger');
 // Use Vercel URL for OTP email links
 const BACKEND_URL = config.VERCEL_BACKEND_URL || config.FRONTEND_URL;
 
-// Create email transporter
-let transporter;
+// Create email transporter with verification + retry
+let transporter = null;
 
-if (config.EMAIL_USER && config.EMAIL_PASS) {
-  logger.info(`Initializing email transporter with user: ${config.EMAIL_USER}`);
-
-  // Cast port to number and set TLS flags based on standard ports
+const createTransporter = () => {
   const emailPort = Number(config.EMAIL_PORT);
   const isImplicitTLS = emailPort === 465; // SMTPS
   const isStartTLS = emailPort === 587;    // STARTTLS
 
-  transporter = nodemailer.createTransport({
+  return nodemailer.createTransport({
     host: config.EMAIL_HOST,
     port: emailPort,
     secure: isImplicitTLS, // true for 465 (implicit TLS)
@@ -25,19 +22,34 @@ if (config.EMAIL_USER && config.EMAIL_PASS) {
       user: config.EMAIL_USER,
       pass: config.EMAIL_PASS,
     },
+    logger: true,
+    debug: true,
   });
+};
 
-  // Verify transporter on initialization
-  transporter.verify((error, success) => {
-    if (error) {
-      logger.error(`SMTP Connection Error: ${error.message}`);
-    } else {
+const initializeTransporter = async (retries = 3, delayMs = 1000) => {
+  if (!config.EMAIL_USER || !config.EMAIL_PASS) {
+    logger.error('Email credentials not configured. Email service will be disabled.');
+    return false;
+  }
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      transporter = createTransporter();
+      await transporter.verify();
       logger.info('SMTP Server is ready to take our messages');
+      return true;
+    } catch (error) {
+      logger.error(`SMTP init attempt ${attempt} failed: ${error.message}`);
+      if (attempt === retries) {
+        return false;
+      }
+      const backoff = delayMs * Math.pow(2, attempt - 1);
+      await new Promise((res) => setTimeout(res, backoff));
     }
-  });
-} else {
-  logger.warn('Email credentials not configured. Email service will be disabled.');
-}
+  }
+  return false;
+};
 
 /**
  * Send OTP email
@@ -48,9 +60,11 @@ if (config.EMAIL_USER && config.EMAIL_PASS) {
 const sendOTPEmail = async (email, otp, purpose = 'login') => {
   logger.info(`Attempting to send OTP email to: ${email} for purpose: ${purpose}`);
   if (!transporter) {
-    logger.warn(`Email service not configured (transporter is null). OTP for ${email}: ${otp}`);
-    // Treat as failure so callers can surface debug OTP in non-prod
-    return { success: false, message: 'Email service not configured' };
+    const ready = await initializeTransporter();
+    if (!ready) {
+      logger.warn(`Email service not configured (transporter is null). OTP for ${email}: ${otp}`);
+      return { success: false, message: 'Email service not configured' };
+    }
   }
 
   try {
@@ -114,8 +128,11 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
  */
 const sendWelcomeEmail = async (email, name) => {
   if (!transporter) {
-    logger.info(`Welcome email would be sent to ${email}`);
-    return { success: true };
+    const ready = await initializeTransporter();
+    if (!ready) {
+      logger.info(`Welcome email skipped; email service not configured. Intended for ${email}`);
+      return { success: false, message: 'Email service not configured' };
+    }
   }
 
   try {
