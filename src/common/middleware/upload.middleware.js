@@ -6,6 +6,9 @@ const storage = multer.memoryStorage();
 
 // File filter to accept only images
 const fileFilter = (req, file, cb) => {
+  // Debug log for mimetype
+  console.log(`Uploading file: ${file.originalname}, mimetype: ${file.mimetype}`);
+
   // Allow images, PDFs, and common document types
   const allowedMimeTypes = [
     'image/jpeg',
@@ -16,7 +19,14 @@ const fileFilter = (req, file, cb) => {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   ];
 
-  if (allowedMimeTypes.includes(file.mimetype) || file.mimetype.startsWith('image/')) {
+  const extension = file.originalname.split('.').pop().toLowerCase();
+  const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'pdf', 'doc', 'docx'];
+
+  if (
+    allowedMimeTypes.includes(file.mimetype) ||
+    file.mimetype.startsWith('image/') ||
+    allowedExtensions.includes(extension)
+  ) {
     cb(null, true);
   } else {
     cb(new Error('Invalid file type. Only images and documents (PDF, DOC) are allowed'), false);
