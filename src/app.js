@@ -22,6 +22,32 @@ app.use((req, res, next) => {
   next();
 });
 
+// Root route
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Welcome to SkillBridge API',
+    version: '1.0.0',
+    endpoints: {
+      health: '/api/health',
+      auth: {
+        register: 'POST /api/auth/register',
+        login: 'POST /api/auth/login',
+        sendOTP: 'POST /api/auth/send-otp',
+        loginOTP: 'POST /api/auth/login-otp',
+        forgotPassword: 'POST /api/auth/forgot-password',
+        verifyResetOTP: 'POST /api/auth/verify-reset-otp',
+        resetPassword: 'POST /api/auth/reset-password',
+        profile: 'GET /api/auth/profile',
+        uploadProfileImage: 'POST /api/auth/upload-profile-image',
+        deleteProfileImage: 'DELETE /api/auth/delete-profile-image',
+      },
+    },
+    documentation: 'See README.md for detailed API documentation',
+    timestamp: new Date().toISOString(),
+  });
+});
+
 // Routes
 app.use('/api', routes);
 
