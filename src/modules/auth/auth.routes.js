@@ -103,5 +103,19 @@ router.post(
  */
 router.delete('/delete-profile-image', authenticate, authController.deleteProfileImage);
 
+/**
+ * @route   POST /api/auth/verify-registration
+ * @desc    Verify registration OTP
+ * @access  Public
+ */
+router.post('/verify-registration', validate(authSchema.loginOTPSchema), authController.verifyRegistration);
+
+/**
+ * @route   POST /api/auth/resend-otp
+ * @desc    Resend OTP for registration
+ * @access  Public
+ */
+router.post('/resend-otp', validate(authSchema.sendOTPSchema), authController.resendOTP);
+
 module.exports = router;
 

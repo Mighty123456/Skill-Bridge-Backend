@@ -131,11 +131,11 @@ const uploadProfileImage = async (req, res) => {
     }
 
     const result = await authService.uploadProfileImage(req.userId, req.file.buffer);
-    
+
     // Add Render URL info for file uploads
     const { getUploadURL } = require('../../common/utils/backend-urls');
     result.uploadService = getUploadURL('');
-    
+
     return successResponse(res, 'Profile image uploaded successfully', result);
   } catch (error) {
     logger.error(`Upload profile image error: ${error.message}`);
@@ -157,6 +157,36 @@ const deleteProfileImage = async (req, res) => {
   }
 };
 
+/**
+ * Verify registration OTP
+ * POST /api/auth/verify-registration
+ */
+const verifyRegistration = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const result = await authService.verifyRegistration(email, otp);
+    return successResponse(res, result.message, result);
+  } catch (error) {
+    logger.error(`Verify registration error: ${error.message}`);
+    return errorResponse(res, error.message, 400);
+  }
+};
+
+/**
+ * Resend OTP
+ * POST /api/auth/resend-otp
+ */
+const resendOTP = async (req, res) => {
+  try {
+    const { email } = req.body;
+    const result = await authService.resendOTP(email);
+    return successResponse(res, result.message);
+  } catch (error) {
+    logger.error(`Resend OTP error: ${error.message}`);
+    return errorResponse(res, error.message, 400);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -168,4 +198,6 @@ module.exports = {
   getProfile,
   uploadProfileImage,
   deleteProfileImage,
+  verifyRegistration,
+  resendOTP,
 };

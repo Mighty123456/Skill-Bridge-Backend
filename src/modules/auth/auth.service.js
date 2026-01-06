@@ -50,22 +50,23 @@ const register = async (userData) => {
   // Create user
   const user = await User.create(userFields);
 
+  // Generate and send OTP for email verification
+  const otp = generateOTP();
+  storeOTP(email.toLowerCase(), otp, 'registration');
+
+  // Send OTP via email
+  await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+
   // Send welcome email (non-blocking)
   sendWelcomeEmail(user.email, user.name).catch(err => {
     logger.error(`Failed to send welcome email: ${err.message}`);
   });
 
-  // Generate token
-  const token = generateToken({ userId: user._id, role: user.role });
-
-  // Remove password from response
-  const userResponse = user.toJSON();
-
   logger.info(`New user registered: ${user.email} (${user.role})`);
 
   return {
-    user: userResponse,
-    token,
+    message: 'Registration successful. Please verify your email with the OTP sent to your email address.',
+    email: user.email,
   };
 };
 
@@ -340,6 +341,67 @@ const deleteProfileImage = async (userId) => {
   return { message: 'Profile image deleted successfully' };
 };
 
+/**
+ * Verify registration OTP
+ */
+const verifyRegistration = async (email, otp) => {
+  // Verify OTP
+  const isOTPValid = verifyOTP(email.toLowerCase(), otp, 'registration');
+
+  if (!isOTPValid) {
+    throw new Error('Invalid or expired OTP');
+  }
+
+  // Find user
+  const user = await User.findOne({ email: email.toLowerCase() });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Mark user as verified
+  user.isEmailVerified = true;
+  await user.save({ validateBeforeSave: false });
+
+  // Generate token for auto-login
+  const token = generateToken({ userId: user._id, role: user.role });
+
+  // Remove password from response
+  const userResponse = user.toJSON();
+
+  logger.info(`User verified registration: ${user.email}`);
+
+  return {
+    user: userResponse,
+    token,
+    message: 'Email verified successfully',
+  };
+};
+
+/**
+ * Resend OTP
+ */
+const resendOTP = async (email) => {
+  const user = await User.findOne({ email: email.toLowerCase() });
+
+  if (!user) {
+    throw new Error('No account found with this email address');
+  }
+
+  // Generate and store OTP
+  const otp = generateOTP();
+  storeOTP(email.toLowerCase(), otp, 'registration');
+
+  // Send OTP via email
+  await sendOTPEmail(email.toLowerCase(), otp, 'registration');
+
+  logger.info(`Registration OTP resent to: ${email}`);
+
+  return {
+    message: 'OTP sent to your email address',
+  };
+};
+
 module.exports = {
   register,
   login,
@@ -351,5 +413,7 @@ module.exports = {
   getProfile,
   uploadProfileImage,
   deleteProfileImage,
+  verifyRegistration,
+  resendOTP,
 };
 
