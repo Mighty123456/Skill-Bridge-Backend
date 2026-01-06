@@ -35,7 +35,7 @@ const storeOTP = async (email, otp, purpose = 'login') => {
  * @param {String} purpose - Purpose of OTP
  * @returns {Promise<Boolean>} True if valid, false otherwise
  */
-const verifyOTP = async (email, otp, purpose = 'login') => {
+const verifyOTP = async (email, otp, purpose = 'login', deleteOnSuccess = true) => {
   const record = await Otp.findOne({ email, purpose });
 
   if (!record) {
@@ -65,8 +65,11 @@ const verifyOTP = async (email, otp, purpose = 'login') => {
     return false;
   }
 
-  // OTP verified successfully, delete it
-  await Otp.deleteOne({ _id: record._id });
+  // OTP verified successfully
+  if (deleteOnSuccess) {
+    await Otp.deleteOne({ _id: record._id });
+  }
+
   logger.debug(`OTP verified for ${email} (${purpose})`);
   return true;
 };

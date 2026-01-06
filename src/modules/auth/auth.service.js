@@ -220,7 +220,7 @@ const sendPasswordResetOTP = async (email) => {
  * Verify OTP for password reset
  */
 const verifyPasswordResetOTP = async (email, otp) => {
-  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'reset');
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'reset', false);
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
