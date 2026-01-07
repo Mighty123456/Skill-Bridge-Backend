@@ -48,6 +48,52 @@ router.patch(
   adminController.updateWorkerStatus,
 );
 
+// List all users (User, Worker, Contractor)
+router.get(
+  '/users',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  authorize(ROLES.ADMIN),
+  adminController.listUsers,
+);
+
+// Get dashboard statistics
+router.get(
+  '/stats',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getDashboardStats,
+);
+
+// Badge Management Routes
+router.post(
+  '/badges',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.createBadge
+);
+
+router.get(
+  '/badges',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listBadges
+);
+
+router.post(
+  '/workers/:workerId/badges',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.assignBadge
+);
+
+router.delete(
+  '/workers/:workerId/badges/:badgeId',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.removeBadge
+);
+
 module.exports = router;
 
 

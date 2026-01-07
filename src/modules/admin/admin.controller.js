@@ -1,9 +1,11 @@
 const Worker = require('../workers/worker.model');
 const User = require('../users/user.model');
 const Admin = require('./admin.model');
+const Badge = require('../workers/badge.model');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
+const emailService = require('../../common/services/email.service');
 const logger = require('../../config/logger');
 
 /**
@@ -25,6 +27,7 @@ const listWorkers = async (req, res) => {
         path: 'user',
         select: 'name email phone role address profileImage', // Added profileImage
       })
+      .populate('badges')
       .sort({ createdAt: -1 });
 
     const summaries = workers
@@ -44,10 +47,14 @@ const listWorkers = async (req, res) => {
           skills: w.skills,
           experience: w.experience,
           city: w.city || u.address?.city || null,
+          state: u.address?.state || null, // Added state
 
           // Verification docs
           governmentId: w.governmentId,
           selfie: w.selfie,
+
+          // Badges
+          badges: w.badges,
 
           status: w.verificationStatus,
           createdAt: w.createdAt,
@@ -115,6 +122,16 @@ const updateWorkerStatus = async (req, res) => {
       }`,
     );
 
+    // Send email notification (non-blocking)
+    if (status === 'verified' || status === 'rejected') {
+      emailService.sendVerificationEmail(
+        worker.user.email,
+        worker.user.name,
+        status,
+        reason
+      ).catch(err => logger.error(`Failed to send verification email: ${err.message}`));
+    }
+
     return successResponse(res, 'Worker status updated successfully', { status });
   } catch (error) {
     logger.error(`Admin updateWorkerStatus error: ${error.message}`);
@@ -149,10 +166,207 @@ const adminLogin = async (req, res) => {
   }
 };
 
+/**
+ * List all users with optional role filter
+ * GET /api/admin/users?role=worker|user|contractor
+ */
+const listUsers = async (req, res) => {
+  try {
+    const { role } = req.query;
+    const filter = {};
+
+    if (role) {
+      // Validate role
+      if (!Object.values(ROLES).includes(role)) {
+        return errorResponse(res, 'Invalid role filter', 400);
+      }
+      filter.role = role;
+    }
+
+    const users = await User.find(filter)
+      .select('-password')
+      .sort({ createdAt: -1 });
+
+    // Enrich users with role-specific details
+    const enrichedUsers = await Promise.all(
+      users.map(async (user) => {
+        const userData = user.toObject();
+
+        if (user.role === ROLES.WORKER) {
+          const worker = await Worker.findOne({ user: user._id });
+          if (worker) {
+            userData.details = {
+              services: worker.services,
+              skills: worker.skills,
+              experience: worker.experience,
+              governmentId: worker.governmentId,
+              selfie: worker.selfie,
+              verificationStatus: worker.verificationStatus,
+              city: worker.city || user.address?.city,
+              state: user.address?.state
+            };
+          }
+        } else if (user.role === ROLES.CONTRACTOR) {
+          const contractor = await require('../contractors/contractor.model').findOne({ user: user._id });
+          if (contractor) {
+            userData.details = {
+              companyName: contractor.companyName,
+              services: contractor.services,
+              experience: contractor.experience,
+              governmentId: contractor.governmentId,
+              selfie: contractor.selfie,
+              verificationStatus: contractor.verificationStatus,
+              city: user.address?.city,
+              state: user.address?.state
+            };
+          }
+        }
+
+        return userData;
+      })
+    );
+
+    return successResponse(res, 'Users fetched successfully', { users: enrichedUsers });
+  } catch (error) {
+    logger.error(`Admin listUsers error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch users', 500);
+  }
+};
+
+/**
+ * Get dashboard statistics
+ * GET /api/admin/stats
+ */
+const getDashboardStats = async (req, res) => {
+  try {
+    const [pendingWorkers, verifiedWorkers, totalUsers, totalContractors] = await Promise.all([
+      Worker.countDocuments({ verificationStatus: 'pending' }),
+      Worker.countDocuments({ verificationStatus: 'verified' }),
+      User.countDocuments({ role: ROLES.USER }),
+      User.countDocuments({ role: ROLES.CONTRACTOR }),
+    ]);
+
+    return successResponse(res, 'Stats fetched successfully', {
+      pendingWorkers,
+      verifiedWorkers,
+      totalUsers,
+      totalContractors,
+    });
+  } catch (error) {
+    logger.error(`Admin getDashboardStats error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch dashboard stats', 500);
+  }
+};
+
+/**
+ * Create a new badge
+ * POST /api/admin/badges
+ */
+const createBadge = async (req, res) => {
+  try {
+    const { name, slug, description, color, icon } = req.body;
+
+    const existingBadge = await Badge.findOne({ slug });
+    if (existingBadge) {
+      return errorResponse(res, 'Badge with this slug already exists', 400);
+    }
+
+    const badge = await Badge.create({
+      name,
+      slug,
+      description,
+      color,
+      icon,
+    });
+
+    return successResponse(res, 'Badge created successfully', { badge }, 201);
+  } catch (error) {
+    logger.error(`Admin createBadge error: ${error.message}`);
+    return errorResponse(res, 'Failed to create badge', 500);
+  }
+};
+
+/**
+ * List all badges
+ * GET /api/admin/badges
+ */
+const listBadges = async (req, res) => {
+  try {
+    const badges = await Badge.find({ isActive: true }).sort('name');
+    return successResponse(res, 'Badges fetched successfully', { badges });
+  } catch (error) {
+    logger.error(`Admin listBadges error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch badges', 500);
+  }
+};
+
+/**
+ * Assign badge to worker
+ * POST /api/admin/workers/:workerId/badges
+ */
+const assignBadge = async (req, res) => {
+  try {
+    const { workerId } = req.params;
+    const { badgeId } = req.body;
+
+    const worker = await Worker.findById(workerId);
+    if (!worker) {
+      return errorResponse(res, 'Worker not found', 404);
+    }
+
+    const badge = await Badge.findById(badgeId);
+    if (!badge) {
+      return errorResponse(res, 'Badge not found', 404);
+    }
+
+    // Check if already assigned
+    if (worker.badges.includes(badgeId)) {
+      return errorResponse(res, 'Badge already assigned to this worker', 400);
+    }
+
+    worker.badges.push(badgeId);
+    await worker.save();
+
+    return successResponse(res, 'Badge assigned successfully');
+  } catch (error) {
+    logger.error(`Admin assignBadge error: ${error.message}`);
+    return errorResponse(res, 'Failed to assign badge', 500);
+  }
+};
+
+/**
+ * Remove badge from worker
+ * DELETE /api/admin/workers/:workerId/badges/:badgeId
+ */
+const removeBadge = async (req, res) => {
+  try {
+    const { workerId, badgeId } = req.params;
+
+    const worker = await Worker.findById(workerId);
+    if (!worker) {
+      return errorResponse(res, 'Worker not found', 404);
+    }
+
+    worker.badges = worker.badges.filter((id) => id.toString() !== badgeId);
+    await worker.save();
+
+    return successResponse(res, 'Badge removed successfully');
+  } catch (error) {
+    logger.error(`Admin removeBadge error: ${error.message}`);
+    return errorResponse(res, 'Failed to remove badge', 500);
+  }
+};
+
 module.exports = {
   listWorkers,
   updateWorkerStatus,
   adminLogin,
+  listUsers,
+  getDashboardStats,
+  createBadge,
+  listBadges,
+  assignBadge,
+  removeBadge,
 };
 
 

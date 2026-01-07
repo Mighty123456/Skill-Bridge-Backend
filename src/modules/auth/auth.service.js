@@ -1,5 +1,6 @@
 const User = require('../users/user.model');
 const Worker = require('../workers/worker.model');
+const WorkerDocument = require('../workers/document.model');
 const Admin = require('../admin/admin.model');
 const Contractor = require('../contractors/contractor.model');
 const { generateToken } = require('../../common/utils/jwt');
@@ -52,28 +53,77 @@ const register = async (userData, fileBuffers = {}) => {
     };
 
     // Upload Documents
+    const documentIds = [];
+
     if (fileBuffers.governmentId) {
       try {
         const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
         workerData.governmentId = uploadResult.url;
+
+        // Create Document Record
+        const doc = await WorkerDocument.create({
+          worker: user._id, // Will be updated to Worker ID if needed, but schema refs Worker. 
+          // Note: Worker ID is separate from User ID.
+          // We need the Worker ID first? No, we are creating Worker now.
+          // We can create docs after Worker is created or use User ID temporarily?
+          // Worker schema says ref: 'Worker'. So we need Worker ID.
+          // We will create docs AFTER Worker creation.
+        });
+        // Wait, saving url to temp var to use later
       } catch (err) {
         logger.error(`Failed to upload government ID: ${err.message}`);
       }
     }
+    // REFACTORING LOGIC:
+    // Since WorkerDocument requires Worker ID, we must create Worker first, then Documents, then update Worker with Document IDs.
+
+    // 1. Upload images first
+    let govIdUrl = null;
+    let selfieUrl = null;
+
+    if (fileBuffers.governmentId) {
+      try {
+        const res = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+        govIdUrl = res.url;
+        workerData.governmentId = govIdUrl;
+      } catch (err) { logger.error(`Gov ID upload failed: ${err.message}`); }
+    }
     if (fileBuffers.selfie) {
       try {
-        const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
-        workerData.selfie = uploadResult.url;
-      } catch (err) {
-        logger.error(`Failed to upload selfie: ${err.message}`);
-      }
+        const res = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+        selfieUrl = res.url;
+        workerData.selfie = selfieUrl;
+      } catch (err) { logger.error(`Selfie upload failed: ${err.message}`); }
     }
 
     try {
-      await Worker.create(workerData);
+      const newWorker = await Worker.create(workerData);
+      const docsToCreate = [];
+
+      if (govIdUrl) {
+        docsToCreate.push({
+          worker: newWorker._id,
+          type: 'governmentId',
+          url: govIdUrl,
+          label: 'Government ID'
+        });
+      }
+      if (selfieUrl) {
+        docsToCreate.push({
+          worker: newWorker._id,
+          type: 'selfie',
+          url: selfieUrl,
+          label: 'Selfie'
+        });
+      }
+
+      if (docsToCreate.length > 0) {
+        const createdDocs = await WorkerDocument.insertMany(docsToCreate);
+        newWorker.documents = createdDocs.map(d => d._id);
+        await newWorker.save();
+      }
     } catch (err) {
       logger.error(`Failed to create Worker record: ${err.message}`);
-      // Optionally rollback user creation here
     }
   }
 

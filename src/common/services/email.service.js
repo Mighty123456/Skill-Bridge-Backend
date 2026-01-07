@@ -74,7 +74,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
   }
 
   logger.info(`📧 Initializing email transporter with host: ${config.EMAIL_HOST}, port: ${config.EMAIL_PORT}, user: ${config.EMAIL_USER}`);
-  
+
   // Additional diagnostics for Vercel deployment
   if (process.env.VERCEL) {
     logger.info('🔍 Running on Vercel - checking environment variables...');
@@ -82,7 +82,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
     logger.info(`   EMAIL_PORT: ${config.EMAIL_PORT ? '✅ SET' : '❌ NOT SET'}`);
     logger.info(`   EMAIL_USER: ${config.EMAIL_USER ? '✅ SET' : '❌ NOT SET'}`);
     logger.info(`   EMAIL_PASS: ${config.EMAIL_PASS ? '✅ SET (length: ' + config.EMAIL_PASS.length + ')' : '❌ NOT SET'}`);
-    
+
     if (!config.EMAIL_PASS) {
       logger.error('');
       logger.error('⚠️  EMAIL_PASS is NOT SET in Vercel environment variables!');
@@ -118,7 +118,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
       if (error.responseCode) {
         logger.error(`   Response Code: ${error.responseCode}`);
       }
-      
+
       // Common Gmail errors with specific guidance
       if (error.code === 'EAUTH' || (error.response && error.response.includes('535'))) {
         logger.error('');
@@ -149,7 +149,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
         logger.error('   ⚠️  Connection failed. Check your EMAIL_HOST and EMAIL_PORT.');
         logger.error('   Also check if your firewall/network allows SMTP connections.');
       }
-      
+
       if (attempt === retries) {
         logger.error('❌ All SMTP initialization attempts failed. Email service disabled.');
         return false;
@@ -170,7 +170,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
  */
 const sendOTPEmail = async (email, otp, purpose = 'login') => {
   logger.info(`📧 Attempting to send OTP email to: ${email} for purpose: ${purpose}`);
-  
+
   // Check if transporter exists, if not initialize it
   if (!transporter) {
     logger.info('Transporter not initialized, attempting to initialize...');
@@ -258,7 +258,7 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
     if (error.stack) {
       logger.error(`   Stack: ${error.stack}`);
     }
-    
+
     // Provide helpful error messages
     if (error.code === 'EAUTH') {
       logger.error('   ⚠️  Authentication failed. Please check your email credentials.');
@@ -267,14 +267,14 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
     } else if (error.code === 'EMESSAGE') {
       logger.error('   ⚠️  Message formatting error.');
     }
-    
+
     // Do not break the calling flow; surface a failure result instead.
     // OTP is already generated/stored, so callers can decide how to proceed.
-    return { 
-      success: false, 
-      message: 'Failed to send OTP email', 
+    return {
+      success: false,
+      message: 'Failed to send OTP email',
       error: error.message,
-      code: error.code 
+      code: error.code
     };
   }
 };
@@ -319,6 +319,67 @@ const sendWelcomeEmail = async (email, name) => {
 };
 
 /**
+ * Send worker verification status update email
+ */
+const sendVerificationEmail = async (email, name, status, reason = '') => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) {
+      logger.info(`Verification email skipped; email service not configured. Intended for ${email}`);
+      return { success: false, message: 'Email service not configured' };
+    }
+  }
+
+  try {
+    const isApproved = status === 'verified';
+    const statusText = isApproved ? 'Verified' : 'Rejected';
+    const subject = isApproved
+      ? 'Congratulations! Your SkillBridge account is verified'
+      : 'Update regarding your SkillBridge verification';
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: subject,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eee; padding: 20px; border-radius: 10px;">
+          <h2 style="color: ${isApproved ? '#4caf50' : '#f44336'}; text-align: center;">Verification ${statusText}</h2>
+          <p>Hello ${name},</p>
+          <p>${isApproved
+          ? 'We are happy to inform you that your worker profile has been verified! You are now visible to clients in the SkillBridge marketplace and can start accepting jobs.'
+          : `We have reviewed your application and unfortunately, we couldn't verify your profile at this time.`
+        }</p>
+          
+          ${!isApproved && reason ? `
+          <div style="background-color: #fff5f5; border-left: 4px solid #f44336; padding: 15px; margin: 20px 0;">
+            <strong>Reason for rejection:</strong><br/>
+            ${reason}
+          </div>
+          <p>Please address the issues mentioned above and update your profile for another review.</p>
+          ` : ''}
+          
+          ${isApproved ? `
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${config.FRONTEND_URL}" style="background-color: #4A90E2; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Go to Marketplace</a>
+          </div>
+          ` : ''}
+          
+          <p>If you have any questions, please contact our support team at support@skillbridge.com.</p>
+          <p>Best regards,<br>The SkillBridge Team</p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    logger.info(`Verification status email (${status}) sent to ${email}`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending verification email: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
  * Initialize email service on startup
  */
 const initializeEmailService = async () => {
@@ -328,6 +389,7 @@ const initializeEmailService = async () => {
 module.exports = {
   sendOTPEmail,
   sendWelcomeEmail,
+  sendVerificationEmail,
   initializeEmailService,
   initializeTransporter
 };
