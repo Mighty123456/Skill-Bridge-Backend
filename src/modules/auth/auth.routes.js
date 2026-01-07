@@ -3,7 +3,7 @@ const { validationResult } = require('express-validator');
 const authController = require('./auth.controller');
 const authSchema = require('./auth.schema');
 const { authenticate } = require('../../common/middleware/auth.middleware');
-const { uploadSingle, uploadFields, handleUploadError } = require('../../common/middleware/upload.middleware');
+const { uploadSingle, uploadFields, catchUploadErrors } = require('../../common/middleware/upload.middleware');
 
 const router = express.Router();
 
@@ -21,7 +21,10 @@ const parseJsonFields = (fields) => {
         }
       }
     });
-    next();
+
+    if (typeof next === 'function') {
+      next();
+    }
   };
 };
 
@@ -34,7 +37,10 @@ const validate = (validations) => {
 
     const errors = validationResult(req);
     if (errors.isEmpty()) {
-      return next();
+      if (typeof next === 'function') {
+        return next();
+      }
+      return;
     }
 
     return res.status(400).json({
@@ -52,11 +58,10 @@ const validate = (validations) => {
  */
 router.post(
   '/register',
-  uploadFields([
+  catchUploadErrors(uploadFields([
     { name: 'governmentId', maxCount: 1 },
     { name: 'selfie', maxCount: 1 }
-  ]),
-  handleUploadError,
+  ])),
   parseJsonFields(['address', 'services', 'skills']),
   validate(authSchema.registerSchema),
   authController.register
@@ -119,8 +124,7 @@ router.get('/profile', authenticate, authController.getProfile);
 router.post(
   '/upload-profile-image',
   authenticate,
-  uploadSingle('image'),
-  handleUploadError,
+  catchUploadErrors(uploadSingle('image')),
   authController.uploadProfileImage
 );
 

@@ -64,7 +64,7 @@ const uploadFields = (fields) => {
 };
 
 /**
- * Error handler for multer errors
+ * Error handler for multer errors (4-parameter error handler)
  */
 const handleUploadError = (err, req, res, next) => {
   if (err instanceof multer.MulterError) {
@@ -93,7 +93,22 @@ const handleUploadError = (err, req, res, next) => {
     });
   }
 
+  // If no error, pass to next middleware
   next();
+};
+
+/**
+ * Wrapper middleware to catch multer errors and pass them to error handler
+ */
+const catchUploadErrors = (uploadMiddleware) => {
+  return (req, res, next) => {
+    uploadMiddleware(req, res, (err) => {
+      if (err) {
+        return handleUploadError(err, req, res, next);
+      }
+      next();
+    });
+  };
 };
 
 module.exports = {
@@ -101,5 +116,6 @@ module.exports = {
   uploadMultiple,
   uploadFields,
   handleUploadError,
+  catchUploadErrors,
 };
 

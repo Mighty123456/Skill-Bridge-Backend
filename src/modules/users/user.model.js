@@ -110,15 +110,14 @@ userSchema.index({ role: 1 });
 userSchema.index({ 'address.coordinates.latitude': 1, 'address.coordinates.longitude': 1 });
 
 // Hash password before saving
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
   // Only hash password if it's modified
   if (!this.isModified('password')) {
-    return next();
+    return;
   }
 
   // Hash password with cost of 12
   this.password = await bcrypt.hash(this.password, 12);
-  next();
 });
 
 // Method to compare password
