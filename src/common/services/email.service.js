@@ -163,119 +163,97 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
 };
 
 /**
+ * Base email template wrapper for consistent branding
+ */
+const baseEmailTemplate = (content, title = 'SkillBridge Notification') => `
+  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f6f9fc; padding: 40px 0; margin: 0; width: 100%;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td align="center">
+          <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+            <!-- Header -->
+            <tr>
+              <td align="center" style="padding: 30px 40px; background: linear-gradient(135deg, #4f46e5, #7c3aed);">
+                <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">SkillBridge</h1>
+                <p style="color: rgba(255, 255, 255, 0.9); margin: 5px 0 0 0; font-size: 14px;">Connecting Skills, Building Futures</p>
+              </td>
+            </tr>
+            <!-- Content -->
+            <tr>
+              <td style="padding: 40px; color: #374151; line-height: 1.6;">
+                ${content}
+              </td>
+            </tr>
+            <!-- Footer -->
+            <tr>
+              <td style="padding: 30px 40px; background-color: #f9fafb; border-top: 1px solid #e5e7eb; text-align: center;">
+                <p style="margin: 0; color: #6b7280; font-size: 12px;">
+                  &copy; ${new Date().getFullYear()} SkillBridge Inc. All rights reserved.
+                </p>
+                <div style="margin-top: 15px;">
+                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Support</a>
+                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Privacy Policy</a>
+                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Term of Service</a>
+                </div>
+              </td>
+            </tr>
+          </table>
+          <p style="margin-top: 20px; color: #9ca3af; font-size: 11px; text-align: center;">
+            This is an automated email, please do not reply.
+          </p>
+        </td>
+      </tr>
+    </table>
+  </div>
+`;
+
+/**
  * Send OTP email
- * @param {String} email - Recipient email
- * @param {String} otp - OTP code
- * @param {String} purpose - Purpose (login, reset, etc.)
  */
 const sendOTPEmail = async (email, otp, purpose = 'login') => {
   logger.info(`📧 Attempting to send OTP email to: ${email} for purpose: ${purpose}`);
 
-  // Check if transporter exists, if not initialize it
   if (!transporter) {
-    logger.info('Transporter not initialized, attempting to initialize...');
     const ready = await initializeTransporter();
-    if (!ready) {
-      logger.error(`❌ Email service not configured. OTP for ${email}: ${otp}`);
-      logger.error('⚠️  Please check your .env file and ensure EMAIL_USER, EMAIL_PASS, EMAIL_HOST, and EMAIL_PORT are set correctly.');
-      return { success: false, message: 'Email service not configured', error: 'Transporter initialization failed' };
-    }
-  }
-
-  // Verify transporter is still working before sending
-  try {
-    await transporter.verify();
-  } catch (verifyError) {
-    logger.warn('Transporter verification failed, reinitializing...');
-    const ready = await initializeTransporter();
-    if (!ready) {
-      logger.error(`❌ Failed to reinitialize transporter. OTP for ${email}: ${otp}`);
-      return { success: false, message: 'Email service connection failed', error: verifyError.message };
-    }
+    if (!ready) return { success: false, message: 'Email service not configured' };
   }
 
   try {
-    // Human‑readable purpose text and action line for the email
-    let purposeText;
-    let actionLine;
-
+    let purposeTitle, purposeDesc;
     if (purpose === 'login') {
-      purposeText = 'login';
-      actionLine = 'Use this code to login at';
+      purposeTitle = 'Login Verification';
+      purposeDesc = 'to access your SkillBridge account';
     } else if (purpose === 'reset') {
-      purposeText = 'password reset';
-      actionLine = 'Use this code to reset your password at';
-    } else if (purpose === 'registration') {
-      purposeText = 'email verification';
-      actionLine = 'Use this code to verify your email at';
+      purposeTitle = 'Password Reset';
+      purposeDesc = 'to reset your password';
     } else {
-      // Fallback for any other custom purposes
-      purposeText = purpose;
-      actionLine = 'Use this code at';
+      purposeTitle = 'Email Verification';
+      purposeDesc = 'to verify your identity';
     }
-    const { getAuthURL } = require('../utils/backend-urls');
-    const authBaseURL = getAuthURL('');
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">${purposeTitle}</h2>
+      <p>Hello,</p>
+      <p>Your verification code ${purposeDesc} is:</p>
+      <div style="margin: 30px 0; background-color: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center;">
+        <span style="font-size: 36px; font-weight: 700; color: #4f46e5; letter-spacing: 12px; font-family: monospace;">${otp}</span>
+      </div>
+      <p style="font-size: 14px; color: #6b7280;">This code will expire in 10 minutes. If you did not request this code, please ignore this email.</p>
+    `, `SkillBridge - ${purposeTitle}`);
 
     const mailOptions = {
       from: `"SkillBridge" <${config.EMAIL_USER}>`,
       to: email,
-      subject: `Your SkillBridge ${purposeText} code`,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #4A90E2;">SkillBridge Verification Code</h2>
-          <p>Hello,</p>
-          <p>Your verification code for ${purposeText} is:</p>
-          <div style="background-color: #f4f4f4; padding: 20px; text-align: center; margin: 20px 0;">
-            <h1 style="color: #4A90E2; margin: 0; font-size: 32px; letter-spacing: 5px;">${otp}</h1>
-          </div>
-          <p>This code will expire in 10 minutes.</p>
-          <p>${actionLine}: <a href="${authBaseURL}">${authBaseURL}</a></p>
-          <p>If you didn't request this code, please ignore this email.</p>
-          <p style="margin-top: 20px; font-size: 12px; color: #666;">
-            Need help? Contact us at support@skillbridge.com
-          </p>
-          <p>Best regards,<br>The SkillBridge Team</p>
-        </div>
-      `,
+      subject: `${otp} is your ${purposeTitle} code`,
+      html,
     };
 
-    logger.info(`Sending email from ${config.EMAIL_USER} to ${email}...`);
     const result = await transporter.sendMail(mailOptions);
     logger.info(`✅ OTP email sent successfully to ${email}`);
-    logger.debug(`Email message ID: ${result.messageId}`);
-    return { success: true, message: 'OTP sent successfully', messageId: result.messageId };
+    return { success: true, messageId: result.messageId };
   } catch (error) {
-    logger.error(`❌ Error sending OTP email to ${email}:`);
-    logger.error(`   Error Message: ${error.message}`);
-    logger.error(`   Error Code: ${error.code || 'N/A'}`);
-    logger.error(`   Error Command: ${error.command || 'N/A'}`);
-    if (error.response) {
-      logger.error(`   SMTP Response: ${error.response}`);
-    }
-    if (error.responseCode) {
-      logger.error(`   SMTP Response Code: ${error.responseCode}`);
-    }
-    if (error.stack) {
-      logger.error(`   Stack: ${error.stack}`);
-    }
-
-    // Provide helpful error messages
-    if (error.code === 'EAUTH') {
-      logger.error('   ⚠️  Authentication failed. Please check your email credentials.');
-    } else if (error.code === 'ECONNECTION' || error.code === 'ETIMEDOUT') {
-      logger.error('   ⚠️  Connection failed. Check your network and SMTP settings.');
-    } else if (error.code === 'EMESSAGE') {
-      logger.error('   ⚠️  Message formatting error.');
-    }
-
-    // Do not break the calling flow; surface a failure result instead.
-    // OTP is already generated/stored, so callers can decide how to proceed.
-    return {
-      success: false,
-      message: 'Failed to send OTP email',
-      error: error.message,
-      code: error.code
-    };
+    logger.error(`❌ Error sending OTP email: ${error.message}`);
+    return { success: false, error: error.message };
   }
 };
 
@@ -285,27 +263,29 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
 const sendWelcomeEmail = async (email, name) => {
   if (!transporter) {
     const ready = await initializeTransporter();
-    if (!ready) {
-      logger.info(`Welcome email skipped; email service not configured. Intended for ${email}`);
-      return { success: false, message: 'Email service not configured' };
-    }
+    if (!ready) return { success: false };
   }
 
   try {
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Welcome to SkillBridge, ${name}!</h2>
+      <p>We're thrilled to have you join our community of professionals. Whether you're here to offer your expertise or looking for top-tier talent, you're in the right place.</p>
+      <p>Here's what you can do now:</p>
+      <ul style="padding-left: 20px; margin: 20px 0;">
+        <li style="margin-bottom: 10px;">Complete your professional profile</li>
+        <li style="margin-bottom: 10px;">Browse available job opportunities</li>
+        <li style="margin-bottom: 10px;">Connect with skilled contractors</li>
+      </ul>
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Go to Dashboard</a>
+      </div>
+    `, 'Welcome to SkillBridge');
+
     const mailOptions = {
       from: `"SkillBridge" <${config.EMAIL_USER}>`,
       to: email,
-      subject: 'Welcome to SkillBridge!',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #4A90E2;">Welcome to SkillBridge!</h2>
-          <p>Hello ${name},</p>
-          <p>Thank you for joining SkillBridge! We're excited to have you on board.</p>
-          <p>You can now start connecting with skilled professionals or offer your services.</p>
-          <p>If you have any questions, feel free to reach out to our support team.</p>
-          <p>Best regards,<br>The SkillBridge Team</p>
-        </div>
-      `,
+      subject: 'Welcome to SkillBridge! 🚀',
+      html,
     };
 
     await transporter.sendMail(mailOptions);
@@ -313,7 +293,6 @@ const sendWelcomeEmail = async (email, name) => {
     return { success: true };
   } catch (error) {
     logger.error(`Error sending welcome email: ${error.message}`);
-    // Don't throw error for welcome email
     return { success: false };
   }
 };
@@ -324,50 +303,49 @@ const sendWelcomeEmail = async (email, name) => {
 const sendVerificationEmail = async (email, name, status, reason = '') => {
   if (!transporter) {
     const ready = await initializeTransporter();
-    if (!ready) {
-      logger.info(`Verification email skipped; email service not configured. Intended for ${email}`);
-      return { success: false, message: 'Email service not configured' };
-    }
+    if (!ready) return { success: false };
   }
 
   try {
     const isApproved = status === 'verified';
-    const statusText = isApproved ? 'Verified' : 'Rejected';
-    const subject = isApproved
-      ? 'Congratulations! Your SkillBridge account is verified'
-      : 'Update regarding your SkillBridge verification';
+    const statusText = isApproved ? 'Approved' : 'Action Required';
+    const statusColor = isApproved ? '#10b981' : '#ef4444';
+
+    const html = baseEmailTemplate(`
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="display: inline-block; padding: 6px 16px; border-radius: 9999px; background-color: ${statusColor}15; color: ${statusColor}; font-weight: 600, font-size: 14px;">
+          ${statusText}
+        </div>
+      </div>
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Hi ${name},</h2>
+      <p>
+        ${isApproved
+        ? 'Great news! Your verification application has been approved. Your profile is now live and you can start accepting service requests from clients.'
+        : 'Thank you for your verification application. After a careful review, we need a few more details from you before we can approve your profile.'}
+      </p>
+      
+      ${!isApproved && reason ? `
+      <div style="background-color: #fef2f2; border-radius: 8px; padding: 20px; margin: 25px 0;">
+        <h4 style="margin: 0 0 10px 0; color: #991b1b; font-size: 15px;">Reason for Rejection:</h4>
+        <p style="margin: 0; color: #b91c1c; font-size: 14px;">"${reason}"</p>
+      </div>
+      <p>Please log in to your account and re-submit the required documents based on the feedback above.</p>
+      ` : ''}
+      
+      <div style="margin-top: 35px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+          ${isApproved ? 'Start Working' : 'Update Profile'}
+        </a>
+      </div>
+    `, `SkillBridge Verification ${statusText}`);
 
     const mailOptions = {
       from: `"SkillBridge" <${config.EMAIL_USER}>`,
       to: email,
-      subject: subject,
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eee; padding: 20px; border-radius: 10px;">
-          <h2 style="color: ${isApproved ? '#4caf50' : '#f44336'}; text-align: center;">Verification ${statusText}</h2>
-          <p>Hello ${name},</p>
-          <p>${isApproved
-          ? 'We are happy to inform you that your worker profile has been verified! You are now visible to clients in the SkillBridge marketplace and can start accepting jobs.'
-          : `We have reviewed your application and unfortunately, we couldn't verify your profile at this time.`
-        }</p>
-          
-          ${!isApproved && reason ? `
-          <div style="background-color: #fff5f5; border-left: 4px solid #f44336; padding: 15px; margin: 20px 0;">
-            <strong>Reason for rejection:</strong><br/>
-            ${reason}
-          </div>
-          <p>Please address the issues mentioned above and update your profile for another review.</p>
-          ` : ''}
-          
-          ${isApproved ? `
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${config.FRONTEND_URL}" style="background-color: #4A90E2; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold;">Go to Marketplace</a>
-          </div>
-          ` : ''}
-          
-          <p>If you have any questions, please contact our support team at support@skillbridge.com.</p>
-          <p>Best regards,<br>The SkillBridge Team</p>
-        </div>
-      `,
+      subject: isApproved
+        ? 'Congratulations! Your SkillBridge profile is verified'
+        : 'Update regarding your SkillBridge verification',
+      html,
     };
 
     await transporter.sendMail(mailOptions);
