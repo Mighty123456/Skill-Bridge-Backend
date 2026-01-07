@@ -68,6 +68,21 @@ const loginWithOTP = async (req, res) => {
 };
 
 /**
+ * Verify OTP (for login)
+ * POST /api/auth/verify-otp
+ */
+const verifyOTP = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const result = await authService.verifyOTP(email, otp);
+    return successResponse(res, 'OTP verified successfully', result);
+  } catch (error) {
+    logger.error(`Verify OTP error: ${error.message}`);
+    return errorResponse(res, error.message, 401);
+  }
+};
+
+/**
  * Send OTP for password reset
  * POST /api/auth/forgot-password
  */
@@ -122,6 +137,20 @@ const getProfile = async (req, res) => {
     return successResponse(res, 'Profile retrieved successfully', { user });
   } catch (error) {
     logger.error(`Get profile error: ${error.message}`);
+    return errorResponse(res, error.message, 404);
+  }
+};
+
+/**
+ * Get current user (standard /me endpoint)
+ * GET /api/auth/me
+ */
+const getMe = async (req, res) => {
+  try {
+    const user = await authService.getProfile(req.userId);
+    return successResponse(res, 'User retrieved successfully', { user });
+  } catch (error) {
+    logger.error(`Get me error: ${error.message}`);
     return errorResponse(res, error.message, 404);
   }
 };
@@ -198,10 +227,12 @@ module.exports = {
   login,
   sendLoginOTP,
   loginWithOTP,
+  verifyOTP,
   sendPasswordResetOTP,
   verifyPasswordResetOTP,
   resetPassword,
   getProfile,
+  getMe,
   uploadProfileImage,
   deleteProfileImage,
   verifyRegistration,

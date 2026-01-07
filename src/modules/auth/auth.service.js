@@ -203,6 +203,47 @@ const loginWithOTP = async (email, otp) => {
 };
 
 /**
+ * Verify OTP (for login - returns user and token if valid)
+ */
+const verifyOTPForLogin = async (email, otp) => {
+  // Verify OTP using the OTP service
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'login');
+
+  if (!isOTPValid) {
+    throw new Error('Invalid or expired OTP');
+  }
+
+  // Find user
+  const user = await User.findOne({ email: email.toLowerCase() });
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  if (!user.isActive) {
+    throw new Error('Your account has been deactivated. Please contact support.');
+  }
+
+  // Update last login
+  user.lastLogin = new Date();
+  await user.save({ validateBeforeSave: false });
+
+  // Generate token
+  const token = generateToken({ userId: user._id, role: user.role });
+
+  // Remove password from response
+  const userResponse = user.toJSON();
+
+  logger.info(`OTP verified for: ${user.email} (${user.role})`);
+
+  return {
+    user: userResponse,
+    token,
+    verified: true,
+  };
+};
+
+/**
  * Send OTP for password reset
  */
 const sendPasswordResetOTP = async (email) => {
@@ -435,6 +476,7 @@ module.exports = {
   login,
   sendLoginOTP,
   loginWithOTP,
+  verifyOTP: verifyOTPForLogin,
   sendPasswordResetOTP,
   verifyPasswordResetOTP,
   resetPassword,

@@ -89,6 +89,13 @@ router.post('/send-otp', validate(authSchema.sendOTPSchema), authController.send
 router.post('/login-otp', validate(authSchema.loginOTPSchema), authController.loginWithOTP);
 
 /**
+ * @route   POST /api/auth/verify-otp
+ * @desc    Verify OTP for login
+ * @access  Public
+ */
+router.post('/verify-otp', validate(authSchema.loginOTPSchema), authController.verifyOTP);
+
+/**
  * @route   POST /api/auth/forgot-password
  * @desc    Send OTP for password reset
  * @access  Public
@@ -115,6 +122,13 @@ router.post('/reset-password', validate(authSchema.resetPasswordSchema), authCon
  * @access  Private
  */
 router.get('/profile', authenticate, authController.getProfile);
+
+/**
+ * @route   GET /api/auth/me
+ * @desc    Get current user (standard /me endpoint)
+ * @access  Private
+ */
+router.get('/me', authenticate, authController.getMe);
 
 /**
  * @route   POST /api/auth/upload-profile-image
