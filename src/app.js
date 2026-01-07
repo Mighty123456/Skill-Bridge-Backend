@@ -11,6 +11,9 @@ const config = require('./config/env');
 
 const app = express();
 
+// Trust proxy - Required for rate limiting behind proxies (e.g. Vercel, Heroku, Nginx)
+app.set('trust proxy', 1);
+
 // Security Headers
 app.use(helmet());
 

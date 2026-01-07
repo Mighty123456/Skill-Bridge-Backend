@@ -2,12 +2,17 @@ const app = require('./app');
 const connectDB = require('./config/db');
 const config = require('./config/env');
 const logger = require('./config/logger');
+const { initializeEmailService } = require('./common/services/email.service');
 
 // Start server function
 const startServer = async () => {
   try {
     // Connect to database first
     await connectDB();
+
+    // Initialize email service on startup
+    logger.info('📧 Initializing email service...');
+    await initializeEmailService();
 
     // Start server only after DB is connected
     const PORT = config.PORT;
