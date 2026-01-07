@@ -13,18 +13,46 @@ const createTransporter = () => {
   const isImplicitTLS = emailPort === 465; // SMTPS
   const isStartTLS = emailPort === 587;    // STARTTLS
 
-  return nodemailer.createTransport({
+  const transporterOptions = {
     host: config.EMAIL_HOST,
     port: emailPort,
     secure: isImplicitTLS, // true for 465 (implicit TLS)
-    requireTLS: isStartTLS, // enforce STARTTLS on 587
     auth: {
       user: config.EMAIL_USER,
       pass: config.EMAIL_PASS,
     },
+    tls: {
+      // Do not fail on invalid certificates
+      rejectUnauthorized: false,
+      // Minimal required for modern TLS
+      minVersion: 'TLSv1.2'
+    },
+    // Nodemailer internal logger
     logger: true,
     debug: true,
-  });
+  };
+
+  // If using Gmail, it's often more reliable to use the 'service' shortcut
+  if (config.EMAIL_HOST === 'smtp.gmail.com') {
+    logger.info('Using specialized Gmail configuration');
+    return nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: config.EMAIL_USER,
+        pass: config.EMAIL_PASS,
+      },
+      tls: {
+        rejectUnauthorized: false
+      }
+    });
+  }
+
+  // Otherwise use the standard configuration
+  if (isStartTLS) {
+    transporterOptions.requireTLS = true;
+  }
+
+  return nodemailer.createTransport(transporterOptions);
 };
 
 const initializeTransporter = async (retries = 3, delayMs = 1000) => {
@@ -37,7 +65,7 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
     try {
       transporter = createTransporter();
       await transporter.verify();
-      logger.info('SMTP Server is ready to take our messages');
+      logger.info('📧 Mail Services are online and ready to deliver!');
       return true;
     } catch (error) {
       logger.error(`SMTP init attempt ${attempt} failed: ${error.message}`);

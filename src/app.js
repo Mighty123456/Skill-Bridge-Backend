@@ -1,5 +1,9 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 const routes = require('./routes/routes');
 const { errorHandler, notFound } = require('./common/middleware/error.middleware');
 const logger = require('./config/logger');
@@ -7,18 +11,46 @@ const config = require('./config/env');
 
 const app = express();
 
+// Security Headers
+app.use(helmet());
+
+// Compression
+app.use(compression());
+
+// Request logging (Morgan for development)
+if (config.NODE_ENV === 'development') {
+  app.use(morgan('dev'));
+}
+
+// Rate Limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  message: {
+    success: false,
+    message: 'Too many requests from this IP, please try again after 15 minutes',
+  },
+  standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+  legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
+
+// Apply rate limiter to all routes
+app.use('/api', limiter);
+
 // Middleware
 app.use(cors({
-  origin: config.FRONTEND_URL || '*', // Allow all origins in serverless
+  origin: config.FRONTEND_URL || '*',
   credentials: true,
 }));
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '10kb' })); // Body limit for scalability/security
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
-// Request logging
+// Custom Request logging
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`);
+  if (config.NODE_ENV !== 'production') {
+    logger.debug(`${req.method} ${req.path}`);
+  }
   next();
 });
 

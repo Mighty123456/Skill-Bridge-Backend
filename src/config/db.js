@@ -14,13 +14,11 @@ const connectDB = async () => {
     }
 
     const conn = await mongoose.connect(config.MONGODB_URI, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
       serverSelectionTimeoutMS: 10000, // Timeout after 10s instead of 30s
       socketTimeoutMS: 45000, // Close sockets after 45s of inactivity
     });
 
-    logger.info(`MongoDB Connected: ${conn.connection.host}`);
+    logger.info(`✅ Database connected successfully! [Host: ${conn.connection.host}]`);
 
     // Handle connection events
     mongoose.connection.on('error', (err) => {

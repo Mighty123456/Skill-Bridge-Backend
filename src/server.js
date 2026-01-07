@@ -12,7 +12,8 @@ const startServer = async () => {
     // Start server only after DB is connected
     const PORT = config.PORT;
     const server = app.listen(PORT, () => {
-      logger.info(`Server running in ${config.NODE_ENV} mode on port ${PORT}`);
+      logger.info(`🚀 Server is soaring! Running in ${config.NODE_ENV} mode on port ${PORT}`);
+      logger.info(`🔗 API URL: http://localhost:${PORT}/api`);
     });
 
     // Handle unhandled promise rejections

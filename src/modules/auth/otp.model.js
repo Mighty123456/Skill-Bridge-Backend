@@ -6,7 +6,6 @@ const otpSchema = new mongoose.Schema(
       type: String,
       required: true,
       lowercase: true,
-      index: true,
       trim: true,
     },
     purpose: {
@@ -23,7 +22,6 @@ const otpSchema = new mongoose.Schema(
     expiresAt: {
       type: Date,
       required: true,
-      index: true,
     },
     attempts: {
       type: Number,

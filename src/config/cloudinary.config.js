@@ -15,7 +15,7 @@ if (config.CLOUDINARY_CLOUD_NAME && config.CLOUDINARY_API_KEY && config.CLOUDINA
     if (error) {
       logger.warn(`Cloudinary connection test failed: ${error.message}`);
     } else {
-      logger.info('Cloudinary configured successfully');
+      logger.info('☁️  Cloudinary Services connected and ready!');
     }
   });
 } else {
