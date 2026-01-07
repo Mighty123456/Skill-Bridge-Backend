@@ -52,6 +52,7 @@ const workerSchema = new mongoose.Schema(
     primarySkill: { type: String, trim: true },
     experience: { type: Number, min: 0 },
     city: { type: String, trim: true },
+    state: { type: String, trim: true },
 
     // Documents stored in a separate collection
     documents: [

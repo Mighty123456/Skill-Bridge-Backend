@@ -50,6 +50,7 @@ const register = async (userData, fileBuffers = {}) => {
       experience: experience || 0,
       verificationStatus: 'pending',
       city: address?.city,
+      state: address?.state,
     };
 
     // Upload Documents
@@ -134,6 +135,8 @@ const register = async (userData, fileBuffers = {}) => {
       services: services || [],
       experience: experience || 0,
       verificationStatus: 'pending',
+      city: address?.city,
+      state: address?.state,
     };
 
     // Upload Documents

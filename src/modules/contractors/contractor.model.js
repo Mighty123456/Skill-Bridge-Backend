@@ -38,6 +38,8 @@ const contractorSchema = new mongoose.Schema(
         selfie: {
             type: String,
         },
+        city: { type: String, trim: true },
+        state: { type: String, trim: true },
 
         // Verification status lifecycle
         verificationStatus: {
