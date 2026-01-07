@@ -33,6 +33,7 @@ const login = async (req, res) => {
     return successResponse(res, 'Login successful', result);
   } catch (error) {
     logger.error(`Login error: ${error.message}`);
+    logger.error(error.stack);
     return errorResponse(res, error.message, 401);
   }
 };

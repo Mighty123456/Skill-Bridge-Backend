@@ -1,12 +1,17 @@
 const mongoose = require('mongoose');
 const User = require('../modules/users/user.model');
+const Admin = require('../modules/admin/admin.model');
+const Worker = require('../modules/workers/worker.model');
+const Contractor = require('../modules/contractors/contractor.model');
 const config = require('../config/env');
 const logger = require('../config/logger');
 const { ROLES } = require('../common/constants/roles');
 
 /**
  * Seed data for development
- * This script provides a scalable way to populate the database with initial data.
+ * This script seeds ONLY the Admin user, creating entries in both
+ * the User collection (for auth) and Admin collection (for profile).
+ * It wipes all other data (Workers, Contractors, Users).
  */
 const seedData = async () => {
     try {
@@ -24,64 +29,36 @@ const seedData = async () => {
         }
 
         // 3. Clear existing data
-        // We clear users to ensure the seed is predictable
-        const deleteResult = await User.deleteMany({ role: { $ne: ROLES.ADMIN } });
-        logger.info(`Cleared ${deleteResult.deletedCount} existing non-admin users.`);
+        // We clear all related collections to ensure a clean slate
+        const deleteAdmins = await Admin.deleteMany({});
+        const deleteWorkers = await Worker.deleteMany({});
+        const deleteContractors = await Contractor.deleteMany({});
+        const deleteUsers = await User.deleteMany({});
 
-        // 4. Seed Data Definitions
-        const users = [
-            {
-                email: 'admin@skillbridge.com',
-                password: 'AdminPassword123!',
-                role: ROLES.ADMIN,
-                name: 'System Admin',
-                phone: '9999999999',
-                dateOfBirth: new Date('1985-01-01'),
-                isEmailVerified: true,
-                isActive: true
-            },
-            {
-                email: 'worker@skillbridge.com',
-                password: 'WorkerPassword123!',
-                role: ROLES.WORKER,
-                name: 'John Professional',
-                phone: '9888888888',
-                dateOfBirth: new Date('1992-05-15'),
-                services: ['Plumbing', 'Electrical'],
-                skills: ['Copper piping', 'Circuit wiring'],
-                experience: 5,
-                isEmailVerified: true,
-                isActive: true,
-                address: {
-                    city: 'Mumbai',
-                    state: 'Maharashtra',
-                    pincode: '400001'
-                }
-            },
-            {
-                email: 'client@skillbridge.com',
-                password: 'ClientPassword123!',
-                role: ROLES.USER,
-                name: 'Alice Customer',
-                phone: '9777777777',
-                dateOfBirth: new Date('1995-10-20'),
-                isEmailVerified: true,
-                isActive: true,
-                address: {
-                    city: 'Pune',
-                    state: 'Maharashtra',
-                    pincode: '411001'
-                }
-            }
-        ];
+        logger.info(`Cleared Data:`);
+        logger.info(`- Users: ${deleteUsers.deletedCount}`);
+        logger.info(`- Admins: ${deleteAdmins.deletedCount}`);
+        logger.info(`- Workers: ${deleteWorkers.deletedCount}`);
+        logger.info(`- Contractors: ${deleteContractors.deletedCount}`);
 
-        // 5. Execute Seeding
-        logger.info(`Seeding ${users.length} users...`);
+        // 4. Create Admin User (Standalone Admin Collection)
+        const adminPayload = {
+            email: '22it433@bvmengineering.ac.in',
+            password: 'admin@123',
+            name: 'System Admin',
+            role: ROLES.ADMIN,
+            roleTitle: 'Super Administrator',
+            department: 'IT Administration',
+            permissions: ['ALL_ACCESS'],
+            isActive: true
+        };
 
-        // create() ensures password hashing hooks are executed
-        await User.create(users);
+        logger.info('Creating Admin User...');
+        await Admin.create(adminPayload);
 
-        logger.info('✅ Seeding completed successfully.');
+        logger.info('✅ Admin seeding completed successfully.');
+        logger.info(`Admin Credentials: ${adminPayload.email} / ${adminPayload.password}`);
+
         process.exit(0);
     } catch (error) {
         logger.error(`❌ Seeding failed: ${error.message}`);

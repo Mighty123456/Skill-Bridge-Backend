@@ -52,28 +52,8 @@ const userSchema = new mongoose.Schema(
         longitude: { type: Number },
       },
     },
-    // Worker/Contractor specific fields
-    services: [{
-      type: String,
-      trim: true,
-    }],
-    skills: [{
-      type: String,
-      trim: true,
-    }],
-    experience: {
-      type: Number,
-      min: 0,
-    },
     // Profile image
     profileImage: {
-      type: String,
-    },
-    // Verification documents
-    governmentId: {
-      type: String,
-    },
-    selfie: {
       type: String,
     },
     // Account status
@@ -81,6 +61,7 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Legacy boolean flag for worker verification (kept for backwards compatibility)
     isVerified: {
       type: Boolean,
       default: false,
@@ -110,14 +91,20 @@ userSchema.index({ role: 1 });
 userSchema.index({ 'address.coordinates.latitude': 1, 'address.coordinates.longitude': 1 });
 
 // Hash password before saving
-userSchema.pre('save', async function () {
+// Hash password before saving
+userSchema.pre('save', function (next) {
   // Only hash password if it's modified
   if (!this.isModified('password')) {
-    return;
+    return next();
   }
 
   // Hash password with cost of 12
-  this.password = await bcrypt.hash(this.password, 12);
+  bcrypt.hash(this.password, 12)
+    .then((hash) => {
+      this.password = hash;
+      next();
+    })
+    .catch((err) => next(err));
 });
 
 // Method to compare password

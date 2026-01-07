@@ -1,5 +1,6 @@
 const express = require('express');
 const authRoutes = require('../modules/auth/auth.routes');
+const adminRoutes = require('../modules/admin/admin.routes');
 
 const router = express.Router();
 
@@ -105,6 +106,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 // API routes
 router.use('/auth', authRoutes);
+router.use('/admin', adminRoutes);
 
 // Add other route modules here
 // router.use('/users', userRoutes);

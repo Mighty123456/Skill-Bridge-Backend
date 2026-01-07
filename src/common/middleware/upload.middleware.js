@@ -94,7 +94,7 @@ const handleUploadError = (err, req, res, next) => {
   }
 
   // If no error, pass to next middleware
-  next();
+    next();
 };
 
 /**

@@ -1,4 +1,7 @@
 const User = require('../users/user.model');
+const Worker = require('../workers/worker.model');
+const Admin = require('../admin/admin.model');
+const Contractor = require('../contractors/contractor.model');
 const { generateToken } = require('../../common/utils/jwt');
 const { generateOTP, storeOTP, verifyOTP } = require('../../common/services/otp.service');
 const { sendOTPEmail, sendWelcomeEmail } = require('../../common/services/email.service');
@@ -24,8 +27,8 @@ const register = async (userData, fileBuffers = {}) => {
     throw new Error('Invalid role');
   }
 
-  // Create user object
-  const userFields = {
+  // 2. Create base User (Auth & Profile)
+  const user = await User.create({
     email: email.toLowerCase(),
     password,
     role,
@@ -33,42 +36,96 @@ const register = async (userData, fileBuffers = {}) => {
     phone,
     dateOfBirth,
     address: address || {},
-  };
+  });
 
-  // Add role-specific fields
-  if (role === ROLES.WORKER || role === ROLES.CONTRACTOR) {
-    if (services) {
-      userFields.services = services;
-    }
-    if (skills) {
-      userFields.skills = skills;
-    }
-    if (experience !== undefined) {
-      userFields.experience = experience;
-    }
+  // 3. Create Role-Specific Profiles
 
-    // Handle verification documents if provided
+  // --- WORKER ---
+  if (role === ROLES.WORKER) {
+    const workerData = {
+      user: user._id,
+      services: services || [],
+      skills: skills || [],
+      experience: experience || 0,
+      verificationStatus: 'pending',
+      city: address?.city,
+    };
+
+    // Upload Documents
     if (fileBuffers.governmentId) {
       try {
         const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
-        userFields.governmentId = uploadResult.url;
+        workerData.governmentId = uploadResult.url;
       } catch (err) {
         logger.error(`Failed to upload government ID: ${err.message}`);
       }
     }
-
     if (fileBuffers.selfie) {
       try {
         const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
-        userFields.selfie = uploadResult.url;
+        workerData.selfie = uploadResult.url;
       } catch (err) {
         logger.error(`Failed to upload selfie: ${err.message}`);
       }
     }
+
+    try {
+      await Worker.create(workerData);
+    } catch (err) {
+      logger.error(`Failed to create Worker record: ${err.message}`);
+      // Optionally rollback user creation here
+    }
   }
 
-  // Create user
-  const user = await User.create(userFields);
+  // --- CONTRACTOR ---
+  if (role === ROLES.CONTRACTOR) {
+    const contractorData = {
+      user: user._id,
+      services: services || [],
+      experience: experience || 0,
+      verificationStatus: 'pending',
+    };
+
+    // Upload Documents
+    if (fileBuffers.governmentId) {
+      try {
+        const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+        contractorData.governmentId = uploadResult.url;
+      } catch (err) {
+        logger.error(`Failed to upload government ID: ${err.message}`);
+      }
+    }
+    if (fileBuffers.selfie) {
+      try {
+        const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+        contractorData.selfie = uploadResult.url;
+      } catch (err) {
+        logger.error(`Failed to upload selfie: ${err.message}`);
+      }
+    }
+
+    try {
+      await Contractor.create(contractorData);
+    } catch (err) {
+      logger.error(`Failed to create Contractor record: ${err.message}`);
+    }
+  }
+
+
+
+  // For admins, create a normalized Admin profile
+  if (role === ROLES.ADMIN) {
+    try {
+      await Admin.create({
+        user: user._id,
+        roleTitle: 'Administrator',
+        department: 'Operations',
+        permissions: ['all'],
+      });
+    } catch (err) {
+      logger.error(`Failed to create Admin record for ${email}: ${err.message}`);
+    }
+  }
 
   // Generate and send OTP for email verification
   const otp = generateOTP();
@@ -96,8 +153,18 @@ const register = async (userData, fileBuffers = {}) => {
  * Login with email and password
  */
 const login = async (email, password) => {
-  // Find user and include password field
-  const user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+  logger.info('Login service started');
+  // First, try finding in User collection
+  let user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+  let isUser = true;
+
+  // If not found in User, check Admin collection
+  if (!user) {
+    user = await Admin.findOne({ email: email.toLowerCase() }).select('+password');
+    isUser = false;
+  }
+
+  logger.info(user ? `User found (Collection: ${isUser ? 'User' : 'Admin'})` : 'User not found');
 
   if (!user) {
     throw new Error('Invalid email or password');
@@ -109,20 +176,33 @@ const login = async (email, password) => {
   }
 
   // Verify password
+  logger.info('Comparing password');
   const isPasswordValid = await user.comparePassword(password);
+  logger.info('Password compared');
   if (!isPasswordValid) {
     throw new Error('Invalid email or password');
   }
 
   // Update last login
+  // Note: Admin model has 'lastLogin', User model has 'lastLogin'. 
+  // If field names differed, we'd need a check. They seem consistent enough or we can use generic assignment.
   user.lastLogin = new Date();
-  await user.save({ validateBeforeSave: false });
+  logger.info('Saving user');
+  try {
+    await user.save({ validateBeforeSave: false });
+  } catch (e) {
+    logger.error('Error saving user: ' + e.message);
+    throw e;
+  }
+  logger.info('User saved');
 
   // Generate token
+  // Ensure 'role' is present on both models. Admin model has default role='admin'.
   const token = generateToken({ userId: user._id, role: user.role });
 
   // Remove password from response
-  const userResponse = user.toJSON();
+  const userResponse = user.toObject();
+  delete userResponse.password;
 
   logger.info(`User logged in: ${user.email} (${user.role})`);
 
@@ -324,13 +404,17 @@ const resetPassword = async (email, otp, newPassword) => {
  * Get current user profile
  */
 const getProfile = async (userId) => {
-  const user = await User.findById(userId);
+  let user = await User.findById(userId);
+
+  if (!user) {
+    user = await Admin.findById(userId);
+  }
 
   if (!user) {
     throw new Error('User not found');
   }
 
-  return user.toJSON();
+  return user.toObject(); // Using toObject() effectively as both models support it
 };
 
 /**
