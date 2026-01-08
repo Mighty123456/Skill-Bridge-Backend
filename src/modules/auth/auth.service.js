@@ -458,16 +458,30 @@ const resetPassword = async (email, otp, newPassword) => {
  */
 const getProfile = async (userId) => {
   let user = await User.findById(userId);
+  let extraData = {};
 
   if (!user) {
     user = await Admin.findById(userId);
+  } else {
+    // Fetch role specific data
+    if (user.role === ROLES.WORKER) {
+      const worker = await Worker.findOne({ user: user._id }).populate('documents');
+      if (worker) extraData = worker.toObject();
+    } else if (user.role === ROLES.CONTRACTOR) {
+      const contractor = await Contractor.findOne({ user: user._id });
+      if (contractor) extraData = contractor.toObject();
+    }
   }
 
   if (!user) {
     throw new Error('User not found');
   }
 
-  return user.toObject(); // Using toObject() effectively as both models support it
+  return {
+    ...user.toObject(),
+    ...extraData,
+    _id: user._id, // Ensure primary ID is the user ID
+  };
 };
 
 /**
@@ -608,6 +622,36 @@ const resendOTP = async (email) => {
   };
 };
 
+/**
+ * Update user profile
+ */
+const updateProfile = async (userId, updateData) => {
+  const user = await User.findById(userId);
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Fields allowed to be updated
+  const allowedUpdates = ['name', 'phone', 'address', 'dateOfBirth'];
+
+  allowedUpdates.forEach((field) => {
+    if (updateData[field] !== undefined) {
+      if (field === 'address' && typeof updateData[field] === 'object') {
+        user.address = { ...user.address, ...updateData[field] };
+      } else {
+        user[field] = updateData[field];
+      }
+    }
+  });
+
+  await user.save();
+
+  logger.info(`Profile updated for user: ${userId}`);
+
+  return user.toObject();
+};
+
 module.exports = {
   register,
   login,
@@ -618,6 +662,7 @@ module.exports = {
   verifyPasswordResetOTP,
   resetPassword,
   getProfile,
+  updateProfile,
   uploadProfileImage,
   deleteProfileImage,
   verifyRegistration,

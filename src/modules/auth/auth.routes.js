@@ -143,6 +143,18 @@ router.post(
 );
 
 /**
+ * @route   PATCH /api/auth/update-profile
+ * @desc    Update current user profile
+ * @access  Private
+ */
+router.patch(
+  '/update-profile',
+  authenticate,
+  parseJsonFields(['address']),
+  authController.updateProfile
+);
+
+/**
  * @route   DELETE /api/auth/delete-profile-image
  * @desc    Delete profile image
  * @access  Private
