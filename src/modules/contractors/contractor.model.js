@@ -31,6 +31,14 @@ const contractorSchema = new mongoose.Schema(
             min: 0,
         },
 
+        // Rating
+        rating: {
+            type: Number,
+            min: 0,
+            max: 5,
+            default: 5.0
+        },
+
         // Verification Documents (URLs)
         governmentId: {
             type: String,

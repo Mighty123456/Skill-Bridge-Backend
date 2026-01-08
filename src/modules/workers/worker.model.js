@@ -25,11 +25,18 @@ const workerSchema = new mongoose.Schema(
       type: String,
       trim: true,
     }],
-    // Replaces simple 'experience'
     experience: {
       type: Number,
       min: 0,
       default: 0
+    },
+
+    // Rating
+    rating: {
+      type: Number,
+      min: 0,
+      max: 5,
+      default: 5.0
     },
 
     // Verification Documents (URLs)
@@ -49,8 +56,6 @@ const workerSchema = new mongoose.Schema(
     },
 
     // Cached display fields for admin list views (denormalized from User)
-    primarySkill: { type: String, trim: true },
-    experience: { type: Number, min: 0 },
     city: { type: String, trim: true },
     state: { type: String, trim: true },
 

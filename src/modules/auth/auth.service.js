@@ -43,6 +43,8 @@ const register = async (userData, fileBuffers = {}) => {
 
   // --- WORKER ---
   if (role === ROLES.WORKER) {
+    logger.info(`Creating Worker profile for user: ${user._id}`);
+
     const workerData = {
       user: user._id,
       services: services || [],
@@ -53,52 +55,43 @@ const register = async (userData, fileBuffers = {}) => {
       state: address?.state,
     };
 
-    // Upload Documents
-    const documentIds = [];
-
-    if (fileBuffers.governmentId) {
-      try {
-        const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
-        workerData.governmentId = uploadResult.url;
-
-        // Create Document Record
-        const doc = await WorkerDocument.create({
-          worker: user._id, // Will be updated to Worker ID if needed, but schema refs Worker. 
-          // Note: Worker ID is separate from User ID.
-          // We need the Worker ID first? No, we are creating Worker now.
-          // We can create docs after Worker is created or use User ID temporarily?
-          // Worker schema says ref: 'Worker'. So we need Worker ID.
-          // We will create docs AFTER Worker creation.
-        });
-        // Wait, saving url to temp var to use later
-      } catch (err) {
-        logger.error(`Failed to upload government ID: ${err.message}`);
-      }
-    }
-    // REFACTORING LOGIC:
-    // Since WorkerDocument requires Worker ID, we must create Worker first, then Documents, then update Worker with Document IDs.
-
     // 1. Upload images first
     let govIdUrl = null;
     let selfieUrl = null;
 
     if (fileBuffers.governmentId) {
       try {
+        logger.info('Uploading government ID...');
         const res = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
         govIdUrl = res.url;
         workerData.governmentId = govIdUrl;
-      } catch (err) { logger.error(`Gov ID upload failed: ${err.message}`); }
+        logger.info(`Government ID uploaded: ${govIdUrl}`);
+      } catch (err) {
+        logger.error(`Gov ID upload failed: ${err.message}`);
+        throw new Error(`Failed to upload government ID: ${err.message}`);
+      }
     }
+
     if (fileBuffers.selfie) {
       try {
+        logger.info('Uploading selfie...');
         const res = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
         selfieUrl = res.url;
         workerData.selfie = selfieUrl;
-      } catch (err) { logger.error(`Selfie upload failed: ${err.message}`); }
+        logger.info(`Selfie uploaded: ${selfieUrl}`);
+      } catch (err) {
+        logger.error(`Selfie upload failed: ${err.message}`);
+        throw new Error(`Failed to upload selfie: ${err.message}`);
+      }
     }
 
+    // 2. Create Worker record
     try {
+      logger.info(`Creating Worker record with data: ${JSON.stringify(workerData)}`);
       const newWorker = await Worker.create(workerData);
+      logger.info(`✅ Worker record created successfully: ${newWorker._id}`);
+
+      // 3. Create document records
       const docsToCreate = [];
 
       if (govIdUrl) {
@@ -122,14 +115,19 @@ const register = async (userData, fileBuffers = {}) => {
         const createdDocs = await WorkerDocument.insertMany(docsToCreate);
         newWorker.documents = createdDocs.map(d => d._id);
         await newWorker.save();
+        logger.info(`Worker documents linked: ${createdDocs.length} documents`);
       }
     } catch (err) {
-      logger.error(`Failed to create Worker record: ${err.message}`);
+      logger.error(`❌ Failed to create Worker record: ${err.message}`);
+      logger.error(`Stack trace: ${err.stack}`);
+      throw new Error(`Failed to create Worker profile: ${err.message}`);
     }
   }
 
   // --- CONTRACTOR ---
   if (role === ROLES.CONTRACTOR) {
+    logger.info(`Creating Contractor profile for user: ${user._id}`);
+
     const contractorData = {
       user: user._id,
       services: services || [],
@@ -142,25 +140,35 @@ const register = async (userData, fileBuffers = {}) => {
     // Upload Documents
     if (fileBuffers.governmentId) {
       try {
+        logger.info('Uploading contractor government ID...');
         const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
         contractorData.governmentId = uploadResult.url;
+        logger.info(`Contractor government ID uploaded: ${uploadResult.url}`);
       } catch (err) {
         logger.error(`Failed to upload government ID: ${err.message}`);
+        throw new Error(`Failed to upload government ID: ${err.message}`);
       }
     }
     if (fileBuffers.selfie) {
       try {
+        logger.info('Uploading contractor selfie...');
         const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
         contractorData.selfie = uploadResult.url;
+        logger.info(`Contractor selfie uploaded: ${uploadResult.url}`);
       } catch (err) {
         logger.error(`Failed to upload selfie: ${err.message}`);
+        throw new Error(`Failed to upload selfie: ${err.message}`);
       }
     }
 
     try {
-      await Contractor.create(contractorData);
+      logger.info(`Creating Contractor record with data: ${JSON.stringify(contractorData)}`);
+      const newContractor = await Contractor.create(contractorData);
+      logger.info(`✅ Contractor record created successfully: ${newContractor._id}`);
     } catch (err) {
-      logger.error(`Failed to create Contractor record: ${err.message}`);
+      logger.error(`❌ Failed to create Contractor record: ${err.message}`);
+      logger.error(`Stack trace: ${err.stack}`);
+      throw new Error(`Failed to create Contractor profile: ${err.message}`);
     }
   }
 
@@ -467,7 +475,34 @@ const getProfile = async (userId) => {
     throw new Error('User not found');
   }
 
-  return user.toObject(); // Using toObject() effectively as both models support it
+  const userObj = user.toObject();
+
+  // Fetch role-specific data and merge
+  if (user.role === ROLES.WORKER) {
+    const workerData = await Worker.findOne({ user: userId });
+    if (workerData) {
+      const workerObj = workerData.toObject();
+      // Merge worker-specific fields
+      userObj.skills = workerObj.skills || [];
+      userObj.experience = workerObj.experience || 0;
+      userObj.rating = workerObj.rating || 5.0;
+      userObj.verificationStatus = workerObj.verificationStatus;
+      userObj.governmentId = workerObj.governmentId;
+      userObj.selfie = workerObj.selfie;
+      userObj.profession = workerObj.skills?.[0] || 'Service Provider'; // Primary skill as profession
+    }
+  } else if (user.role === ROLES.CONTRACTOR) {
+    const contractorData = await Contractor.findOne({ user: userId });
+    if (contractorData) {
+      const contractorObj = contractorData.toObject();
+      userObj.services = contractorObj.services || [];
+      userObj.experience = contractorObj.experience || 0;
+      userObj.rating = contractorObj.rating || 5.0;
+      userObj.verificationStatus = contractorObj.verificationStatus;
+    }
+  }
+
+  return userObj;
 };
 
 /**
