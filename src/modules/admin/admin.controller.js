@@ -2,6 +2,7 @@ const Worker = require('../workers/worker.model');
 const User = require('../users/user.model');
 const Admin = require('./admin.model');
 const Badge = require('../workers/badge.model');
+const Contractor = require('../contractors/contractor.model');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
@@ -235,7 +236,7 @@ const listUsers = async (req, res) => {
             };
           }
         } else if (user.role === ROLES.CONTRACTOR) {
-          const contractor = await require('../contractors/contractor.model').findOne({ user: user._id });
+          const contractor = await Contractor.findOne({ user: user._id });
           if (contractor) {
             userData.details = {
               companyName: contractor.companyName,
@@ -278,10 +279,10 @@ const getDashboardStats = async (req, res) => {
     ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
-      Worker.countDocuments(),
+      User.countDocuments({ role: ROLES.WORKER }),
       Contractor.countDocuments({ verificationStatus: 'pending' }),
       Contractor.countDocuments({ verificationStatus: 'verified' }),
-      Contractor.countDocuments(),
+      User.countDocuments({ role: ROLES.CONTRACTOR }),
       User.countDocuments({ role: ROLES.USER }),
     ]);
 
@@ -399,6 +400,40 @@ const removeBadge = async (req, res) => {
   }
 };
 
+/**
+ * Delete user and associated profile
+ * DELETE /api/admin/users/:userId
+ */
+const deleteUser = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return errorResponse(res, 'User not found', 404);
+    }
+
+    // Role-based cleanup
+    if (user.role === ROLES.WORKER) {
+      await Worker.findOneAndDelete({ user: userId });
+      logger.info(`Deleted associated worker profile for user ${userId}`);
+    } else if (user.role === ROLES.CONTRACTOR) {
+      await Contractor.findOneAndDelete({ user: userId });
+      logger.info(`Deleted associated contractor profile for user ${userId}`);
+    }
+
+    // Delete the user itself
+    await User.findByIdAndDelete(userId);
+
+    logger.warn(`Admin ${req.userId} deleted user account: ${user.email} (Role: ${user.role})`);
+
+    return successResponse(res, 'User and associated profiles deleted successfully');
+  } catch (error) {
+    logger.error(`Admin deleteUser error: ${error.message}`);
+    return errorResponse(res, 'Failed to delete user', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -409,6 +444,7 @@ module.exports = {
   listBadges,
   assignBadge,
   removeBadge,
+  deleteUser,
 };
 
 

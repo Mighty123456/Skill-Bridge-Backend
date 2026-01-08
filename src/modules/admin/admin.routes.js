@@ -53,8 +53,15 @@ router.get(
   '/users',
   authenticate,
   authorize(ROLES.ADMIN),
-  authorize(ROLES.ADMIN),
   adminController.listUsers,
+);
+
+// Delete user account
+router.delete(
+  '/users/:userId',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.deleteUser,
 );
 
 // Get dashboard statistics
