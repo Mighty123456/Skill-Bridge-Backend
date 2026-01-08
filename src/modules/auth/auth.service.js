@@ -643,6 +643,55 @@ const resendOTP = async (email) => {
   };
 };
 
+/**
+ * Update user profile
+ */
+const updateProfile = async (userId, updateData) => {
+  const user = await User.findById(userId);
+
+  if (!user) {
+    throw new Error('User not found');
+  }
+
+  // Fields allowed on User model
+  const allowedUserFields = ['name', 'phone', 'address', 'dateOfBirth'];
+
+  // Update User fields
+  allowedUserFields.forEach(field => {
+    if (updateData[field] !== undefined) {
+      user[field] = updateData[field];
+    }
+  });
+
+  await user.save({ validateBeforeSave: false });
+
+  // If user is a worker, update role-specific data if provided
+  if (user.role === ROLES.WORKER) {
+    const { skills, experience, services, address } = updateData;
+
+    // Prepare update object for Worker
+    const workerUpdate = {};
+    if (skills) workerUpdate.skills = skills;
+    if (experience !== undefined) workerUpdate.experience = experience;
+    if (services) workerUpdate.services = services;
+
+    // Sync city/state if address provided
+    if (address?.city) workerUpdate.city = address.city;
+    if (address?.state) workerUpdate.state = address.state;
+
+    if (Object.keys(workerUpdate).length > 0) {
+      await Worker.findOneAndUpdate(
+        { user: userId },
+        { $set: workerUpdate },
+        { new: true }
+      );
+    }
+  }
+
+  // Get updated profile
+  return getProfile(userId);
+};
+
 module.exports = {
   register,
   login,
@@ -653,6 +702,7 @@ module.exports = {
   verifyPasswordResetOTP,
   resetPassword,
   getProfile,
+  updateProfile,
   uploadProfileImage,
   deleteProfileImage,
   verifyRegistration,

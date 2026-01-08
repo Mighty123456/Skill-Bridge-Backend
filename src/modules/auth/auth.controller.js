@@ -223,6 +223,20 @@ const resendOTP = async (req, res) => {
   }
 };
 
+/**
+ * Update user profile
+ * PATCH /api/auth/profile
+ */
+const updateProfile = async (req, res) => {
+  try {
+    const result = await authService.updateProfile(req.userId, req.body);
+    return successResponse(res, 'Profile updated successfully', { user: result });
+  } catch (error) {
+    logger.error(`Update profile error: ${error.message}`);
+    return errorResponse(res, error.message, 400);
+  }
+};
+
 module.exports = {
   register,
   login,
@@ -234,6 +248,7 @@ module.exports = {
   resetPassword,
   getProfile,
   getMe,
+  updateProfile,
   uploadProfileImage,
   deleteProfileImage,
   verifyRegistration,

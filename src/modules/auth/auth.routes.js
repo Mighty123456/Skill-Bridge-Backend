@@ -124,6 +124,13 @@ router.post('/reset-password', validate(authSchema.resetPasswordSchema), authCon
 router.get('/profile', authenticate, authController.getProfile);
 
 /**
+ * @route   PATCH /api/auth/profile
+ * @desc    Update current user profile
+ * @access  Private
+ */
+router.patch('/profile', authenticate, authController.updateProfile);
+
+/**
  * @route   GET /api/auth/me
  * @desc    Get current user (standard /me endpoint)
  * @access  Private
