@@ -32,20 +32,20 @@ const validate = (validations) => {
 // Admin login (role must be admin)
 router.post('/login', validate(authSchema.loginSchema), adminController.adminLogin);
 
-// List workers with optional verification status filter
+// List professionals with optional verification status filter
 router.get(
-  '/workers',
+  '/professionals',
   authenticate,
   authorize(ROLES.ADMIN),
-  adminController.listWorkers,
+  adminController.listProfessionals,
 );
 
-// Update worker verification status
+// Update professional verification status
 router.patch(
-  '/workers/:workerId/status',
+  '/professionals/:id/status',
   authenticate,
   authorize(ROLES.ADMIN),
-  adminController.updateWorkerStatus,
+  adminController.updateProfessionalStatus,
 );
 
 // List all users (User, Worker, Contractor)

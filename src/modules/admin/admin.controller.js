@@ -9,29 +9,35 @@ const emailService = require('../../common/services/email.service');
 const logger = require('../../config/logger');
 
 /**
- * List workers for admin, with optional verificationStatus filter.
- * GET /api/admin/workers?status=pending|verified|rejected
+ * List professionals for admin, with optional verificationStatus filter.
+ * GET /api/admin/professionals?status=pending|verified|rejected
  */
-const listWorkers = async (req, res) => {
+const listProfessionals = async (req, res) => {
   try {
     const { status } = req.query;
-
     const filter = {};
     if (status) {
       filter.verificationStatus = status;
     }
 
-    // List workers for admin, with optional verificationStatus filter
-    const workers = await Worker.find(filter)
-      .populate({
-        path: 'user',
-        select: 'name email phone role address profileImage', // Added profileImage
-      })
-      .populate('badges')
-      .sort({ createdAt: -1 });
+    const [workers, contractors] = await Promise.all([
+      Worker.find(filter)
+        .populate({
+          path: 'user',
+          select: 'name email phone role address profileImage',
+        })
+        .populate('badges')
+        .sort({ createdAt: -1 }),
+      Contractor.find(filter)
+        .populate({
+          path: 'user',
+          select: 'name email phone role address profileImage',
+        })
+        .sort({ createdAt: -1 }),
+    ]);
 
-    const summaries = workers
-      .filter((w) => w.user) // in case of orphaned records
+    const workerSummaries = workers
+      .filter((w) => w.user)
       .map((w) => {
         const u = w.user;
         return {
@@ -41,41 +47,63 @@ const listWorkers = async (req, res) => {
           email: u.email,
           phone: u.phone,
           profileImage: u.profileImage,
-
-          // Worker specific fields
-          services: w.services,
-          skills: w.skills,
+          type: 'worker',
+          primarySkill: w.skills?.[0] || 'Worker',
           experience: w.experience,
           city: w.city || u.address?.city || null,
-          state: u.address?.state || null, // Added state
-
-          // Verification docs
+          state: u.address?.state || null,
           governmentId: w.governmentId,
           selfie: w.selfie,
-
-          // Badges
           badges: w.badges,
-
           status: w.verificationStatus,
           createdAt: w.createdAt,
         };
       });
 
-    return successResponse(res, 'Workers fetched successfully', { workers: summaries });
+    const contractorSummaries = contractors
+      .filter((c) => c.user)
+      .map((c) => {
+        const u = c.user;
+        return {
+          id: c._id.toString(),
+          userId: u._id.toString(),
+          name: u.name,
+          email: u.email,
+          phone: u.phone,
+          profileImage: u.profileImage,
+          type: 'contractor',
+          companyName: c.companyName,
+          primarySkill: 'Contractor',
+          experience: c.experience,
+          city: c.city || u.address?.city || null,
+          state: u.address?.state || null,
+          governmentId: c.governmentId,
+          selfie: c.selfie,
+          status: c.verificationStatus,
+          createdAt: c.createdAt,
+        };
+      });
+
+    const allProfessionals = [...workerSummaries, ...contractorSummaries].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt),
+    );
+
+    return successResponse(res, 'Professionals fetched successfully', {
+      professionals: allProfessionals,
+    });
   } catch (error) {
-    logger.error(`Admin listWorkers error: ${error.message}`);
-    return errorResponse(res, 'Failed to fetch workers', 500);
+    logger.error(`Admin listProfessionals error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch professionals', 500);
   }
 };
 
 /**
- * Update worker verification status.
- * PATCH /api/admin/workers/:workerId/status
- * Body: { status: 'pending' | 'verified' | 'rejected', reason?: string }
+ * Update professional verification status (Worker or Contractor).
+ * PATCH /api/admin/professionals/:id/status
  */
-const updateWorkerStatus = async (req, res) => {
+const updateProfessionalStatus = async (req, res) => {
   try {
-    const { workerId } = req.params;
+    const { id } = req.params;
     const { status, reason } = req.body;
 
     const allowedStatuses = ['pending', 'verified', 'rejected'];
@@ -83,59 +111,59 @@ const updateWorkerStatus = async (req, res) => {
       return errorResponse(res, 'Invalid status value', 400);
     }
 
-    const worker = await Worker.findById(workerId).populate({
+    // Attempt to find in Worker first, then Contractor
+    let professional = await Worker.findById(id).populate({
       path: 'user',
-      select: 'name email phone role verificationStatus isVerified',
+      select: 'name email phone role',
     });
 
-    if (!worker || !worker.user) {
-      return errorResponse(res, 'Worker not found', 404);
+    if (!professional) {
+      professional = await Contractor.findById(id).populate({
+        path: 'user',
+        select: 'name email phone role',
+      });
     }
 
-    // Update worker document
-    worker.verificationStatus = status;
-    worker.statusHistory.push({
+    if (!professional || !professional.user) {
+      return errorResponse(res, 'Professional not found', 404);
+    }
+
+    // Update document
+    professional.verificationStatus = status;
+    professional.statusHistory.push({
       status,
       reason,
-      changedBy: req.userId, // This ID comes from auth middleware (Admin ID)
+      changedBy: req.userId,
       changedAt: new Date(),
     });
-    await worker.save();
+    await professional.save();
 
-    // Mirror status on User model for backward compatibility
-    // Note: User model might not have verificationStatus field depending on recent refactor 
-    // but keeping it safe if field exists.
-    const user = await User.findById(worker.user._id);
+    // Mirror on User model
+    const user = await User.findById(professional.user._id);
     if (user) {
-      // Only set if fields exist in schema
-      if (user.schema && user.schema.path('verificationStatus')) {
-        user.verificationStatus = status;
-      }
-      if (user.schema && user.schema.path('isVerified')) {
-        user.isVerified = status === 'verified';
-      }
+      user.isVerified = status === 'verified';
       await user.save({ validateBeforeSave: false });
     }
 
     logger.info(
-      `Admin ${req.userId} updated worker ${workerId} status to ${status}${reason ? ` (reason: ${reason})` : ''
+      `Admin ${req.userId} updated professional ${id} status to ${status}${reason ? ` (reason: ${reason})` : ''
       }`,
     );
 
-    // Send email notification (non-blocking)
+    // Send email notification
     if (status === 'verified' || status === 'rejected') {
       emailService.sendVerificationEmail(
-        worker.user.email,
-        worker.user.name,
+        professional.user.email,
+        professional.user.name,
         status,
         reason
       ).catch(err => logger.error(`Failed to send verification email: ${err.message}`));
     }
 
-    return successResponse(res, 'Worker status updated successfully', { status });
+    return successResponse(res, 'Status updated successfully', { status });
   } catch (error) {
-    logger.error(`Admin updateWorkerStatus error: ${error.message}`);
-    return errorResponse(res, 'Failed to update worker status', 500);
+    logger.error(`Admin updateProfessionalStatus error: ${error.message}`);
+    return errorResponse(res, 'Failed to update status', 500);
   }
 };
 
@@ -239,18 +267,32 @@ const listUsers = async (req, res) => {
  */
 const getDashboardStats = async (req, res) => {
   try {
-    const [pendingWorkers, verifiedWorkers, totalUsers, totalContractors] = await Promise.all([
+    const [
+      pendingWorkers,
+      verifiedWorkers,
+      totalWorkers,
+      pendingContractors,
+      verifiedContractors,
+      totalContractors,
+      totalUsers
+    ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
+      Worker.countDocuments(),
+      Contractor.countDocuments({ verificationStatus: 'pending' }),
+      Contractor.countDocuments({ verificationStatus: 'verified' }),
+      Contractor.countDocuments(),
       User.countDocuments({ role: ROLES.USER }),
-      User.countDocuments({ role: ROLES.CONTRACTOR }),
     ]);
 
     return successResponse(res, 'Stats fetched successfully', {
-      pendingWorkers,
+      pendingVerifications: pendingWorkers + pendingContractors,
       verifiedWorkers,
-      totalUsers,
+      totalWorkers,
+      verifiedContractors,
       totalContractors,
+      totalVerifiedProfessionals: verifiedWorkers + verifiedContractors,
+      totalUsers,
     });
   } catch (error) {
     logger.error(`Admin getDashboardStats error: ${error.message}`);
@@ -358,8 +400,8 @@ const removeBadge = async (req, res) => {
 };
 
 module.exports = {
-  listWorkers,
-  updateWorkerStatus,
+  listProfessionals,
+  updateProfessionalStatus,
   adminLogin,
   listUsers,
   getDashboardStats,
