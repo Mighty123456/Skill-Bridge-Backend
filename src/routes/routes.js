@@ -110,6 +110,7 @@ router.use('/admin', adminRoutes);
 router.use('/jobs', require('../modules/jobs/job.routes'));
 // router.use('/jobs', require('../modules/jobs/job.routes'));
 router.use('/notifications', require('../modules/notifications/notification.routes'));
+router.use('/quotations', require('../modules/quotations/quotation.routes'));
 
 // Add other route modules here
 // router.use('/users', userRoutes);
