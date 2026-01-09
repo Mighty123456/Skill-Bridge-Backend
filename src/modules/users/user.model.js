@@ -52,6 +52,17 @@ const userSchema = new mongoose.Schema(
         longitude: { type: Number },
       },
     },
+    // GeoJSON for efficient geospatial querying
+    location: {
+      type: {
+        type: String,
+        enum: ['Point'],
+        default: 'Point',
+      },
+      coordinates: {
+        type: [Number], // [longitude, latitude]
+      },
+    },
     // Profile image
     profileImage: {
       type: String,
@@ -86,13 +97,20 @@ const userSchema = new mongoose.Schema(
   }
 );
 
-// Index for faster queries
+// Indexes
 userSchema.index({ role: 1 });
-userSchema.index({ 'address.coordinates.latitude': 1, 'address.coordinates.longitude': 1 });
+userSchema.index({ location: '2dsphere' }); // GEOSPATIAL INDEX
 
-// Hash password before saving
-// Hash password before saving
+// Hash password before saving & Sync Location
 userSchema.pre('save', function (next) {
+  // Sync legacy address.coordinates to GeoJSON location
+  if (this.address && this.address.coordinates && this.address.coordinates.latitude && this.address.coordinates.longitude) {
+    this.location = {
+      type: 'Point',
+      coordinates: [this.address.coordinates.longitude, this.address.coordinates.latitude]
+    };
+  }
+
   // Only hash password if it's modified
   if (!this.isModified('password')) {
     return next();

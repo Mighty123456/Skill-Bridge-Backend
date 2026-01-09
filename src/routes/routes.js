@@ -7,7 +7,7 @@ const router = express.Router();
 // Root route
 router.get('/', (req, res) => {
   const { getBackendURL } = require('../common/utils/backend-urls');
-  
+
   res.json({
     success: true,
     message: 'SkillBridge API is running',
@@ -39,7 +39,7 @@ if (process.env.NODE_ENV !== 'production') {
     const { sendOTPEmail, initializeTransporter } = require('../common/services/email.service');
     const config = require('../config/env');
     const logger = require('../config/logger');
-    
+
     try {
       const { email } = req.body;
       if (!email) {
@@ -59,7 +59,7 @@ if (process.env.NODE_ENV !== 'production') {
       // Test transporter initialization
       logger.info('Testing transporter initialization...');
       const initialized = await initializeTransporter();
-      
+
       if (!initialized) {
         return res.status(500).json({
           success: false,
@@ -107,6 +107,8 @@ if (process.env.NODE_ENV !== 'production') {
 // API routes
 router.use('/auth', authRoutes);
 router.use('/admin', adminRoutes);
+router.use('/jobs', require('../modules/jobs/job.routes'));
+router.use('/notifications', require('../modules/notifications/notification.routes'));
 
 // Add other route modules here
 // router.use('/users', userRoutes);
