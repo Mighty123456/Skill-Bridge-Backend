@@ -31,8 +31,15 @@ const jobSchema = new mongoose.Schema(
             type: String, // URLs
         }],
         location: {
-            lat: { type: Number, required: true },
-            lng: { type: Number, required: true },
+            type: {
+                type: String,
+                enum: ['Point'],
+                default: 'Point',
+            },
+            coordinates: {
+                type: [Number],
+                required: true,
+            }, // [longitude, latitude]
             address_text: { type: String, trim: true },
         },
         urgency_level: {
@@ -73,6 +80,7 @@ const jobSchema = new mongoose.Schema(
 );
 
 // Indexes
+jobSchema.index({ location: '2dsphere' });
 jobSchema.index({ status: 1, skill_required: 1 });
 
 const Job = mongoose.model('Job', jobSchema);

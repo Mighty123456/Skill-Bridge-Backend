@@ -23,8 +23,8 @@ exports.createJob = async (req, res) => {
             job_description,
             skill_required,
             location: {
-                lat: location.lat,
-                lng: location.lng,
+                type: 'Point',
+                coordinates: [location.lng, location.lat],
                 address_text: location.address_text
             },
             urgency_level,
@@ -101,6 +101,8 @@ async function findAndNotifyWorkers(job) {
     }
 }
 
+
+
 exports.getJob = async (req, res) => {
     try {
         const job = await Job.findById(req.params.id).populate('user_id', 'name phone address');
@@ -148,4 +150,107 @@ exports.acceptJob = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
     */
+};
+
+// Get jobs feed for a worker (matching skills and location)
+exports.getWorkerFeed = async (req, res) => {
+    try {
+        const workerUser = await User.findById(req.user._id);
+        const workerProfile = await Worker.findOne({ user: req.user._id });
+
+        if (!workerProfile) {
+            return res.status(404).json({ success: false, message: 'Worker profile not found' });
+        }
+
+        // 1. Get Worker Skills
+        const workerSkills = workerProfile.skills;
+
+        if (!workerSkills || workerSkills.length === 0) {
+            return res.json({ success: true, data: [] }); // No skills, no jobs
+        }
+
+        // 2. Find Open Jobs matching Skills
+        let query = {
+            status: 'open',
+            skill_required: { $in: workerSkills }
+        };
+
+        if (workerUser && workerUser.location && workerUser.location.coordinates && workerUser.location.coordinates.length === 2) {
+            query['location'] = {
+                $near: {
+                    $geometry: {
+                        type: 'Point',
+                        coordinates: workerUser.location.coordinates
+                    },
+                    $maxDistance: 50000 // 50km
+                }
+            };
+        } else {
+            console.log('Worker location not available for proximity search, returning all matching skills');
+        }
+
+        const jobs = await Job.find(query)
+            .sort({ is_emergency: -1, createdAt: -1 })
+            .limit(20);
+
+        res.json({ success: true, data: jobs });
+
+    } catch (error) {
+        console.error('Get Worker Feed Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch jobs: ' + error.message });
+    }
+};
+
+// Get jobs assigned to the worker
+exports.getWorkerJobs = async (req, res) => {
+    try {
+        const { status } = req.query;
+        let query = {
+            selected_worker_id: req.user._id
+        };
+
+        if (status === 'active') {
+            query.status = { $in: ['in_progress', 'assigned'] };
+        } else if (status === 'completed') {
+            query.status = 'completed';
+        }
+
+        const jobs = await Job.find(query)
+            .sort({ updated_at: -1 })
+            .populate('user_id', 'name phone address');
+
+        res.json({ success: true, data: jobs });
+
+    } catch (error) {
+        console.error('Get Worker Jobs Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch jobs' });
+    }
+};
+
+// Get jobs posted by the tenant (user)
+exports.getTenantJobs = async (req, res) => {
+    try {
+        const { status } = req.query; // 'open' (pending) or 'active' (in_progress)
+        let query = {
+            user_id: req.user._id
+        };
+
+        if (status === 'pending') {
+            query.status = 'open';
+        } else if (status === 'active') {
+            query.status = { $in: ['in_progress', 'assigned'] };
+        } else if (status === 'completed') {
+            query.status = 'completed';
+        }
+
+        const jobs = await Job.find(query)
+            .sort({ createdAt: -1 })
+            .populate('selected_worker_id', 'name phone'); // Populate worker details if assigned
+
+        res.json({ success: true, data: jobs });
+
+    } catch (error) {
+        console.error('Get Tenant Jobs Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch your jobs' });
+    }
 };
