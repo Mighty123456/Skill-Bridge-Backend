@@ -108,6 +108,7 @@ if (process.env.NODE_ENV !== 'production') {
 router.use('/auth', authRoutes);
 router.use('/admin', adminRoutes);
 router.use('/jobs', require('../modules/jobs/job.routes'));
+// router.use('/jobs', require('../modules/jobs/job.routes'));
 router.use('/notifications', require('../modules/notifications/notification.routes'));
 
 // Add other route modules here

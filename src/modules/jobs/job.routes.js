@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const jobController = require('./job.controller');
-const { protect, authorize } = require('../../common/middleware/auth.middleware');
+const { authenticate: protect } = require('../../common/middleware/auth.middleware');
 
 // Routes
 router.post('/', protect, jobController.createJob);
