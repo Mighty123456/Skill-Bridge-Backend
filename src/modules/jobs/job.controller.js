@@ -6,25 +6,34 @@ const Notification = require('../notifications/notification.model');
 // Create a new job
 exports.createJob = async (req, res) => {
     try {
-        const { title, description, skill, location, urgency, budget, quotationWindowDays } = req.body;
+        const { job_title, job_description, skill_required, location, urgency_level, quotation_window_hours } = req.body;
 
-        // 1. Prepare Job Data
-        // location matches GeoJSON User format: { type: 'Point', coordinates: [lng, lat], address: "..." }
-        const quotationWindow = new Date(Date.now() + (quotationWindowDays || 1) * 24 * 60 * 60 * 1000);
+        // Calculate timestamps
+        const quotation_start_time = new Date();
+        const hours = quotation_window_hours || 24;
+        const quotation_end_time = new Date(quotation_start_time.getTime() + hours * 60 * 60 * 1000);
+
+        const is_emergency = urgency_level === 'emergency';
+
+        // location expected from frontend: { lat: 123, lng: 456, address_text: "..." }
 
         const job = new Job({
-            title,
-            description,
-            skill,
+            user_id: req.user._id, // Auth middleware populates req.user
+            job_title,
+            job_description,
+            skill_required,
             location: {
-                type: 'Point',
-                coordinates: location.coordinates, // API must send [lng, lat]
-                address: location.address
+                lat: location.lat,
+                lng: location.lng,
+                address_text: location.address_text
             },
-            urgency,
-            budget,
-            quotationWindow,
-            postedBy: req.user._id, // Assumes auth middleware populates req.user
+            urgency_level,
+
+            quotation_window_hours: hours,
+            quotation_start_time,
+            quotation_end_time,
+            is_emergency,
+            status: 'open'
         });
 
         await job.save();
@@ -52,7 +61,7 @@ exports.createJob = async (req, res) => {
 async function findAndNotifyWorkers(job) {
     // 1. Find Workers with matching SKILL and VERIFIED status
     const matchedWorkers = await Worker.find({
-        skills: { $in: [job.skill] }, // "Plumber" in ["Plumber", "Electrician"]
+        skills: { $in: [job.skill_required] },
         verificationStatus: 'verified'
     }).select('user');
 
@@ -62,37 +71,39 @@ async function findAndNotifyWorkers(job) {
 
     // 2. Filter these Ids by LOCATION (using User model's 2dsphere index)
     // Max distance: 10km (10000 meters)
+    // We construct the GeoJSON point from our flat lat/lng for the User query
     const nearbyUsers = await User.find({
         _id: { $in: workerUserIds },
         location: {
             $near: {
-                $geometry: job.location, // { type: "Point", coordinates: [lng, lat] }
+                $geometry: {
+                    type: 'Point',
+                    coordinates: [job.location.lng, job.location.lat]
+                },
                 $maxDistance: 10000 // 10km radius
             }
         }
-    }).select('_id fcmToken'); // Assuming we might want push tokens later
+    }).select('_id fcmToken');
 
     console.log(`Found ${nearbyUsers.length} nearby workers for job ${job._id}`);
 
     // 3. Create Notifications
     const notifications = nearbyUsers.map(user => ({
         recipient: user._id,
-        title: job.urgency === 'emergency' ? '🚨 URGENT JOB ALERT!' : 'New Job Alert!',
-        message: `${job.urgency === 'emergency' ? 'IMMEDIATE HELP NEEDED: ' : ''}A new ${job.skill} job match found near you: ${job.title}`,
+        title: job.is_emergency ? '🚨 URGENT JOB ALERT!' : 'New Job Alert!',
+        message: `${job.is_emergency ? 'IMMEDIATE HELP NEEDED: ' : ''}A new ${job.skill_required} job match found near you: ${job.job_title}`,
         type: 'job_alert',
         data: { jobId: job._id }
     }));
 
     if (notifications.length > 0) {
         await Notification.insertMany(notifications);
-        // TODO: Emit Socket.io event here
-        // global.io.to(user._id).emit('notification', ...)
     }
 }
 
 exports.getJob = async (req, res) => {
     try {
-        const job = await Job.findById(req.params.id).populate('postedBy', 'name phone address');
+        const job = await Job.findById(req.params.id).populate('user_id', 'name phone address');
 
         if (!job) {
             return res.status(404).json({ success: false, message: 'Job not found' });
@@ -120,14 +131,14 @@ exports.acceptJob = async (req, res) => {
 
         // Assign worker
         job.status = 'in_progress';
-        job.assignedTo = req.user._id;
+        job.selected_worker_id = req.user._id;
         await job.save();
 
         // Create Notification for User
         await Notification.create({
-            recipient: job.postedBy,
+            recipient: job.user_id,
             title: 'Job Accepted',
-            message: `A worker has accepted your job request: ${job.title}`,
+            message: `A worker has accepted your job request: ${job.job_title}`,
             type: 'system',
             data: { jobId: job._id }
         });

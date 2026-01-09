@@ -248,6 +248,13 @@ const login = async (email, password) => {
   // Note: Admin model has 'lastLogin', User model has 'lastLogin'. 
   // If field names differed, we'd need a check. They seem consistent enough or we can use generic assignment.
   user.lastLogin = new Date();
+
+  // Fix for invalid location data (missing coordinates)
+  if (user.location && user.location.type === 'Point' && (!user.location.coordinates || user.location.coordinates.length !== 2)) {
+    logger.warn(`Fixing invalid location for user ${user._id}: removing malformed location field`);
+    user.location = undefined;
+  }
+
   logger.info('Saving user');
   try {
     await user.save({ validateBeforeSave: false });

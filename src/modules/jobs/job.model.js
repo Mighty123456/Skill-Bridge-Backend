@@ -1,57 +1,56 @@
 const mongoose = require('mongoose');
 
+
+
 const jobSchema = new mongoose.Schema(
     {
-        title: {
+        user_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+            required: true,
+        },
+        job_title: {
             type: String,
             required: [true, 'Job title is required'],
             trim: true,
             maxlength: [100, 'Title cannot exceed 100 characters'],
         },
-        description: {
-            type: String,
-            required: [true, 'Job description is required'],
-            trim: true,
-            maxlength: [1000, 'Description cannot exceed 1000 characters'],
-        },
-        skill: {
+        skill_required: {
             type: String,
             required: [true, 'Skill category is required'],
             trim: true,
             index: true,
         },
-        images: [{
+        job_description: {
+            type: String,
+            required: [true, 'Job description is required'],
+            trim: true,
+            maxlength: [1000, 'Description cannot exceed 1000 characters'],
+        },
+        issue_photos: [{
             type: String, // URLs
         }],
         location: {
-            type: {
-                type: String,
-                enum: ['Point'],
-                default: 'Point',
-            },
-            coordinates: {
-                type: [Number], // [longitude, latitude]
-                required: [true, 'Job location is required'],
-                index: '2dsphere',
-            },
-            address: {
-                type: String,
-                trim: true,
-            },
+            lat: { type: Number, required: true },
+            lng: { type: Number, required: true },
+            address_text: { type: String, trim: true },
         },
-        budget: {
-            min: { type: Number, min: 0 },
-            max: { type: Number, min: 0 },
-        },
-        urgency: {
+        urgency_level: {
             type: String,
             enum: ['low', 'medium', 'high', 'emergency'],
             default: 'medium',
         },
-        quotationWindow: {
+
+        quotation_window_hours: {
+            type: Number,
+            default: 24,
+        },
+        quotation_start_time: {
             type: Date,
-            // Default 24 hours from now
-            default: () => new Date(+new Date() + 24 * 60 * 60 * 1000),
+            default: Date.now,
+        },
+        quotation_end_time: {
+            type: Date,
         },
         status: {
             type: String,
@@ -59,24 +58,22 @@ const jobSchema = new mongoose.Schema(
             default: 'open',
             index: true,
         },
-        postedBy: {
-            type: mongoose.Schema.Types.ObjectId,
-            ref: 'User',
-            required: true,
+        is_emergency: {
+            type: Boolean,
+            default: false,
         },
-        assignedTo: {
+        selected_worker_id: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: 'User', // Worker's User ID
+            ref: 'User', // Linking to User ID for consistency with Auth
         },
     },
     {
-        timestamps: true,
+        timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
     }
 );
 
 // Indexes
-jobSchema.index({ status: 1, skill: 1 });
-jobSchema.index({ location: '2dsphere' });
+jobSchema.index({ status: 1, skill_required: 1 });
 
 const Job = mongoose.model('Job', jobSchema);
 
