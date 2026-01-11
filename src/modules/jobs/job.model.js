@@ -61,7 +61,7 @@ const jobSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['open', 'in_progress', 'completed', 'cancelled'],
+            enum: ['open', 'in_progress', 'reviewing', 'completed', 'cancelled'],
             default: 'open',
             index: true,
         },
@@ -73,6 +73,9 @@ const jobSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User', // Linking to User ID for consistency with Auth
         },
+        completion_photos: [{
+            type: String, // URLs for work completion proof
+        }],
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

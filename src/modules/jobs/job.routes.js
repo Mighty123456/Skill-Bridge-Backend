@@ -11,5 +11,7 @@ router.get('/my-jobs', protect, jobController.getWorkerJobs);
 router.get('/posted-jobs', protect, jobController.getTenantJobs);
 router.get('/:id', protect, jobController.getJob);
 router.post('/:id/accept', protect, jobController.acceptJob);
+router.post('/:id/submit-completion', protect, catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.submitCompletion);
+router.post('/:id/confirm-completion', protect, jobController.confirmCompletion);
 
 module.exports = router;

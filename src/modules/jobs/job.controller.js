@@ -133,7 +133,21 @@ exports.getJob = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Job not found' });
         }
 
-        res.json({ success: true, data: job });
+        // Check if current user (worker) has already submitted a quotation
+        let hasSubmittedQuotation = false;
+        if (req.user && req.user.role === 'worker') {
+            const Quotation = require('../quotations/quotation.model');
+            const existingQuotation = await Quotation.findOne({ job_id: job._id, worker_id: req.user._id });
+            hasSubmittedQuotation = !!existingQuotation;
+        }
+
+        res.json({
+            success: true,
+            data: {
+                ...job._doc,
+                hasSubmittedQuotation
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -215,7 +229,17 @@ exports.getWorkerFeed = async (req, res) => {
             .sort({ is_emergency: -1, createdAt: -1 })
             .limit(20);
 
-        res.json({ success: true, data: jobs });
+        // Enhance with hasSubmittedQuotation flag
+        const Quotation = require('../quotations/quotation.model');
+        const jobsWithFlags = await Promise.all(jobs.map(async (job) => {
+            const existingQuotation = await Quotation.findOne({ job_id: job._id, worker_id: req.user._id });
+            return {
+                ...job._doc,
+                hasSubmittedQuotation: !!existingQuotation
+            };
+        }));
+
+        res.json({ success: true, data: jobsWithFlags });
 
     } catch (error) {
         console.error('Get Worker Feed Error:', error);
@@ -232,7 +256,7 @@ exports.getWorkerJobs = async (req, res) => {
         };
 
         if (status === 'active') {
-            query.status = { $in: ['in_progress', 'assigned'] };
+            query.status = { $in: ['in_progress', 'assigned', 'reviewing'] };
         } else if (status === 'completed') {
             query.status = 'completed';
         }
@@ -260,7 +284,7 @@ exports.getTenantJobs = async (req, res) => {
         if (status === 'pending') {
             query.status = 'open';
         } else if (status === 'active') {
-            query.status = { $in: ['in_progress', 'assigned'] };
+            query.status = { $in: ['in_progress', 'assigned', 'reviewing'] };
         } else if (status === 'completed') {
             query.status = 'completed';
         }
@@ -274,5 +298,87 @@ exports.getTenantJobs = async (req, res) => {
     } catch (error) {
         console.error('Get Tenant Jobs Error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch your jobs' });
+    }
+};
+
+// Worker submits completion proof
+exports.submitCompletion = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await Job.findById(id);
+
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        // Security check: Only selected worker can submit proof
+        if (job.selected_worker_id.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: 'Not authorized to submit completion for this job' });
+        }
+
+        if (job.status !== 'in_progress') {
+            return res.status(400).json({ success: false, message: 'Only in-progress jobs can be completed' });
+        }
+
+        // Handle Completion Photos
+        const completion_photos = [];
+        if (req.files && req.files.length > 0) {
+            const uploadPromises = req.files.map(file =>
+                uploadOptimizedImage(file.buffer, `skillbridge/completion/${id}`)
+            );
+            const uploadResults = await Promise.all(uploadPromises);
+            uploadResults.forEach(result => completion_photos.push(result.url));
+        }
+
+        job.status = 'reviewing';
+        job.completion_photos = completion_photos;
+        await job.save();
+
+        // Notify Tenant
+        await Notification.create({
+            recipient: job.user_id,
+            title: 'Job Finished - Pending Review',
+            message: `Worker has submitted completion proof for: ${job.job_title}. Please review and confirm.`,
+            type: 'completion_review',
+            data: { jobId: job._id }
+        });
+
+        res.json({ success: true, message: 'Completion proof submitted. Waiting for tenant confirmation.', data: job });
+    } catch (error) {
+        logger.error('Submit Completion Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Tenant confirms completion
+exports.confirmCompletion = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await Job.findById(id);
+
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        // Security check: Only job owner can confirm
+        if (job.user_id.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: 'Not authorized' });
+        }
+
+        if (job.status !== 'reviewing') {
+            return res.status(400).json({ success: false, message: 'Job is not in reviewing state' });
+        }
+
+        job.status = 'completed';
+        await job.save();
+
+        // Notify Worker
+        await Notification.create({
+            recipient: job.selected_worker_id,
+            title: 'Payment/Completion Confirmed',
+            message: `The tenant has confirmed completion for: ${job.job_title}. Great job!`,
+            type: 'job_completed',
+            data: { jobId: job._id }
+        });
+
+        res.json({ success: true, message: 'Job marked as completed successfully', data: job });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
