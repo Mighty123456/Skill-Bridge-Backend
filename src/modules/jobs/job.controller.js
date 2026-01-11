@@ -263,7 +263,7 @@ exports.getWorkerJobs = async (req, res) => {
 
         const jobs = await Job.find(query)
             .sort({ updated_at: -1 })
-            .populate('user_id', 'name phone address');
+            .populate('user_id', 'name phone address profileImage');
 
         res.json({ success: true, data: jobs });
 
@@ -291,7 +291,7 @@ exports.getTenantJobs = async (req, res) => {
 
         const jobs = await Job.find(query)
             .sort({ createdAt: -1 })
-            .populate('selected_worker_id', 'name phone'); // Populate worker details if assigned
+            .populate('selected_worker_id', 'name phone profileImage'); // Populate worker details if assigned
 
         res.json({ success: true, data: jobs });
 

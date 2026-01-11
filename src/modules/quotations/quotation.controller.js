@@ -80,7 +80,7 @@ exports.getQuotationsByJob = async (req, res) => {
         }
 
         const quotations = await Quotation.find({ job_id: jobId })
-            .populate('worker_id', 'name phone')
+            .populate('worker_id', 'name phone profileImage')
             .sort({ total_cost: 1 }); // Sort by lowest cost
 
         res.json({ success: true, data: quotations });
