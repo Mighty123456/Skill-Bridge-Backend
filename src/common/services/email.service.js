@@ -364,10 +364,63 @@ const initializeEmailService = async () => {
   return await initializeTransporter();
 };
 
+/**
+ * Send quotation accepted email
+ */
+const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Congratulations, ${workerName}!</h2>
+      <p>Your quotation for the job <strong>"${jobTitle}"</strong> has been accepted by the client.</p>
+      
+      <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 25px 0;">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="color: #6b7280; font-size: 14px; padding-bottom: 8px;">Job Title</td>
+            <td style="color: #111827; font-size: 14px; font-weight: 600; text-align: right; padding-bottom: 8px;">${jobTitle}</td>
+          </tr>
+          <tr>
+            <td style="color: #6b7280; font-size: 14px;">Total Cost</td>
+            <td style="color: #4f46e5; font-size: 16px; font-weight: 700; text-align: right;">₹${totalCost.toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p>Please log in to the SkillBridge app to view complete job details and start working on the task. Good luck!</p>
+      
+      <div style="margin-top: 35px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+          View Job Details
+        </a>
+      </div>
+    `, 'SkillBridge - Quotation Accepted');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Your quotation for "${jobTitle}" has been accepted!`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    logger.info(`Quotation accepted email sent to ${email}`);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending quotation accepted email: ${error.message}`);
+    return { success: false };
+  }
+};
+
 module.exports = {
   sendOTPEmail,
   sendWelcomeEmail,
   sendVerificationEmail,
+  sendQuotationAcceptedEmail,
   initializeEmailService,
   initializeTransporter
 };

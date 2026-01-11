@@ -1,6 +1,7 @@
 const Quotation = require('./quotation.model');
 const Job = require('../jobs/job.model');
 const Notification = require('../notifications/notification.model');
+const emailService = require('../../common/services/email.service');
 
 // Create a new quotation
 exports.createQuotation = async (req, res) => {
@@ -95,12 +96,13 @@ exports.acceptQuotation = async (req, res) => {
     try {
         const { id } = req.params; // Quotation ID
 
-        const quotation = await Quotation.findById(id).populate('job_id');
+        const quotation = await Quotation.findById(id).populate('job_id').populate('worker_id', 'name email');
         if (!quotation) {
             return res.status(404).json({ success: false, message: 'Quotation not found' });
         }
 
         const job = quotation.job_id;
+        const worker = quotation.worker_id;
 
         // Authorization
         if (job.user_id.toString() !== req.user._id.toString()) {
@@ -113,7 +115,7 @@ exports.acceptQuotation = async (req, res) => {
 
         // Update Job
         job.status = 'in_progress';
-        job.selected_worker_id = quotation.worker_id;
+        job.selected_worker_id = worker._id;
         await job.save();
 
         // Update Quotation Status
@@ -126,14 +128,24 @@ exports.acceptQuotation = async (req, res) => {
             { $set: { status: 'rejected' } }
         );
 
-        // Notify Worker
+        // Notify Worker (In-App)
         await Notification.create({
-            recipient: quotation.worker_id,
+            recipient: worker._id,
             title: 'Quotation Accepted!',
             message: `Your quotation for ${job.job_title} has been accepted. You can now start the work.`,
             type: 'quotation_accepted',
             data: { jobId: job._id }
         });
+
+        // Notify Worker (Email)
+        if (worker.email) {
+            await emailService.sendQuotationAcceptedEmail(
+                worker.email,
+                worker.name,
+                job.job_title,
+                quotation.total_cost
+            );
+        }
 
         res.json({ success: true, message: 'Quotation accepted', data: job });
 
