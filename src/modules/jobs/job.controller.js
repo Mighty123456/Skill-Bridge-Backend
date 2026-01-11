@@ -127,7 +127,7 @@ async function findAndNotifyWorkers(job) {
 
 exports.getJob = async (req, res) => {
     try {
-        const job = await Job.findById(req.params.id).populate('user_id', 'name phone address');
+        const job = await Job.findById(req.params.id).populate('user_id', 'name phone address profileImage');
 
         if (!job) {
             return res.status(404).json({ success: false, message: 'Job not found' });
