@@ -4,6 +4,9 @@ const config = require('./config/env');
 const logger = require('./config/logger');
 const { initializeEmailService } = require('./common/services/email.service');
 
+const http = require('http');
+const { initializeSocket } = require('./socket/socket');
+
 // Start server function
 const startServer = async () => {
   try {
@@ -16,7 +19,14 @@ const startServer = async () => {
 
     // Start server only after DB is connected
     const PORT = config.PORT;
-    const server = app.listen(PORT, () => {
+
+    // Create HTTP server from Express app
+    const server = http.createServer(app);
+
+    // Initialize Socket.io
+    initializeSocket(server);
+
+    server.listen(PORT, () => {
       logger.info(`🚀 Server is soaring! Running in ${config.NODE_ENV} mode on port ${PORT}`);
       logger.info(`🔗 API URL: http://localhost:${PORT}/api`);
     });
