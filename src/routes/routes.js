@@ -111,6 +111,7 @@ router.use('/jobs', require('../modules/jobs/job.routes'));
 // router.use('/jobs', require('../modules/jobs/job.routes'));
 router.use('/notifications', require('../modules/notifications/notification.routes'));
 router.use('/quotations', require('../modules/quotations/quotation.routes'));
+router.use('/chats', require('../modules/chat/chat.routes'));
 
 // Add other route modules here
 // router.use('/users', userRoutes);
