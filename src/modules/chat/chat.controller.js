@@ -90,6 +90,15 @@ exports.sendMessage = async (req, res) => {
 
         await chat.save();
 
+        // Emit via socket
+        try {
+            const { getIo } = require('../../socket/socket');
+            const io = getIo();
+            io.to(chatId).emit('receive_message', message);
+        } catch (err) {
+            console.error('Socket emit error:', err);
+        }
+
         return successResponse(res, 'Message sent', message, 201);
     } catch (error) {
         console.error('Error sending message:', error);
