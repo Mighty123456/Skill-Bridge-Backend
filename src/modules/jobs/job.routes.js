@@ -3,6 +3,7 @@ const router = express.Router();
 const jobController = require('./job.controller');
 const { uploadMultiple, catchUploadErrors } = require('../../common/middleware/upload.middleware');
 const { authenticate: protect } = require('../../common/middleware/auth.middleware');
+const { authorize } = require('../../common/middleware/role.middleware');
 
 // Routes
 router.post('/', protect, catchUploadErrors(uploadMultiple('issue_photos', 5)), jobController.createJob);
@@ -15,7 +16,7 @@ router.post('/:id/submit-completion', protect, catchUploadErrors(uploadMultiple(
 router.post('/:id/confirm-completion', protect, jobController.confirmCompletion);
 
 // Job Execution (Phase 4)
-router.post('/:id/start', authorize('worker'), jobController.startJob);
-router.post('/:id/complete', authorize('worker'), jobController.completeJob);
+router.post('/:id/start', protect, authorize('worker'), jobController.startJob);
+router.post('/:id/complete', protect, authorize('worker'), jobController.completeJob);
 
 module.exports = router;

@@ -398,7 +398,11 @@ exports.startJob = async (req, res) => {
 };
 
 // Aliases for route consistency if needed, but we already have submitCompletion
-exports.completeJob = exports.submitCompletion;
+// Aliases for route consistency if needed, but we already have submitCompletion
+exports.submitCompletion = exports.submitCompletion; // Ensure direct access
+exports.completeJob = async (req, res) => {
+    return exports.submitCompletion(req, res);
+};
 
 // Worker submits completion proof
 exports.submitCompletion = async (req, res) => {

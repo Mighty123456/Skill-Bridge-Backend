@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const workerController = require('./worker.controller');
-const { protect, authorize } = require('../../common/middleware/auth.middleware');
+const { authenticate: protect } = require('../../common/middleware/auth.middleware');
+const { authorize } = require('../../common/middleware/role.middleware');
 
 // Public / Protected Routes
 router.get('/:id/passport', protect, workerController.getPassport);
