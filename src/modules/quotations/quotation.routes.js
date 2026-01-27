@@ -6,9 +6,11 @@ const { authorize } = require('../../common/middleware/role.middleware');
 // All quotation routes require authentication
 router.use(authenticate);
 
+const { uploadFields } = require('../../common/middleware/upload.middleware');
+
 // Public/Worker routes
 router.get('/stats', quotationController.getQuotationStats);
-router.post('/', quotationController.createQuotation);
+router.post('/', uploadFields([{ name: 'video_pitch', maxCount: 1 }]), quotationController.createQuotation);
 
 // Tenant can view quotations for their job
 router.get('/job/:jobId', authorize('user'), quotationController.getQuotationsByJob);

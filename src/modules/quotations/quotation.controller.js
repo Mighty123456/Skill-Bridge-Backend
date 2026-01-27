@@ -33,12 +33,13 @@ exports.createQuotation = async (req, res) => {
 
         // 4. Handle Video Upload (if any)
         let video_url = null;
-        if (req.files && req.files.video_pitch) {
-            const videoFile = req.files.video_pitch;
+        if (req.files && req.files.video_pitch && req.files.video_pitch.length > 0) {
+            const videoFile = req.files.video_pitch[0];
             const cloudinaryService = require('../../common/services/cloudinary.service');
-            const result = await cloudinaryService.uploadImage(videoFile.tempFilePath, 'quotations'); // Reusing uploadImage for generic upload
-            if (result && result.secure_url) {
-                video_url = result.secure_url;
+            // uploadImage handles Buffer from memory storage
+            const result = await cloudinaryService.uploadImage(videoFile.buffer, 'quotations');
+            if (result && result.url) {
+                video_url = result.url;
             }
         }
 
