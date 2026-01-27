@@ -6,7 +6,7 @@ const emailService = require('../../common/services/email.service');
 // Create a new quotation
 exports.createQuotation = async (req, res) => {
     try {
-        const { job_id, labor_cost, material_cost, estimated_days, notes } = req.body;
+        const { job_id, labor_cost, material_cost, estimated_days, notes, tags } = req.body;
         const worker_id = req.user._id;
 
         // 1. Validate Job
@@ -31,7 +31,18 @@ exports.createQuotation = async (req, res) => {
             return res.status(409).json({ success: false, message: 'You have already submitted a quotation for this job' });
         }
 
-        // 4. Create Quotation
+        // 4. Handle Video Upload (if any)
+        let video_url = null;
+        if (req.files && req.files.video_pitch) {
+            const videoFile = req.files.video_pitch;
+            const cloudinaryService = require('../../common/services/cloudinary.service');
+            const result = await cloudinaryService.uploadImage(videoFile.tempFilePath, 'quotations'); // Reusing uploadImage for generic upload
+            if (result && result.secure_url) {
+                video_url = result.secure_url;
+            }
+        }
+
+        // 5. Create Quotation
         // Ensure inputs are numbers
         const l_cost = Number(labor_cost);
         const m_cost = Number(material_cost || 0);
@@ -44,12 +55,14 @@ exports.createQuotation = async (req, res) => {
             material_cost: m_cost,
             total_cost,
             estimated_days: Number(estimated_days),
-            notes
+            notes,
+            tags: tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [], // Handle potential stringification in multipart
+            video_url
         });
 
         await quotation.save();
 
-        // 5. Notify Tenant
+        // 6. Notify Tenant
         await Notification.create({
             recipient: job.user_id,
             title: 'New Quotation Received',
@@ -114,8 +127,13 @@ exports.acceptQuotation = async (req, res) => {
         }
 
         // Update Job
-        job.status = 'in_progress';
+        job.status = 'assigned'; // Phase 4 Change: Set to 'assigned', waiting for OTP start
         job.selected_worker_id = worker._id;
+
+        // Generate 4-digit OTP
+        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+        job.start_otp = otp;
+
         await job.save();
 
         // Update Quotation Status
@@ -152,5 +170,58 @@ exports.acceptQuotation = async (req, res) => {
     } catch (error) {
         console.error('Accept Quotation Error:', error);
         res.status(500).json({ success: false, message: 'Failed to accept quotation' });
+    }
+};
+
+// Price Stats (Statistical AI)
+exports.getQuotationStats = async (req, res) => {
+    try {
+        const { skill } = req.query;
+        if (!skill) return res.status(400).json({ success: false, message: 'Skill is required' });
+
+        // Aggregate stats from approved/accepted quotations in that category
+        // In a real generic app we might aggregate by skill.
+        // For now, we will aggregate all quotations for jobs that required this skill.
+
+        const stats = await Quotation.aggregate([
+            {
+                $lookup: {
+                    from: 'jobs',
+                    localField: 'job_id',
+                    foreignField: '_id',
+                    as: 'job'
+                }
+            },
+            {
+                $unwind: '$job'
+            },
+            {
+                $match: {
+                    'job.skill_required': skill,
+                    // Optionally calculate only accepted ones for "market rate", 
+                    // but for more data points we can use all non-rejected or all.
+                    // 'status': 'accepted' 
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    avgCost: { $avg: '$total_cost' },
+                    minCost: { $min: '$total_cost' },
+                    maxCost: { $max: '$total_cost' },
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        if (stats.length === 0) {
+            return res.json({ success: true, data: { avgCost: 0, count: 0 } });
+        }
+
+        res.json({ success: true, data: stats[0] });
+
+    } catch (error) {
+        console.error('Get Stats Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch stats' });
     }
 };

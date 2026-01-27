@@ -75,6 +75,35 @@ const workerSchema = new mongoose.Schema(
       },
     ],
 
+    // Skill Decay Tracking
+    skill_stats: [
+      {
+        skill: { type: String, required: true },
+        confidence: { type: Number, default: 100, min: 0, max: 100 },
+        last_used: { type: Date, default: Date.now },
+        decay_warning_sent: { type: Boolean, default: false },
+      }
+    ],
+
+    // Warranty Recalls (Passport)
+    warranty_recalls: [
+      {
+        job_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' },
+        reason: { type: String, trim: true },
+        date: { type: Date, default: Date.now },
+        resolved: { type: Boolean, default: false },
+      }
+    ],
+
+    // Micro-zone Trust Ranking
+    reputation_zones: [
+      {
+        zone_name: { type: String, trim: true }, // e.g., "Downtown", "Andheri West"
+        score: { type: Number, default: 0 },
+        jobs_completed: { type: Number, default: 0 },
+      }
+    ],
+
     // Audit trail for verification status changes
     statusHistory: [
       {
@@ -94,6 +123,7 @@ const workerSchema = new mongoose.Schema(
   },
 );
 
+workerSchema.index({ 'reputation_zones.score': -1 });
 workerSchema.index({ verificationStatus: 1, createdAt: -1 });
 
 const Worker = mongoose.model('Worker', workerSchema);

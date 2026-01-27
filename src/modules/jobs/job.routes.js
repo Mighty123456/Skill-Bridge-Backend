@@ -14,4 +14,8 @@ router.post('/:id/accept', protect, jobController.acceptJob);
 router.post('/:id/submit-completion', protect, catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.submitCompletion);
 router.post('/:id/confirm-completion', protect, jobController.confirmCompletion);
 
+// Job Execution (Phase 4)
+router.post('/:id/start', authorize('worker'), jobController.startJob);
+router.post('/:id/complete', authorize('worker'), jobController.completeJob);
+
 module.exports = router;

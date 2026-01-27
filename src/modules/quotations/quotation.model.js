@@ -43,6 +43,11 @@ const quotationSchema = new mongoose.Schema(
             default: 'pending',
             index: true,
         },
+        tags: [{ type: String, trim: true }], // Price justification tags
+        video_url: { // Video pitch URL
+            type: String,
+            trim: true,
+        },
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

@@ -211,6 +211,8 @@ exports.getWorkerFeed = async (req, res) => {
             skill_required: { $in: workerSkills }
         };
 
+        const maxDistance = 50000; // 50km
+
         if (workerUser && workerUser.location && workerUser.location.coordinates && workerUser.location.coordinates.length === 2) {
             query['location'] = {
                 $near: {
@@ -218,23 +220,73 @@ exports.getWorkerFeed = async (req, res) => {
                         type: 'Point',
                         coordinates: workerUser.location.coordinates
                     },
-                    $maxDistance: 50000 // 50km
+                    $maxDistance: maxDistance
                 }
             };
         } else {
             console.log('Worker location not available for proximity search, returning all matching skills');
         }
 
-        const jobs = await Job.find(query)
-            .sort({ is_emergency: -1, createdAt: -1 })
-            .limit(20);
+        let jobs = await Job.find(query).limit(50); // Get more candidates for AI ranking
+
+        // 3. AI Ranking & Recommendation Engine
+        // Factors: Distance (40%), Urgency (30%), Skill Confidence (20%), Quotation Window Remaining (10%)
+
+        let rankedJobs = [];
+        const now = new Date();
+
+        if (workerUser && workerUser.location && workerUser.location.coordinates) {
+            const userLng = workerUser.location.coordinates[0];
+            const userLat = workerUser.location.coordinates[1];
+
+            rankedJobs = jobs.map(job => {
+                const jobDoc = job.toObject();
+
+                // A. Distance Score (Closer is better)
+                let distanceKm = 0;
+                if (job.location && job.location.coordinates) {
+                    distanceKm = calculateDistance(userLat, userLng, job.location.coordinates[1], job.location.coordinates[0]);
+                }
+                const distanceScore = Math.max(0, 100 - (distanceKm * 2)); // 50km = 0 score, 0km = 100 score
+
+                // B. Urgency Score
+                const urgencyScore = job.is_emergency ? 100 : (job.urgency_level === 'high' ? 70 : 30);
+
+                // C. Skill Confidence Score (from Worker Passport)
+                const skillStat = workerProfile.skill_stats ? workerProfile.skill_stats.find(s => s.skill === job.skill_required) : null;
+                const confidenceScore = skillStat ? skillStat.confidence : 50; // Default 50
+
+                // D. Calculate Weighted "Match Score"
+                // Weights: Dist (0.4), Urgency (0.3), Confidence (0.2), Random/Newness (0.1)
+                const matchScore = (distanceScore * 0.4) + (urgencyScore * 0.3) + (confidenceScore * 0.2) + (10); // Base +10
+
+                // E. Availability Prediction / Warning
+                // If the job is urgent, mark it clearly
+
+                return {
+                    ...jobDoc,
+                    distanceKm: parseFloat(distanceKm.toFixed(1)),
+                    matchScore: Math.round(matchScore),
+                    aiLabel: matchScore > 80 ? 'Top Match' : (job.is_emergency ? 'Emergency' : null)
+                };
+            });
+
+            // Sort by AI Match Score
+            rankedJobs.sort((a, b) => b.matchScore - a.matchScore);
+
+        } else {
+            rankedJobs = jobs.map(j => ({ ...j.toObject(), matchScore: 0 }));
+        }
+
+        // Limit to top 20 after ranking
+        const finalJobs = rankedJobs.slice(0, 20);
 
         // Enhance with hasSubmittedQuotation flag
         const Quotation = require('../quotations/quotation.model');
-        const jobsWithFlags = await Promise.all(jobs.map(async (job) => {
+        const jobsWithFlags = await Promise.all(finalJobs.map(async (job) => {
             const existingQuotation = await Quotation.findOne({ job_id: job._id, worker_id: req.user._id });
             return {
-                ...job._doc,
+                ...job,
                 hasSubmittedQuotation: !!existingQuotation
             };
         }));
@@ -300,6 +352,53 @@ exports.getTenantJobs = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to fetch your jobs' });
     }
 };
+
+// Start Job (Phase 4: Worker enters OTP)
+exports.startJob = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { otp } = req.body;
+
+        // Select start_otp explicitly as it is hidden
+        const job = await Job.findById(id).select('+start_otp');
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        // Phase 3 sets status to 'assigned', Phase 4 transitions to 'in_progress'
+        if (job.status === 'in_progress') {
+            return res.status(400).json({ success: false, message: 'Job already started' });
+        }
+
+        if (job.status !== 'assigned') {
+            return res.status(400).json({ success: false, message: 'Job is not ready to start (must be assigned first)' });
+        }
+
+        if (job.start_otp !== otp) {
+            return res.status(400).json({ success: false, message: 'Invalid OTP. Please ask the customer for the correct code.' });
+        }
+
+        job.started_at = new Date();
+        job.status = 'in_progress';
+        await job.save();
+
+        // Notify Customer
+        await Notification.create({
+            recipient: job.user_id,
+            title: 'Job Started',
+            message: `Worker has started the job: ${job.job_title}`,
+            type: 'job_started',
+            data: { jobId: job._id }
+        });
+
+        res.json({ success: true, message: 'Job started successfully', data: job });
+
+    } catch (error) {
+        logger.error('Start Job Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to start job' });
+    }
+};
+
+// Aliases for route consistency if needed, but we already have submitCompletion
+exports.completeJob = exports.submitCompletion;
 
 // Worker submits completion proof
 exports.submitCompletion = async (req, res) => {
@@ -367,6 +466,41 @@ exports.confirmCompletion = async (req, res) => {
 
         job.status = 'completed';
         await job.save();
+
+        // Update Worker Skill Stats (Global Passport Update)
+        try {
+            const worker = await Worker.findOne({ user: job.selected_worker_id });
+            if (worker) {
+                // Check if skill_stats exists
+                if (!worker.skill_stats) worker.skill_stats = [];
+
+                const skillIndex = worker.skill_stats.findIndex(s => s.skill === job.skill_required);
+
+                if (skillIndex > -1) {
+                    // Update existing stat
+                    worker.skill_stats[skillIndex].last_used = new Date();
+                    worker.skill_stats[skillIndex].confidence = Math.min(100, worker.skill_stats[skillIndex].confidence + 2); // Boost confidence
+                    worker.skill_stats[skillIndex].decay_warning_sent = false; // Reset warning
+                } else {
+                    // Add new stat if not present (should match skills array)
+                    worker.skill_stats.push({
+                        skill: job.skill_required,
+                        confidence: 100,
+                        last_used: new Date(),
+                        decay_warning_sent: false
+                    });
+                    // Ensure it's in the main skills list too
+                    if (!worker.skills.includes(job.skill_required)) {
+                        worker.skills.push(job.skill_required);
+                    }
+                }
+                await worker.save();
+                logger.info(`Updated skill stats for worker ${worker._id} - Skill: ${job.skill_required}`);
+            }
+        } catch (err) {
+            logger.error(`Failed to update worker stats: ${err.message}`);
+            // Don't fail the request, just log it
+        }
 
         // Notify Worker
         await Notification.create({

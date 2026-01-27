@@ -76,6 +76,19 @@ const jobSchema = new mongoose.Schema(
         completion_photos: [{
             type: String, // URLs for work completion proof
         }],
+
+        // Execution Details
+        start_otp: { type: String, select: false }, // Hidden by default
+        started_at: { type: Date },
+        completed_at: { type: Date },
+
+        // Warranty / Recall Tracking
+        warranty_claim: {
+            active: { type: Boolean, default: false },
+            reason: { type: String, trim: true },
+            claimed_at: { type: Date },
+            resolved: { type: Boolean, default: false },
+        },
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
