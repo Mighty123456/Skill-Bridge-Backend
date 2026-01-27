@@ -142,11 +142,22 @@ exports.getJob = async (req, res) => {
             hasSubmittedQuotation = !!existingQuotation;
         }
 
+        // Check if current user is the Job Owner (Tenant)
+        let start_otp = undefined;
+        if (req.user && job.user_id._id.toString() === req.user._id.toString()) {
+            // Need to explicitly fetch the hidden OTP field
+            const jobWithOtp = await Job.findById(req.params.id).select('+start_otp');
+            if (jobWithOtp) {
+                start_otp = jobWithOtp.start_otp;
+            }
+        }
+
         res.json({
             success: true,
             data: {
                 ...job._doc,
-                hasSubmittedQuotation
+                hasSubmittedQuotation,
+                start_otp // Will be undefined for non-owners
             }
         });
     } catch (error) {

@@ -156,6 +156,15 @@ exports.acceptQuotation = async (req, res) => {
             data: { jobId: job._id }
         });
 
+        // Notify Tenant (User) with OTP
+        await Notification.create({
+            recipient: job.user_id,
+            title: 'Share OTP with Worker',
+            message: `You have hired ${worker.name}. When they arrive, share this OTP to start the job: ${otp}`,
+            type: 'system',
+            data: { jobId: job._id, otp: otp }
+        });
+
         // Notify Worker (Email)
         if (worker.email) {
             await emailService.sendQuotationAcceptedEmail(
