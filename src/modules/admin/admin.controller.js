@@ -277,7 +277,11 @@ const getDashboardStats = async (req, res) => {
       pendingContractors,
       verifiedContractors,
       totalContractors,
-      totalUsers
+      totalUsers,
+      activeJobs,
+      completedJobs,
+      emergencyJobs,
+      revenueData
     ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
@@ -286,7 +290,16 @@ const getDashboardStats = async (req, res) => {
       Contractor.countDocuments({ verificationStatus: 'verified' }),
       User.countDocuments({ role: ROLES.CONTRACTOR }),
       User.countDocuments({ role: ROLES.USER }),
+      Job.countDocuments({ status: { $in: ['assigned', 'in_progress'] } }),
+      Job.countDocuments({ status: 'completed' }),
+      Job.countDocuments({ urgency_level: 'emergency', status: { $ne: 'completed' } }), // Active emergency jobs
+      Quotation.aggregate([
+        { $match: { status: 'accepted' } },
+        { $group: { _id: null, total: { $sum: '$total_cost' } } }
+      ])
     ]);
+
+    const totalRevenue = revenueData[0]?.total || 0;
 
     return successResponse(res, 'Stats fetched successfully', {
       pendingVerifications: pendingWorkers + pendingContractors,
@@ -296,6 +309,11 @@ const getDashboardStats = async (req, res) => {
       totalContractors,
       totalVerifiedProfessionals: verifiedWorkers + verifiedContractors,
       totalUsers,
+      activeJobs,
+      completedJobs,
+      emergencyJobs,
+      totalRevenue,
+      escrowBalance: 0, // Placeholder for now until wallet system is integrated
     });
   } catch (error) {
     logger.error(`Admin getDashboardStats error: ${error.message}`);
