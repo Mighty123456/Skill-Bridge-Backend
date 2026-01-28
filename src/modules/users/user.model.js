@@ -87,6 +87,11 @@ const userSchema = new mongoose.Schema(
       enum: ['password', 'otp', 'both'],
       default: 'both',
     },
+    // Worker Availability Status
+    isOnline: {
+      type: Boolean,
+      default: false,
+    },
     // Last login
     lastLogin: {
       type: Date,

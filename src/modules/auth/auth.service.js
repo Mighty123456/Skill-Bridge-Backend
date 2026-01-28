@@ -661,7 +661,7 @@ const updateProfile = async (userId, updateData) => {
   }
 
   // Fields allowed on User model
-  const allowedUserFields = ['name', 'phone', 'address', 'dateOfBirth'];
+  const allowedUserFields = ['name', 'phone', 'address', 'dateOfBirth', 'isOnline'];
 
   // Update User fields
   allowedUserFields.forEach(field => {
