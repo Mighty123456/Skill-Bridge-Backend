@@ -3,6 +3,8 @@ const User = require('../users/user.model');
 const Admin = require('./admin.model');
 const Badge = require('../workers/badge.model');
 const Contractor = require('../contractors/contractor.model');
+const Job = require('../jobs/job.model');
+const Quotation = require('../quotations/quotation.model');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
@@ -427,10 +429,69 @@ const deleteUser = async (req, res) => {
 
     logger.warn(`Admin ${req.userId} deleted user account: ${user.email} (Role: ${user.role})`);
 
-    return successResponse(res, 'User and associated profiles deleted successfully');
   } catch (error) {
     logger.error(`Admin deleteUser error: ${error.message}`);
     return errorResponse(res, 'Failed to delete user', 500);
+  }
+};
+
+/**
+ * List all jobs for admin
+ * GET /api/admin/jobs
+ */
+const listJobs = async (req, res) => {
+  try {
+    const jobs = await Job.find()
+      .populate('user_id', 'name email')
+      .populate('selected_worker_id', 'name email')
+      .sort({ created_at: -1 });
+
+    const formattedJobs = jobs.map(job => ({
+      id: job._id,
+      jobTitle: job.job_title,
+      skill: job.skill_required,
+      userName: job.user_id?.name || 'Unknown',
+      location: job.location?.address_text || 'Unknown',
+      urgency: job.urgency_level,
+      status: job.status,
+      selectedWorker: job.selected_worker_id?.name || null,
+      createdAt: job.created_at
+    }));
+
+    return successResponse(res, 'Jobs fetched successfully', { jobs: formattedJobs });
+  } catch (error) {
+    logger.error(`Admin listJobs error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch jobs', 500);
+  }
+};
+
+/**
+ * List all quotations for admin
+ * GET /api/admin/quotations
+ */
+const listQuotations = async (req, res) => {
+  try {
+    const quotations = await Quotation.find()
+      .populate('job_id', 'job_title skill_required')
+      .populate('worker_id', 'name email')
+      .sort({ created_at: -1 });
+
+    const formattedQuotations = quotations.map(q => ({
+      id: q._id,
+      jobId: q.job_id?._id,
+      jobTitle: q.job_id?.job_title,
+      workerName: q.worker_id?.name || 'Unknown',
+      laborCost: q.labor_cost,
+      materialCost: q.material_cost,
+      totalCost: q.total_cost,
+      status: q.status,
+      createdAt: q.created_at,
+    }));
+
+    return successResponse(res, 'Quotations fetched successfully', { quotations: formattedQuotations });
+  } catch (error) {
+    logger.error(`Admin listQuotations error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch quotations', 500);
   }
 };
 
@@ -445,6 +506,8 @@ module.exports = {
   assignBadge,
   removeBadge,
   deleteUser,
+  listJobs,
+  listQuotations,
 };
 
 

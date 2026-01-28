@@ -101,6 +101,22 @@ router.delete(
   adminController.removeBadge
 );
 
+// List all jobs
+router.get(
+  '/jobs',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listJobs
+);
+
+// List all quotations
+router.get(
+  '/quotations',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listQuotations
+);
+
 module.exports = router;
 
 
