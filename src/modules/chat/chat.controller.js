@@ -87,55 +87,39 @@ exports.sendMessage = async (req, res) => {
             return errorResponse(res, 'Chat not found', 404);
         }
 
-        // 1. Check Chat/Job Status
         if (chat.status === 'blocked' || chat.status === 'archived') {
             return errorResponse(res, 'This chat is archived or blocked.', 403);
         }
 
-        // 2. Check Job Completion (Auto-Lock if job completed)
-        // Simplified: If job is 'completed' or 'cancelled', disable chat.
         if (chat.job && (chat.job.status === 'completed' || chat.job.status === 'cancelled')) {
             return errorResponse(res, 'Job is completed. Chat is closed.', 403);
         }
 
-        // 3. PII Regex Block (Phone & Email)
-        const phoneRegex = /\b\d{10}\b|\b\d{3}[-.]?\d{3}[-.]?\d{4}\b/;
-        const emailRegex = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/;
+        const User = require('../users/user.model');
+        const recipientId = chat.participants.find(p => p.toString() !== senderId);
+        let deliveredTo = [];
 
-        // Decrypt text to check Regex? The text coming in IS usually encrypted from client. 
-        // We cannot check PII on encrypted text easily unless we decrypt it or client sends plain text for validation *before* encryption.
-        // Assuming client sent ENCRYPTED text. We can't regex check it on backend without the key.
-        // BUT, the constraints say "Platform must be able to audit chats" -> imply backend should have access or key?
-        // If E2E encryption is "optional" (as per prompt), we might not be doing true E2E where only clients have keys.
-        // Current implementation: Shared hardcoded key on frontend. Backend doesn't know it? 
-        // Actually backend normally stores plain text OR we change the 'text' field to be 'content' and handle encryption.
-        // Given the code, frontend sends 'text' which is encrypted.
-        // We CANNOT validate PII on encrypted string.
-        // Options:
-        // A) Trust frontend validation (insecure).
-        // B) Backend needs to decrypt (needs key).
-        // C) Disable encryption for now to meet "Audit" constraint easily?
-        // Prompt says "End-to-end encryption -> optional".
-        // Let's assume for this step we skip Regex on Backend if it's encrypted, OR we assume text is plain.
-        // Wait, the previous step showed EncryptionHelper on CLIENT. So backend receives Ciphertext.
-        // I cannot regex check Ciphertext.
-        // I will skip the Backend Regex for now (or implement it assuming plain text if we disable encryption later).
-        // Let's stick to Status checks for now.
-
-        // If we really want to block PII, we'd need to decrypt.
+        if (recipientId) {
+            const recipient = await User.findById(recipientId);
+            // If user is "Online" (toggle on) or we can assume they are connected if we had socket info.
+            // Using isOnline field as proxy for "App Open/Available"
+            if (recipient && recipient.isOnline) {
+                deliveredTo.push(recipientId);
+            }
+        }
 
         const message = await Message.create({
             chatId,
             senderId,
-            text, // Stored encrypted
-            readBy: [senderId]
+            text,
+            readBy: [senderId],
+            deliveredTo: deliveredTo
         });
 
         // Update Chat
         chat.lastMessage = text;
         chat.lastMessageTime = Date.now();
 
-        // Increment unread count for others
         chat.participants.forEach(pId => {
             if (pId.toString() !== senderId) {
                 const currentCount = chat.unreadCounts.get(pId.toString()) || 0;
@@ -145,7 +129,6 @@ exports.sendMessage = async (req, res) => {
 
         await chat.save();
 
-        // Emit via socket
         try {
             const { getIo } = require('../../socket/socket');
             const io = getIo();
@@ -169,16 +152,50 @@ exports.getMessages = async (req, res) => {
 
         const messages = await Message.find({ chatId }).sort({ createdAt: 1 });
 
+        // Update read status for these messages
+        // Find messages not read by me
+        const unreadMessagesStringIds = messages
+            .filter(m => !m.readBy.map(id => id.toString()).includes(userId))
+            .map(m => m._id);
+
+        if (unreadMessagesStringIds.length > 0) {
+            await Message.updateMany(
+                { _id: { $in: unreadMessagesStringIds } },
+                { $addToSet: { readBy: userId, deliveredTo: userId } } // Reading implies delivery
+            );
+
+            // Emit 'messages_read' event to the chat room so sender updates UI
+            try {
+                const { getIo } = require('../../socket/socket');
+                const io = getIo();
+                io.to(chatId).emit('messages_read', {
+                    messageIds: unreadMessagesStringIds,
+                    readBy: userId,
+                    chatId
+                });
+            } catch (e) {
+                console.error('Socket emit read error', e);
+            }
+        }
+
         // Reset unread count for this user
         const chat = await Chat.findById(chatId);
         if (chat) {
-            // If unreadCounts is not set (legacy), init it
             if (!chat.unreadCounts) { chat.unreadCounts = new Map(); }
-
             if (chat.unreadCounts.get(userId) > 0) {
                 chat.unreadCounts.set(userId, 0);
                 await chat.save();
             }
+        }
+
+        // Return updated messages (refetched or manually updated in memory? Refetch is safer but slower. 
+        // For now, let's just return the original list but we know logic updated DB. 
+        // Ideally should assume client treats them as read if it requested them? 
+        // Client will see its own ID in readBy if we refetch. Let's refetch if we updated.)
+
+        if (unreadMessagesStringIds.length > 0) {
+            const updatedMessages = await Message.find({ chatId }).sort({ createdAt: 1 });
+            return successResponse(res, 'Messages retrieved', updatedMessages);
         }
 
         return successResponse(res, 'Messages retrieved', messages);
