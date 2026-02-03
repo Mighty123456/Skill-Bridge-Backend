@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema(
       type: {
         type: String,
         enum: ['Point'],
-        default: 'Point',
+        // default: 'Point', // REMOVED: prevents creating invalid objects with just type but no coordinates
       },
       coordinates: {
         type: [Number], // [longitude, latitude]
@@ -109,11 +109,19 @@ userSchema.index({ location: '2dsphere' }); // GEOSPATIAL INDEX
 // Hash password before saving & Sync Location
 userSchema.pre('save', function (next) {
   // Sync legacy address.coordinates to GeoJSON location
-  if (this.address && this.address.coordinates && this.address.coordinates.latitude && this.address.coordinates.longitude) {
+  // Check specifically for null/undefined to allow 0.0 coordinates
+  if (this.address && this.address.coordinates &&
+    this.address.coordinates.latitude != null &&
+    this.address.coordinates.longitude != null) {
     this.location = {
       type: 'Point',
       coordinates: [this.address.coordinates.longitude, this.address.coordinates.latitude]
     };
+  } else {
+    // If coordinates are missing, ensure location is undefined to avoid validation errors
+    if (!this.location || !this.location.coordinates || this.location.coordinates.length === 0) {
+      this.location = undefined;
+    }
   }
 
   // Only hash password if it's modified
