@@ -21,8 +21,8 @@ const registerSchema = [
     .trim()
     .isLength({ min: 2, max: 50 })
     .withMessage('Name must be between 2 and 50 characters')
-    .matches(/^[a-zA-Z\s]+$/)
-    .withMessage('Name can only contain letters and spaces'),
+    .matches(/^[a-zA-Z\s\.\-\']+$/)
+    .withMessage('Name can only contain letters, spaces, dots, hyphens, and apostrophes'),
   body('phone')
     .trim()
     .notEmpty()

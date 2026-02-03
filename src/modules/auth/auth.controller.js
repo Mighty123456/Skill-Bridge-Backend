@@ -17,8 +17,10 @@ const register = async (req, res) => {
     const result = await authService.register(req.body, fileBuffers);
     return successResponse(res, 'Registration successful', result, 201);
   } catch (error) {
-    logger.error(`Registration error: ${error.message}`);
-    return errorResponse(res, error.message, 400);
+    logger.error('❌ Registration Failed:');
+    logger.error(`Error Message: ${error.message}`);
+    logger.error(`Stack Trace: ${error.stack}`);
+    return errorResponse(res, error.message || 'Registration failed', 400);
   }
 };
 

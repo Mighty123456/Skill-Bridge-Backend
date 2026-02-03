@@ -43,9 +43,12 @@ const validate = (validations) => {
       return;
     }
 
+    // Log validation errors
+    console.error('❌ Validation Failed:', JSON.stringify(errors.array(), null, 2));
+
     return res.status(400).json({
       success: false,
-      message: 'Validation failed',
+      message: errors.array()[0].msg, // Return the first specific error message instead of generic 'Validation failed'
       errors: errors.array()
     });
   };
