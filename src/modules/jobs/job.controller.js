@@ -9,7 +9,7 @@ const logger = require('../../config/logger');
 // Create a new job
 exports.createJob = async (req, res) => {
     try {
-        let { job_title, job_description, skill_required, location, urgency_level, quotation_window_hours } = req.body;
+        let { job_title, job_description, material_requirements, skill_required, location, urgency_level, quotation_window_hours } = req.body;
 
         // Handle stringified JSON from Multipart requests
         if (typeof location === 'string') {
@@ -44,6 +44,7 @@ exports.createJob = async (req, res) => {
             user_id: req.user._id,
             job_title,
             job_description,
+            material_requirements,
             skill_required,
             issue_photos,
             location: {

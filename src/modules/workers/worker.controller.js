@@ -134,3 +134,69 @@ exports.checkSkillDecay = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * Get Nearby Workers
+ * Query Params: lat, lng, radius (km), skill
+ */
+exports.getNearbyWorkers = async (req, res) => {
+    try {
+        const { lat, lng, radius, skill } = req.query;
+        const User = require('../users/user.model');
+
+        if (!lat || !lng) {
+            return res.status(400).json({ success: false, message: 'Latitude and Longitude are required' });
+        }
+
+        // 1. Filter Workers by Skill if provided
+        let workerQuery = { verificationStatus: 'verified' };
+        if (skill && skill !== 'All') {
+            workerQuery.skills = { $in: [skill] };
+        }
+
+        const eligibleWorkers = await Worker.find(workerQuery).select('user skills rating hourlyRate');
+        const eligibleUserIds = eligibleWorkers.map(w => w.user);
+
+        // 2. Geo-Spatial Query on Users
+        const searchRadiusInfo = radius || 10; // Default 10km
+
+        const nearbyUsers = await User.find({
+            _id: { $in: eligibleUserIds },
+            location: {
+                $near: {
+                    $geometry: {
+                        type: 'Point',
+                        coordinates: [parseFloat(lng), parseFloat(lat)]
+                    },
+                    $maxDistance: searchRadiusInfo * 1000 // Convert km to meters
+                }
+            }
+        }).select('name profileImage location address');
+
+        // 3. Merge Data (User Location + Worker Profile)
+        const results = nearbyUsers.map(user => {
+            const workerProfile = eligibleWorkers.find(w => w.user.toString() === user._id.toString());
+            return {
+                id: workerProfile._id,
+                userId: user._id,
+                name: user.name,
+                profileImage: user.profileImage,
+                skills: workerProfile.skills,
+                rating: workerProfile.rating,
+                hourlyRate: workerProfile.hourlyRate,
+                location: user.location,
+                distance: 0, // Calculated by client or aggregation if needed
+            };
+        });
+
+        res.json({
+            success: true,
+            count: results.length,
+            data: results
+        });
+
+    } catch (error) {
+        logger.error(`Get Nearby Workers Error: ${error.message}`);
+        res.status(500).json({ success: false, message: 'Failed to fetch nearby workers' });
+    }
+};

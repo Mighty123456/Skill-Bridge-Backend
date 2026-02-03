@@ -94,10 +94,37 @@ exports.getQuotationsByJob = async (req, res) => {
         }
 
         const quotations = await Quotation.find({ job_id: jobId })
-            .populate('worker_id', 'name phone profileImage')
-            .sort({ total_cost: 1 }); // Sort by lowest cost
+            .populate('worker_id', 'name phone profileImage');
 
-        res.json({ success: true, data: quotations });
+        // Fetch Worker Profiles for these users to get Ratings & Stats
+        const workerUserIds = quotations.map(q => q.worker_id._id);
+        const Worker = require('../workers/worker.model');
+        const workers = await Worker.find({ user: { $in: workerUserIds } });
+
+        // Merge Data
+        const enrichedQuotations = quotations.map(q => {
+            const workerProfile = workers.find(w => w.user.toString() === q.worker_id._id.toString());
+
+            // Calculate total jobs completed from reputation zones
+            const jobsCompleted = workerProfile && workerProfile.reputation_zones
+                ? workerProfile.reputation_zones.reduce((sum, z) => sum + z.jobs_completed, 0)
+                : 0;
+
+            return {
+                ...q.toObject(),
+                worker_rating: workerProfile ? workerProfile.rating : 0,
+                worker_jobs_completed: jobsCompleted,
+                worker_verified: workerProfile ? workerProfile.verificationStatus === 'verified' : false
+            };
+        });
+
+        // Sort by Lowest Price, then Highest Rating
+        enrichedQuotations.sort((a, b) => {
+            if (a.total_cost !== b.total_cost) return a.total_cost - b.total_cost; // Lowest Price first
+            return b.worker_rating - a.worker_rating; // Then Highest Rating
+        });
+
+        res.json({ success: true, data: enrichedQuotations });
 
     } catch (error) {
         console.error('Get Quotations Error:', error);

@@ -27,6 +27,11 @@ const jobSchema = new mongoose.Schema(
             trim: true,
             maxlength: [1000, 'Description cannot exceed 1000 characters'],
         },
+        material_requirements: {
+            type: String,
+            trim: true,
+            maxlength: [500, 'Material requirements cannot exceed 500 characters'],
+        },
         issue_photos: [{
             type: String, // URLs
         }],
