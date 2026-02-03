@@ -143,13 +143,22 @@ exports.getNearbyWorkers = async (req, res) => {
     try {
         const { lat, lng, radius, skill } = req.query;
         const User = require('../users/user.model');
+        const logger = require('../../config/logger'); // Ensure logger is available
 
         if (!lat || !lng) {
             return res.status(400).json({ success: false, message: 'Latitude and Longitude are required' });
         }
 
+        // Debug Log 1: Incoming Request
+        logger.info(`🗺️ Searching Workers: Lat:${lat}, Lng:${lng}, Radius:${radius}km, Skill:${skill}`);
+
         // 1. Filter Workers by Skill if provided
-        let workerQuery = { verificationStatus: 'verified' };
+        // RELAXED REQUIREMENT: Removed 'verified' check for testing purposes if env is development
+        let workerQuery = {};
+        if (process.env.NODE_ENV === 'production') {
+            workerQuery.verificationStatus = 'verified';
+        }
+
         if (skill && skill !== 'All') {
             workerQuery.skills = { $in: [skill] };
         }
@@ -157,8 +166,15 @@ exports.getNearbyWorkers = async (req, res) => {
         const eligibleWorkers = await Worker.find(workerQuery).select('user skills rating hourlyRate');
         const eligibleUserIds = eligibleWorkers.map(w => w.user);
 
+        // Debug Log 2: Eligible Workers found in 'Worker' collection
+        logger.info(`Found ${eligibleWorkers.length} eligible workers matching skill filter.`);
+
+        if (eligibleWorkers.length === 0) {
+            return res.json({ success: true, count: 0, data: [], message: 'No workers found with this skill.' });
+        }
+
         // 2. Geo-Spatial Query on Users
-        const searchRadiusInfo = radius || 10; // Default 10km
+        const searchRadiusInfo = radius || 20; // Increased default to 20km for better testing
 
         const nearbyUsers = await User.find({
             _id: { $in: eligibleUserIds },
@@ -172,6 +188,9 @@ exports.getNearbyWorkers = async (req, res) => {
                 }
             }
         }).select('name profileImage location address');
+
+        // Debug Log 3: Results
+        logger.info(`📍 Found ${nearbyUsers.length} users near location.`);
 
         // 3. Merge Data (User Location + Worker Profile)
         const results = nearbyUsers.map(user => {
