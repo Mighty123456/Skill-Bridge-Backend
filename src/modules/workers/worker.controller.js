@@ -174,7 +174,7 @@ exports.getNearbyWorkers = async (req, res) => {
         }
 
         // 2. Geo-Spatial Query on Users
-        const searchRadiusInfo = radius || 20; // Increased default to 20km for better testing
+        const searchRadiusInfo = radius || 30; // Increased default to 30km per user request
 
         const nearbyUsers = await User.find({
             _id: { $in: eligibleUserIds },
