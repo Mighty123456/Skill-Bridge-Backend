@@ -41,52 +41,53 @@ const register = async (userData, fileBuffers = {}) => {
 
   // 3. Create Role-Specific Profiles
 
-  // --- WORKER ---
-  if (role === ROLES.WORKER) {
-    logger.info(`Creating Worker profile for user: ${user._id}`);
+  // 3. Create Role-Specific Profiles
+  try {
+    // --- WORKER ---
+    if (role === ROLES.WORKER) {
+      logger.info(`Creating Worker profile for user: ${user._id}`);
 
-    const workerData = {
-      user: user._id,
-      services: services || [],
-      skills: skills || [],
-      experience: experience || 0,
-      verificationStatus: 'pending',
-      city: address?.city,
-      state: address?.state,
-    };
+      const workerData = {
+        user: user._id,
+        services: services || [],
+        skills: skills || [],
+        experience: experience || 0,
+        verificationStatus: 'pending',
+        city: address?.city,
+        state: address?.state,
+      };
 
-    // 1. Upload images first
-    let govIdUrl = null;
-    let selfieUrl = null;
+      // 1. Upload images first
+      let govIdUrl = null;
+      let selfieUrl = null;
 
-    if (fileBuffers.governmentId) {
-      try {
-        logger.info('Uploading government ID...');
-        const res = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
-        govIdUrl = res.url;
-        workerData.governmentId = govIdUrl;
-        logger.info(`Government ID uploaded: ${govIdUrl}`);
-      } catch (err) {
-        logger.error(`Gov ID upload failed: ${err.message}`);
-        throw new Error(`Failed to upload government ID: ${err.message}`);
+      if (fileBuffers.governmentId) {
+        try {
+          logger.info('Uploading government ID...');
+          const res = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+          govIdUrl = res.url;
+          workerData.governmentId = govIdUrl;
+          logger.info(`Government ID uploaded: ${govIdUrl}`);
+        } catch (err) {
+          logger.error(`Gov ID upload failed: ${err.message}`);
+          throw new Error(`Failed to upload government ID: ${err.message}`);
+        }
       }
-    }
 
-    if (fileBuffers.selfie) {
-      try {
-        logger.info('Uploading selfie...');
-        const res = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
-        selfieUrl = res.url;
-        workerData.selfie = selfieUrl;
-        logger.info(`Selfie uploaded: ${selfieUrl}`);
-      } catch (err) {
-        logger.error(`Selfie upload failed: ${err.message}`);
-        throw new Error(`Failed to upload selfie: ${err.message}`);
+      if (fileBuffers.selfie) {
+        try {
+          logger.info('Uploading selfie...');
+          const res = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+          selfieUrl = res.url;
+          workerData.selfie = selfieUrl;
+          logger.info(`Selfie uploaded: ${selfieUrl}`);
+        } catch (err) {
+          logger.error(`Selfie upload failed: ${err.message}`);
+          throw new Error(`Failed to upload selfie: ${err.message}`);
+        }
       }
-    }
 
-    // 2. Create Worker record
-    try {
+      // 2. Create Worker record
       logger.info(`Creating Worker record with data: ${JSON.stringify(workerData)}`);
       const newWorker = await Worker.create(workerData);
       logger.info(`✅ Worker record created successfully: ${newWorker._id}`);
@@ -117,59 +118,54 @@ const register = async (userData, fileBuffers = {}) => {
         await newWorker.save();
         logger.info(`Worker documents linked: ${createdDocs.length} documents`);
       }
-    } catch (err) {
-      logger.error(`❌ Failed to create Worker record: ${err.message}`);
-      logger.error(`Stack trace: ${err.stack}`);
-      throw new Error(`Failed to create Worker profile: ${err.message}`);
     }
-  }
 
-  // --- CONTRACTOR ---
-  if (role === ROLES.CONTRACTOR) {
-    logger.info(`Creating Contractor profile for user: ${user._id}`);
+    // --- CONTRACTOR ---
+    if (role === ROLES.CONTRACTOR) {
+      logger.info(`Creating Contractor profile for user: ${user._id}`);
 
-    const contractorData = {
-      user: user._id,
-      services: services || [],
-      experience: experience || 0,
-      verificationStatus: 'pending',
-      city: address?.city,
-      state: address?.state,
-    };
+      const contractorData = {
+        user: user._id,
+        services: services || [],
+        experience: experience || 0,
+        verificationStatus: 'pending',
+        city: address?.city,
+        state: address?.state,
+      };
 
-    // Upload Documents
-    if (fileBuffers.governmentId) {
-      try {
-        logger.info('Uploading contractor government ID...');
-        const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
-        contractorData.governmentId = uploadResult.url;
-        logger.info(`Contractor government ID uploaded: ${uploadResult.url}`);
-      } catch (err) {
-        logger.error(`Failed to upload government ID: ${err.message}`);
-        throw new Error(`Failed to upload government ID: ${err.message}`);
+      // Upload Documents
+      if (fileBuffers.governmentId) {
+        try {
+          logger.info('Uploading contractor government ID...');
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+          contractorData.governmentId = uploadResult.url;
+          logger.info(`Contractor government ID uploaded: ${uploadResult.url}`);
+        } catch (err) {
+          logger.error(`Failed to upload government ID: ${err.message}`);
+          throw new Error(`Failed to upload government ID: ${err.message}`);
+        }
       }
-    }
-    if (fileBuffers.selfie) {
-      try {
-        logger.info('Uploading contractor selfie...');
-        const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
-        contractorData.selfie = uploadResult.url;
-        logger.info(`Contractor selfie uploaded: ${uploadResult.url}`);
-      } catch (err) {
-        logger.error(`Failed to upload selfie: ${err.message}`);
-        throw new Error(`Failed to upload selfie: ${err.message}`);
+      if (fileBuffers.selfie) {
+        try {
+          logger.info('Uploading contractor selfie...');
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+          contractorData.selfie = uploadResult.url;
+          logger.info(`Contractor selfie uploaded: ${uploadResult.url}`);
+        } catch (err) {
+          logger.error(`Failed to upload selfie: ${err.message}`);
+          throw new Error(`Failed to upload selfie: ${err.message}`);
+        }
       }
-    }
 
-    try {
       logger.info(`Creating Contractor record with data: ${JSON.stringify(contractorData)}`);
       const newContractor = await Contractor.create(contractorData);
       logger.info(`✅ Contractor record created successfully: ${newContractor._id}`);
-    } catch (err) {
-      logger.error(`❌ Failed to create Contractor record: ${err.message}`);
-      logger.error(`Stack trace: ${err.stack}`);
-      throw new Error(`Failed to create Contractor profile: ${err.message}`);
     }
+  } catch (error) {
+    // ROLLBACK: Delete the user if profile creation failed to prevent orphaned users
+    logger.error(`❌ Profile creation failed. Rolling back user creation for ${email}. Error: ${error.message}`);
+    await User.findByIdAndDelete(user._id);
+    throw error;
   }
 
 

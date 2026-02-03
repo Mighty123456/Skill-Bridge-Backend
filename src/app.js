@@ -43,11 +43,13 @@ app.use('/api', limiter);
 // Middleware
 app.use(cors({
   origin: config.FRONTEND_URL || '*',
-  credentials: true,
+  credentials: false,
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 }));
 
-app.use(express.json({ limit: '10kb' })); // Body limit for scalability/security
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(express.json({ limit: '50mb' })); // Increased limit to handle image payloads
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Custom Request logging
 app.use((req, res, next) => {

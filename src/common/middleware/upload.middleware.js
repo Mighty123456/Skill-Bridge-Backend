@@ -38,7 +38,7 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB max file size
+    fileSize: 4 * 1024 * 1024, // Reduced to 4MB max file size to avoid Vercel 413 Payload Too Large
   },
 });
 
@@ -94,7 +94,7 @@ const handleUploadError = (err, req, res, next) => {
   }
 
   // If no error, pass to next middleware
-    next();
+  next();
 };
 
 /**

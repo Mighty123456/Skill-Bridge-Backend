@@ -12,10 +12,12 @@ const authenticate = async (req, res, next) => {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('Auth Middleware: No token provided or invalid format:', authHeader);
       return errorResponse(res, 'No token provided. Please login first.', 401);
     }
 
     const token = authHeader.substring(7); // Remove 'Bearer ' prefix
+    console.log('Auth Middleware: Verifying token...');
 
     // Verify token
     const decoded = verifyToken(token);
