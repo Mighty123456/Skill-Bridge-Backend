@@ -39,6 +39,13 @@ const workerSchema = new mongoose.Schema(
       default: 5.0
     },
 
+    // Hourly Rate (e.g. 100)
+    hourlyRate: {
+      type: Number,
+      min: 0,
+      default: 0
+    },
+
     // Verification Documents (URLs)
     governmentId: {
       type: String,

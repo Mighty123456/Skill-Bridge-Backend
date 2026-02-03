@@ -15,7 +15,7 @@ const { ROLES } = require('../../common/constants/roles');
  * Register a new user
  */
 const register = async (userData, fileBuffers = {}) => {
-  const { email, password, role, name, phone, dateOfBirth, address, services, skills, experience } = userData;
+  const { email, password, role, name, phone, dateOfBirth, address, services, skills, experience, hourlyRate } = userData;
 
   // Check if user already exists
   const existingUser = await User.findOne({ email: email.toLowerCase() });
@@ -52,6 +52,7 @@ const register = async (userData, fileBuffers = {}) => {
         services: services || [],
         skills: skills || [],
         experience: experience || 0,
+        hourlyRate: hourlyRate || 0,
         verificationStatus: 'pending',
         city: address?.city,
         state: address?.state,
@@ -677,6 +678,7 @@ const updateProfile = async (userId, updateData) => {
     if (skills) workerUpdate.skills = skills;
     if (experience !== undefined) workerUpdate.experience = experience;
     if (services) workerUpdate.services = services;
+    if (updateData.hourlyRate !== undefined) workerUpdate.hourlyRate = updateData.hourlyRate;
 
     // Sync city/state if address provided
     if (address?.city) workerUpdate.city = address.city;
