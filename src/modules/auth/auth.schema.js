@@ -30,6 +30,7 @@ const registerSchema = [
     .isMobilePhone('any')
     .withMessage('Please provide a valid phone number'),
   body('dateOfBirth')
+    .optional()
     .isISO8601()
     .withMessage('Please provide a valid date of birth')
     .custom((value) => {
