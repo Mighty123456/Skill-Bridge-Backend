@@ -166,45 +166,75 @@ const initializeTransporter = async (retries = 3, delayMs = 1000) => {
  * Base email template wrapper for consistent branding
  */
 const baseEmailTemplate = (content, title = 'SkillBridge Notification') => `
-  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f6f9fc; padding: 40px 0; margin: 0; width: 100%;">
-    <table border="0" cellpadding="0" cellspacing="0" width="100%">
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { margin: 0; padding: 0; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    img { border: 0; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    a { text-decoration: none; }
+  </style>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f5f5f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;">
+  <div style="background-color: #f5f5f5; padding: 40px 0;">
+    <table border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 0 auto;">
+      <!-- Logo / Header -->
       <tr>
-        <td align="center">
-          <table border="0" cellpadding="0" cellspacing="0" width="600" style="background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
-            <!-- Header -->
+        <td align="center" style="padding: 0 0 20px 0;">
+          <!-- Optional: <img src="LOGO_URL" alt="SkillBridge" width="48" style="display: block; margin-bottom: 10px;"> -->
+        </td>
+      </tr>
+      
+      <!-- Main Card -->
+      <tr>
+        <td>
+          <table border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);">
+            <!-- Colored Header Bar -->
             <tr>
-              <td align="center" style="padding: 30px 40px; background: linear-gradient(135deg, #4f46e5, #7c3aed);">
-                <h1 style="color: #ffffff; margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">SkillBridge</h1>
-                <p style="color: rgba(255, 255, 255, 0.9); margin: 5px 0 0 0; font-size: 14px;">Connecting Skills, Building Futures</p>
+              <td align="center" style="background-color: #008080; padding: 32px 40px;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase;">SkillBridge</h1>
+                <p style="color: rgba(255, 255, 255, 0.9); margin: 6px 0 0 0; font-size: 13px; font-weight: 500;">Connecting Skills, Building Futures</p>
               </td>
             </tr>
-            <!-- Content -->
+            
+            <!-- Content Area -->
             <tr>
-              <td style="padding: 40px; color: #374151; line-height: 1.6;">
+              <td style="padding: 40px; color: #374151; font-size: 16px; line-height: 1.6;">
                 ${content}
               </td>
             </tr>
-            <!-- Footer -->
+            
+            <!-- Footer Area -->
             <tr>
-              <td style="padding: 30px 40px; background-color: #f9fafb; border-top: 1px solid #e5e7eb; text-align: center;">
-                <p style="margin: 0; color: #6b7280; font-size: 12px;">
+              <td style="background-color: #f9fafb; padding: 24px 40px; border-top: 1px solid #e5e7eb; text-align: center;">
+                <p style="margin: 0 0 12px 0; color: #6b7280; font-size: 12px;">
                   &copy; ${new Date().getFullYear()} SkillBridge Inc. All rights reserved.
                 </p>
-                <div style="margin-top: 15px;">
-                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Support</a>
-                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Privacy Policy</a>
-                  <a href="#" style="color: #4f46e5; text-decoration: none; font-size: 12px; margin: 0 10px;">Term of Service</a>
+                <div style="margin-bottom: 12px;">
+                  <a href="#" style="color: #008080; font-weight: 600; font-size: 12px; margin: 0 10px;">Help Center</a>
+                  <a href="#" style="color: #008080; font-weight: 600; font-size: 12px; margin: 0 10px;">Privacy Policy</a>
+                  <a href="#" style="color: #008080; font-weight: 600; font-size: 12px; margin: 0 10px;">Terms</a>
                 </div>
+                <p style="margin: 0; color: #9ca3af; font-size: 11px;">
+                  You received this email because you are registered on SkillBridge.
+                </p>
               </td>
             </tr>
           </table>
-          <p style="margin-top: 20px; color: #9ca3af; font-size: 11px; text-align: center;">
-            This is an automated email, please do not reply.
-          </p>
         </td>
+      </tr>
+      
+      <!-- Bottom Spacer -->
+      <tr>
+        <td height="40"></td>
       </tr>
     </table>
   </div>
+</body>
+</html>
 `;
 
 /**
@@ -235,8 +265,8 @@ const sendOTPEmail = async (email, otp, purpose = 'login') => {
       <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">${purposeTitle}</h2>
       <p>Hello,</p>
       <p>Your verification code ${purposeDesc} is:</p>
-      <div style="margin: 30px 0; background-color: #f3f4f6; border-radius: 8px; padding: 20px; text-align: center;">
-        <span style="font-size: 36px; font-weight: 700; color: #4f46e5; letter-spacing: 12px; font-family: monospace;">${otp}</span>
+      <div style="margin: 30px 0; background-color: #f0fdfa; border: 1px dashed #008080; border-radius: 12px; padding: 24px; text-align: center;">
+        <span style="font-size: 32px; font-weight: 700; color: #008080; letter-spacing: 8px; font-family: monospace;">${otp}</span>
       </div>
       <p style="font-size: 14px; color: #6b7280;">This code will expire in 10 minutes. If you did not request this code, please ignore this email.</p>
     `, `SkillBridge - ${purposeTitle}`);
@@ -277,7 +307,7 @@ const sendWelcomeEmail = async (email, name) => {
         <li style="margin-bottom: 10px;">Connect with skilled contractors</li>
       </ul>
       <div style="margin-top: 30px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Go to Dashboard</a>
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #008080; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px;">Go to Dashboard</a>
       </div>
     `, 'Welcome to SkillBridge');
 
@@ -333,7 +363,7 @@ const sendVerificationEmail = async (email, name, status, reason = '') => {
       ` : ''}
       
       <div style="margin-top: 35px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #008080; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px;">
           ${isApproved ? 'Start Working' : 'Update Profile'}
         </a>
       </div>
@@ -386,7 +416,7 @@ const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost
           </tr>
           <tr>
             <td style="color: #6b7280; font-size: 14px;">Total Cost</td>
-            <td style="color: #4f46e5; font-size: 16px; font-weight: 700; text-align: right;">₹${totalCost.toFixed(2)}</td>
+            <td style="color: #008080; font-size: 18px; font-weight: 700; text-align: right;">₹${totalCost.toFixed(2)}</td>
           </tr>
         </table>
       </div>
@@ -394,7 +424,7 @@ const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost
       <p>Please log in to the SkillBridge app to view complete job details and start working on the task. Good luck!</p>
       
       <div style="margin-top: 35px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #4f46e5; color: #ffffff; padding: 14px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #008080; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px;">
           View Job Details
         </a>
       </div>

@@ -40,7 +40,6 @@ const userSchema = new mongoose.Schema(
     },
     dateOfBirth: {
       type: Date,
-      required: [true, 'Date of birth is required'],
     },
     address: {
       street: { type: String, trim: true },
