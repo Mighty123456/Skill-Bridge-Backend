@@ -94,6 +94,28 @@ const jobSchema = new mongoose.Schema(
             claimed_at: { type: Date },
             resolved: { type: Boolean, default: false },
         },
+
+        // Module 4: Execution & Timeline
+        start_otp_expires_at: { type: Date, select: false },
+
+        timeline: [
+            {
+                status: { type: String, required: true },
+                timestamp: { type: Date, default: Date.now },
+                note: { type: String },
+                actor: { type: String, enum: ['user', 'worker', 'system', 'admin'] } // Who performed the action
+            }
+        ],
+
+        dispute: {
+            is_disputed: { type: Boolean, default: false },
+            reason: { type: String },
+            opened_at: { type: Date },
+            resolved_at: { type: Date },
+            status: { type: String, enum: ['open', 'resolved', 'closed'], default: 'open' }
+        },
+
+        payment_released: { type: Boolean, default: false },
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
@@ -103,6 +125,8 @@ const jobSchema = new mongoose.Schema(
 // Indexes
 jobSchema.index({ location: '2dsphere' });
 jobSchema.index({ status: 1, skill_required: 1 });
+jobSchema.index({ user_id: 1, status: 1 });
+jobSchema.index({ selected_worker_id: 1, status: 1 });
 
 const Job = mongoose.model('Job', jobSchema);
 

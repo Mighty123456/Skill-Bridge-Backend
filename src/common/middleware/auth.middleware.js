@@ -26,7 +26,7 @@ const authenticate = async (req, res, next) => {
     // Token usually contains userId and role. We can use role to decide where to look, 
     // or try both if role isn't strictly relied upon here.
 
-    let user = await User.findById(decoded.userId).select('-password');
+    let user = await User.findById(decoded.userId).select('-password +currentSessionId');
     let role = user?.role;
 
     // If not found in User, check Admin
@@ -43,6 +43,11 @@ const authenticate = async (req, res, next) => {
 
     if (user.isActive === false) {
       return errorResponse(res, 'Your account has been deactivated. Please contact support.', 403);
+    }
+
+    // Device Binding Check (Concurrent Login Prevention)
+    if (user.currentSessionId && decoded.sessionId !== user.currentSessionId) {
+      return errorResponse(res, 'Session expired due to login on another device.', 401);
     }
 
     // Attach user to request

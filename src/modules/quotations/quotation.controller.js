@@ -3,80 +3,48 @@ const Job = require('../jobs/job.model');
 const Notification = require('../notifications/notification.model');
 const emailService = require('../../common/services/email.service');
 
+const QuotationService = require('./quotation.service');
+const logger = require('../../config/logger');
+
+
+// Create a new quotation
 // Create a new quotation
 exports.createQuotation = async (req, res) => {
     try {
         const { job_id, labor_cost, material_cost, estimated_days, notes, tags } = req.body;
-        const worker_id = req.user._id;
 
-        // 1. Validate Job
-        const job = await Job.findById(job_id);
-        if (!job) {
-            return res.status(404).json({ success: false, message: 'Job not found' });
+        let parsedTags = [];
+        try {
+            parsedTags = tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [];
+        } catch (e) {
+            logger.warn('Failed to parse tags JSON');
         }
 
-        if (job.status !== 'open') {
-            return res.status(400).json({ success: false, message: 'Job is not open for quotations' });
-        }
-
-        // 2. Validate Time Phase (optional check if end_time exists)
-        const now = new Date();
-        if (job.quotation_end_time && now > job.quotation_end_time) {
-            return res.status(400).json({ success: false, message: 'Quotation submission window has closed' });
-        }
-
-        // 3. Check for Duplicate
-        const existingQuotation = await Quotation.findOne({ job_id, worker_id });
-        if (existingQuotation) {
-            return res.status(409).json({ success: false, message: 'You have already submitted a quotation for this job' });
-        }
-
-        // 4. Handle Video Upload (if any)
-        let video_url = null;
-        if (req.files && req.files.video_pitch && req.files.video_pitch.length > 0) {
-            const videoFile = req.files.video_pitch[0];
-            const cloudinaryService = require('../../common/services/cloudinary.service');
-            // uploadImage handles Buffer from memory storage
-            const result = await cloudinaryService.uploadImage(videoFile.buffer, 'quotations');
-            if (result && result.url) {
-                video_url = result.url;
-            }
-        }
-
-        // 5. Create Quotation
-        // Ensure inputs are numbers
-        const l_cost = Number(labor_cost);
-        const m_cost = Number(material_cost || 0);
-        const total_cost = l_cost + m_cost;
-
-        const quotation = new Quotation({
+        const quotationData = {
             job_id,
-            worker_id,
-            labor_cost: l_cost,
-            material_cost: m_cost,
-            total_cost,
-            estimated_days: Number(estimated_days),
+            labor_cost,
+            material_cost,
+            estimated_days,
             notes,
-            tags: tags ? (typeof tags === 'string' ? JSON.parse(tags) : tags) : [], // Handle potential stringification in multipart
-            video_url
+            tags: parsedTags
+        };
+
+        const videoFile = (req.files && req.files.video_pitch && req.files.video_pitch[0]) ? req.files.video_pitch[0] : null;
+
+        const result = await QuotationService.createQuotation(quotationData, req.user, videoFile);
+
+        res.status(201).json({
+            success: true,
+            data: result.quotation,
+            warning: result.warning
         });
-
-        await quotation.save();
-
-        // 6. Notify Tenant
-        await Notification.create({
-            recipient: job.user_id,
-            title: 'New Quotation Received',
-            message: `You have received a new quotation for your job: ${job.job_title}`,
-            type: 'quotation_received',
-            data: { jobId: job._id, quotationId: quotation._id }
-        });
-
-        res.status(201).json({ success: true, data: quotation });
 
     } catch (error) {
-        console.error('Create Quotation Error:', error);
-        res.status(500).json({ success: false, message: 'Failed to submit quotation', error: error.message });
+        if (error.code === 'WORKER_NOT_VERIFIED') {
+            return res.status(403).json({ success: false, message: error.message, errorCode: error.code });
+        }
+        logger.error('Create Quotation Error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to submit quotation' });
     }
 };
 
@@ -84,129 +52,23 @@ exports.createQuotation = async (req, res) => {
 exports.getQuotationsByJob = async (req, res) => {
     try {
         const { jobId } = req.params;
-
-        const job = await Job.findById(jobId);
-        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
-
-        // Authorization: Only Job Owner (Tenant) can see all quotations
-        if (job.user_id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ success: false, message: 'Not authorized to view quotations for this job' });
-        }
-
-        const quotations = await Quotation.find({ job_id: jobId })
-            .populate('worker_id', 'name phone profileImage');
-
-        // Fetch Worker Profiles for these users to get Ratings & Stats
-        const workerUserIds = quotations.map(q => q.worker_id._id);
-        const Worker = require('../workers/worker.model');
-        const workers = await Worker.find({ user: { $in: workerUserIds } });
-
-        // Merge Data
-        const enrichedQuotations = quotations.map(q => {
-            const workerProfile = workers.find(w => w.user.toString() === q.worker_id._id.toString());
-
-            // Calculate total jobs completed from reputation zones
-            const jobsCompleted = workerProfile && workerProfile.reputation_zones
-                ? workerProfile.reputation_zones.reduce((sum, z) => sum + z.jobs_completed, 0)
-                : 0;
-
-            return {
-                ...q.toObject(),
-                worker_rating: workerProfile ? workerProfile.rating : 0,
-                worker_jobs_completed: jobsCompleted,
-                worker_verified: workerProfile ? workerProfile.verificationStatus === 'verified' : false
-            };
-        });
-
-        // Sort by Lowest Price, then Highest Rating
-        enrichedQuotations.sort((a, b) => {
-            if (a.total_cost !== b.total_cost) return a.total_cost - b.total_cost; // Lowest Price first
-            return b.worker_rating - a.worker_rating; // Then Highest Rating
-        });
-
-        res.json({ success: true, data: enrichedQuotations });
-
+        const quotations = await QuotationService.getQuotationsForJob(jobId, req.user._id);
+        res.json({ success: true, data: quotations });
     } catch (error) {
-        console.error('Get Quotations Error:', error);
-        res.status(500).json({ success: false, message: 'Failed to fetch quotations' });
+        logger.error('Get Quotations Error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to fetch quotations' });
     }
 };
 
 // Accept a quotation
 exports.acceptQuotation = async (req, res) => {
     try {
-        const { id } = req.params; // Quotation ID
-
-        const quotation = await Quotation.findById(id).populate('job_id').populate('worker_id', 'name email');
-        if (!quotation) {
-            return res.status(404).json({ success: false, message: 'Quotation not found' });
-        }
-
-        const job = quotation.job_id;
-        const worker = quotation.worker_id;
-
-        // Authorization
-        if (job.user_id.toString() !== req.user._id.toString()) {
-            return res.status(403).json({ success: false, message: 'Not authorized to accept quotations for this job' });
-        }
-
-        if (job.status !== 'open') {
-            return res.status(400).json({ success: false, message: 'Job is not open' });
-        }
-
-        // Update Job
-        job.status = 'assigned'; // Phase 4 Change: Set to 'assigned', waiting for OTP start
-        job.selected_worker_id = worker._id;
-
-        // Generate 4-digit OTP
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
-        job.start_otp = otp;
-
-        await job.save();
-
-        // Update Quotation Status
-        quotation.status = 'accepted';
-        await quotation.save();
-
-        // Reject other quotations for this job
-        await Quotation.updateMany(
-            { job_id: job._id, _id: { $ne: quotation._id } },
-            { $set: { status: 'rejected' } }
-        );
-
-        // Notify Worker (In-App)
-        await Notification.create({
-            recipient: worker._id,
-            title: 'Quotation Accepted!',
-            message: `Your quotation for ${job.job_title} has been accepted. You can now start the work.`,
-            type: 'quotation_accepted',
-            data: { jobId: job._id }
-        });
-
-        // Notify Tenant (User) with OTP
-        await Notification.create({
-            recipient: job.user_id,
-            title: 'Share OTP with Worker',
-            message: `You have hired ${worker.name}. When they arrive, share this OTP to start the job: ${otp}`,
-            type: 'system',
-            data: { jobId: job._id, otp: otp }
-        });
-
-        // Notify Worker (Email)
-        if (worker.email) {
-            await emailService.sendQuotationAcceptedEmail(
-                worker.email,
-                worker.name,
-                job.job_title,
-                quotation.total_cost
-            );
-        }
-
+        const { id } = req.params;
+        const job = await QuotationService.acceptQuotation(id, req.user._id);
         res.json({ success: true, message: 'Quotation accepted', data: job });
-
     } catch (error) {
-        console.error('Accept Quotation Error:', error);
-        res.status(500).json({ success: false, message: 'Failed to accept quotation' });
+        logger.error('Accept Quotation Error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to accept quotation' });
     }
 };
 

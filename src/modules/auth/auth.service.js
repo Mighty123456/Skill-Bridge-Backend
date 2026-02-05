@@ -62,6 +62,11 @@ const register = async (userData, fileBuffers = {}) => {
       let govIdUrl = null;
       let selfieUrl = null;
 
+      // CONSTRAINT: Worker must upload live selfie along with ID proof.
+      if (!fileBuffers.governmentId || !fileBuffers.selfie) {
+        throw new Error('Both Government ID and Live Selfie are required for worker registration.');
+      }
+
       if (fileBuffers.governmentId) {
         try {
           logger.info('Uploading government ID...');
@@ -261,9 +266,14 @@ const login = async (email, password) => {
   }
   logger.info('User saved');
 
+  // Generate Session ID for Device Binding
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  user.currentSessionId = sessionId;
+  await user.save({ validateBeforeSave: false });
+
   // Generate token
   // Ensure 'role' is present on both models. Admin model has default role='admin'.
-  const token = generateToken({ userId: user._id, role: user.role });
+  const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
   const userResponse = user.toObject();
@@ -331,10 +341,15 @@ const loginWithOTP = async (email, otp) => {
 
   // Update last login
   user.lastLogin = new Date();
+
+  // Generate Session ID
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  user.currentSessionId = sessionId;
+
   await user.save({ validateBeforeSave: false });
 
   // Generate token
-  const token = generateToken({ userId: user._id, role: user.role });
+  const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
   const userResponse = user.toJSON();
@@ -371,10 +386,15 @@ const verifyOTPForLogin = async (email, otp) => {
 
   // Update last login
   user.lastLogin = new Date();
+
+  // Generate Session ID
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  user.currentSessionId = sessionId;
+
   await user.save({ validateBeforeSave: false });
 
   // Generate token
-  const token = generateToken({ userId: user._id, role: user.role });
+  const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
   const userResponse = user.toJSON();
@@ -604,10 +624,15 @@ const verifyRegistration = async (email, otp) => {
 
   // Mark user as verified
   user.isEmailVerified = true;
+
+  // Generate Session ID
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  user.currentSessionId = sessionId;
+
   await user.save({ validateBeforeSave: false });
 
   // Generate token for auto-login
-  const token = generateToken({ userId: user._id, role: user.role });
+  const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
   const userResponse = user.toJSON();
@@ -659,6 +684,24 @@ const updateProfile = async (userId, updateData) => {
 
   // Fields allowed on User model
   const allowedUserFields = ['name', 'phone', 'address', 'dateOfBirth', 'isOnline'];
+
+  // CONSTRAINT CHECKS FOR VERIFIED WORKERS
+  if (user.role === ROLES.WORKER) {
+    const workerProfile = await Worker.findOne({ user: userId });
+
+    if (workerProfile && workerProfile.verificationStatus === 'verified') {
+      // CONSTRAINT: Worker cannot modify skills after verification
+      if (updateData.skills && updateData.skills.length > 0) {
+        throw new Error('Verified workers cannot modify their skills. Please contact admin.');
+      }
+
+      // CONSTRAINT: Worker cannot change registered mobile/email after verification
+      // (Email is not in allowedUserFields, so only phone needs check)
+      if (updateData.phone && updateData.phone !== user.phone) {
+        throw new Error('Verified workers cannot change their registered phone number. Please contact admin.');
+      }
+    }
+  }
 
   // Update User fields
   allowedUserFields.forEach(field => {

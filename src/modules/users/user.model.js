@@ -95,6 +95,11 @@ const userSchema = new mongoose.Schema(
     lastLogin: {
       type: Date,
     },
+    // Device Binding
+    currentSessionId: {
+      type: String,
+      select: false // Do not return by default
+    }
   },
   {
     timestamps: true, // Adds createdAt and updatedAt
