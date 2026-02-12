@@ -6,6 +6,7 @@ const { authenticate: protect } = require('../../common/middleware/auth.middlewa
 const { authorize } = require('../../common/middleware/role.middleware');
 
 // Routes
+router.get('/categories', protect, jobController.getJobCategories);
 router.post('/', protect, catchUploadErrors(uploadMultiple('issue_photos', 5)), jobController.createJob);
 router.get('/feed', protect, jobController.getWorkerFeed);
 router.get('/my-jobs', protect, jobController.getWorkerJobs);

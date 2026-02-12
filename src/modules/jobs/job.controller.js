@@ -271,3 +271,20 @@ exports.confirmCompletion = async (req, res) => {
     }
 };
 
+// Get all unique job categories (skills)
+exports.getJobCategories = async (req, res) => {
+    try {
+        // Fetch distinct 'skill_required' from the Job collection
+        const categories = await Job.distinct('skill_required');
+
+        // Return the list of categories
+        res.json({
+            success: true,
+            data: categories.filter(c => c) // Filter out null/undefined
+        });
+    } catch (error) {
+        logger.error('Get Job Categories Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch categories' });
+    }
+};
+
