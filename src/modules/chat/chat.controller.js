@@ -229,6 +229,11 @@ exports.sendMessage = async (req, res) => {
             return errorResponse(res, 'Chat not found', 404);
         }
 
+        // --- OWNERSHIP CHECK (Constraint: Participant Verification) ---
+        if (!chat.participants.map(p => p.toString()).includes(senderId)) {
+            return errorResponse(res, 'Unauthorized: You are not a participant in this chat', 403);
+        }
+
         const job = chat.job;
         if (!job) {
             return errorResponse(res, 'Job context invalid', 404);
@@ -387,6 +392,15 @@ exports.getMessages = async (req, res) => {
         const { chatId } = req.params;
         const userId = req.user.id;
 
+        // --- OWNERSHIP CHECK (Constraint: Participant Verification) ---
+        const chat = await Chat.findById(chatId);
+        if (!chat) {
+            return errorResponse(res, 'Chat not found', 404);
+        }
+        if (!chat.participants.map(p => p.toString()).includes(userId)) {
+            return errorResponse(res, 'Unauthorized: You are not a participant in this chat', 403);
+        }
+
         const messages = await Message.find({ chatId }).sort({ createdAt: 1 });
 
         // Update read status for these messages
@@ -416,7 +430,6 @@ exports.getMessages = async (req, res) => {
         }
 
         // Reset unread count for this user
-        const chat = await Chat.findById(chatId);
         if (chat) {
             if (!chat.unreadCounts) { chat.unreadCounts = new Map(); }
             if (chat.unreadCounts.get(userId) > 0) {

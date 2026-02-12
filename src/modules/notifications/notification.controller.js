@@ -18,7 +18,16 @@ exports.getNotifications = async (req, res) => {
 exports.markAsRead = async (req, res) => {
     try {
         const { id } = req.params;
-        await Notification.findByIdAndUpdate(id, { read: true });
+        // Ensure the notification belongs to the logged-in user
+        const notification = await Notification.findOneAndUpdate(
+            { _id: id, recipient: req.user._id },
+            { read: true },
+            { new: true }
+        );
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
 
         res.json({ success: true, message: 'Marked as read' });
     } catch (error) {
@@ -29,7 +38,11 @@ exports.markAsRead = async (req, res) => {
 exports.deleteNotification = async (req, res) => {
     try {
         const { id } = req.params;
-        const notification = await Notification.findByIdAndDelete(id);
+        // Ensure the notification belongs to the logged-in user
+        const notification = await Notification.findOneAndDelete({
+            _id: id,
+            recipient: req.user._id
+        });
 
         if (!notification) {
             return res.status(404).json({ success: false, message: 'Notification not found' });
