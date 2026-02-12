@@ -271,30 +271,6 @@ exports.confirmCompletion = async (req, res) => {
     }
 };
 
-
-// Tenant regenerates OTP
-exports.regenerateOTP = async (req, res) => {
-    try {
-        const { id } = req.params;
-        const job = await JobService.regenerateOTP(id, req.user._id);
-
-        // Fetch with hidden OTP to return it to the owner
-        const jobWithOtp = await Job.findById(id).select('+start_otp');
-
-        res.json({
-            success: true,
-            message: 'New OTP generated successfully',
-            data: {
-                ...job._doc,
-                start_otp: jobWithOtp.start_otp
-            }
-        });
-    } catch (error) {
-        logger.error('Regenerate OTP Error:', error);
-        res.status(500).json({ success: false, message: error.message || 'Failed to regenerate OTP' });
-    }
-};
-
 // Get all unique job categories (skills)
 exports.getJobCategories = async (req, res) => {
     try {

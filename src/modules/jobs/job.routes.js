@@ -15,7 +15,6 @@ router.get('/:id', protect, jobController.getJob);
 router.post('/:id/accept', protect, jobController.acceptJob);
 router.post('/:id/submit-completion', protect, catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.submitCompletion);
 router.post('/:id/confirm-completion', protect, jobController.confirmCompletion);
-router.post('/:id/regenerate-otp', protect, jobController.regenerateOTP);
 
 // Job Execution (Phase 4)
 router.post('/:id/start', protect, authorize('worker'), jobController.startJob);
