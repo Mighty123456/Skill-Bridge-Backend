@@ -99,6 +99,14 @@ const userSchema = new mongoose.Schema(
     currentSessionId: {
       type: String,
       select: false // Do not return by default
+    },
+    // Chat Moderation
+    chatStrikes: {
+      type: Number,
+      default: 0
+    },
+    chatMutedUntil: {
+      type: Date
     }
   },
   {

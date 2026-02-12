@@ -9,12 +9,29 @@ const messageSchema = new mongoose.Schema({
     senderId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true
+        required: function () { return !this.isSystemMessage; }
+    },
+    isSystemMessage: {
+        type: Boolean,
+        default: false
     },
     text: {
         type: String,
-        required: true
+        trim: true,
+        // Text is required unless it's a media message or system message (though system usually has text)
+        required: function () {
+            return (!this.media || this.media.length === 0) && !this.isSystemMessage;
+        }
     },
+    media: [{
+        url: { type: String, required: true },
+        fileType: {
+            type: String,
+            enum: ['image', 'video', 'document'],
+            required: true
+        },
+        originalName: String
+    }],
     readBy: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'

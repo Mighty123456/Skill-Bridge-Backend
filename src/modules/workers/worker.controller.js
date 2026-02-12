@@ -155,9 +155,9 @@ exports.getNearbyWorkers = async (req, res) => {
         // 1. Filter Workers by Skill if provided
         // RELAXED REQUIREMENT: Removed 'verified' check for testing purposes if env is development
         let workerQuery = {};
-        if (process.env.NODE_ENV === 'production') {
-            workerQuery.verificationStatus = 'verified';
-        }
+        // STRICT REQUIREMENT: Only verified workers are discoverable in all environments
+        // If testing flow requires unverified, manually set status to 'verified' in DB.
+        workerQuery.verificationStatus = 'verified';
 
         if (skill && skill !== 'All') {
             workerQuery.skills = { $in: [skill] };

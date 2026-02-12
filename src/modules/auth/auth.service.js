@@ -690,10 +690,10 @@ const updateProfile = async (userId, updateData) => {
     const workerProfile = await Worker.findOne({ user: userId });
 
     if (workerProfile && workerProfile.verificationStatus === 'verified') {
-      // CONSTRAINT: Worker cannot modify skills after verification
-      if (updateData.skills && updateData.skills.length > 0) {
-        throw new Error('Verified workers cannot modify their skills. Please contact admin.');
-      }
+      // CONSTRAINT: Worker cannot modify skills after verification - REMOVED per requirement
+      // if (updateData.skills && updateData.skills.length > 0) {
+      //   throw new Error('Verified workers cannot modify their skills. Please contact admin.');
+      // }
 
       // CONSTRAINT: Worker cannot change registered mobile/email after verification
       // (Email is not in allowedUserFields, so only phone needs check)

@@ -5,10 +5,14 @@ const { ROLES } = require('../constants/roles');
  * Middleware to check if user has required role(s)
  * @param {String|Array} allowedRoles - Role(s) allowed to access the route
  */
-const authorize = (...allowedRoles) => {
+const authorize = (...args) => {
+  // Flatten arguments to handle authorize('admin', 'user') and authorize(['admin', 'user'])
+  const allowedRoles = args.flat();
+
   return (req, res, next) => {
     if (!req.user) {
-      return errorResponse(res, 'Authentication required', 401);
+      // Should adhere to standard error structure
+      return res.status(401).json({ success: false, message: 'Authentication required' });
     }
 
     const userRole = req.user.role;
@@ -17,11 +21,10 @@ const authorize = (...allowedRoles) => {
       return next();
     }
 
-    return errorResponse(
-      res,
-      `Access denied. Required role: ${allowedRoles.join(' or ')}`,
-      403
-    );
+    return res.status(403).json({
+      success: false,
+      message: `Access denied. Required role: ${allowedRoles.join(' or ')}`
+    });
   };
 };
 
