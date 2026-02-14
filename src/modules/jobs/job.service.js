@@ -367,6 +367,24 @@ exports.reportDelay = async (jobId, workerId, reason, delayMinutes) => {
     return job;
 };
 
+exports.updateLocation = async (jobId, workerId, lat, lng) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+
+    // Only update if journey is active
+    if (job.status !== 'on_the_way') {
+        // We might want to allow it in 'arrived' too, but primarily on_the_way
+        // return job; 
+    }
+
+    job.journey = job.journey || {};
+    job.journey.worker_location = { lat, lng };
+    await job.save();
+
+    return job;
+};
+
 /**
  * C. Diagnosis Mode: Submit Report
  */

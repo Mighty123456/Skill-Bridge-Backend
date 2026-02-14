@@ -281,6 +281,20 @@ exports.reportDelay = async (req, res) => {
     }
 };
 
+// B5. Update Location
+exports.updateLocation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { lat, lng } = req.body;
+        const job = await JobService.updateLocation(id, req.user._id, lat, lng);
+        res.json({ success: true, message: 'Location updated', data: job });
+    } catch (error) {
+        // Log at debug/info level to avoid spamming errors for location updates
+        logger.debug('Update Location Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // Diagnosis Mode
 exports.submitDiagnosis = async (req, res) => {
     try {

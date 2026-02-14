@@ -19,6 +19,7 @@ router.post('/:id/eta', protect, authorize('worker'), jobController.confirmEta);
 router.post('/:id/journey', protect, authorize('worker'), jobController.startJourney);
 router.post('/:id/arrive', protect, authorize('worker'), jobController.arrive);
 router.post('/:id/delay', protect, authorize('worker'), jobController.reportDelay); // New
+router.post('/:id/location', protect, authorize('worker'), jobController.updateLocation);
 router.post('/:id/diagnosis', protect, authorize('worker'), jobController.submitDiagnosis);
 router.post('/:id/diagnosis/approve', protect, authorize('user'), jobController.approveDiagnosis);
 router.post('/:id/materials', protect, authorize('worker'), jobController.requestMaterial);
