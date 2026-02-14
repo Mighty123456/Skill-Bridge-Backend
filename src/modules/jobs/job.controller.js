@@ -227,19 +227,56 @@ exports.getTenantJobs = async (req, res) => {
 // Start Job (Phase 4: Worker enters OTP)
 // Worker confirms arrival (Replaces startJob)
 // Worker confirms arrival (Replaces startJob)
-exports.confirmArrival = async (req, res) => {
+// B1. Confirm ETA
+exports.confirmEta = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { etaTime } = req.body;
+        const job = await JobService.confirmEta(id, req.user._id, etaTime);
+        res.json({ success: true, message: 'ETA Confirmed', data: job });
+    } catch (error) {
+        logger.error('Confirm ETA Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// B2. Start Journey
+exports.startJourney = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await JobService.startJourney(id, req.user._id);
+        res.json({ success: true, message: 'Journey Started', data: job });
+    } catch (error) {
+        logger.error('Start Journey Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// B3. Arrive (Replaces old confirmArrival)
+exports.arrive = async (req, res) => {
     try {
         const { id } = req.params;
         let { location } = req.body;
-        // Handle potential string location if multi-part (unlikely here but safe)
         if (typeof location === 'string') {
             try { location = JSON.parse(location); } catch (e) { }
         }
-
-        const job = await JobService.confirmArrival(id, req.user._id, location);
-        res.json({ success: true, message: 'Arrival confirmed', data: job });
+        const job = await JobService.arrive(id, req.user._id, location);
+        res.json({ success: true, message: 'Arrival Confirmed', data: job });
     } catch (error) {
-        logger.error('Confirm Arrival Error:', error);
+        logger.error('Arrive Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// B4. Report Delay
+exports.reportDelay = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason, delayMinutes } = req.body;
+        const job = await JobService.reportDelay(id, req.user._id, reason, delayMinutes);
+        res.json({ success: true, message: 'Delay reported', data: job });
+    } catch (error) {
+        logger.error('Report Delay Error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

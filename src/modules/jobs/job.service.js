@@ -196,25 +196,84 @@ const EtaTracking = require('../workers/etaTracking.model');
 // ...
 
 /**
- * B. ETA Confirmation Layer
- * Worker confirms arrival.
+ * B1. ETA Confirmation
+ * Worker confirms when they will arrive.
  */
-exports.confirmArrival = async (jobId, workerId, location) => {
+exports.confirmEta = async (jobId, workerId, etaTime) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    if (job.status !== 'assigned') throw new Error('Job must be in assigned state to set ETA');
+
+    job.status = 'eta_confirmed';
+    job.journey = job.journey || {};
+    job.journey.confirmed_eta = new Date(etaTime);
+
+    appendTimeline(job, 'eta_confirmed', 'worker', `ETA confirmed for ${new Date(etaTime).toLocaleTimeString()}`);
+    await job.save();
+
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Worker ETA Confirmed',
+        message: `Worker will arrive at ${new Date(etaTime).toLocaleTimeString()}`,
+        type: 'info',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
+ * B2. Start Journey
+ * Worker indicates they are on the way.
+ */
+exports.startJourney = async (jobId, workerId) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    if (job.status !== 'eta_confirmed') throw new Error('Must confirm ETA before starting journey');
+
+    job.status = 'on_the_way';
+    job.journey = job.journey || {};
+    job.journey.started_at = new Date();
+
+    appendTimeline(job, 'on_the_way', 'worker', 'Worker started journey');
+    await job.save();
+
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Worker is On The Way',
+        message: 'Worker has started their journey to your location.',
+        type: 'info',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
+ * B3. Arrival
+ * Worker arrives at user location.
+ */
+exports.arrive = async (jobId, workerId, location) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
 
     if (job.selected_worker_id.toString() !== workerId.toString()) {
         throw new Error('Unauthorized: You are not the assigned worker.');
     }
-    if (job.status !== 'assigned') throw new Error('Job is not in assigned state.');
+    // Allow if on_the_way (normal flow) or assigned/eta_confirmed (fallback/legacy)
+    if (!['on_the_way', 'assigned', 'eta_confirmed'].includes(job.status)) {
+        throw new Error('Invalid job status for arrival');
+    }
 
-    // Logic: Check Lateness
+    // Logic: Check Lateness based on Confirmed ETA
     let is_late = false;
     let delayMinutes = 0;
     const arrivalTime = new Date();
 
-    // Default to now if not set, but it should be set for assigned jobs
-    const promisedTime = job.preferred_start_time || new Date(job.updatedAt.getTime() + 60 * 60 * 1000);
+    // Use confirmed ETA if available, else preferred_start, else update+1h
+    const promisedTime = job.journey?.confirmed_eta || job.preferred_start_time || new Date(job.updatedAt.getTime() + 60 * 60 * 1000);
 
     if (arrivalTime > promisedTime) {
         const diffMs = arrivalTime - promisedTime;
@@ -222,13 +281,19 @@ exports.confirmArrival = async (jobId, workerId, location) => {
         if (delayMinutes > 15) is_late = true; // 15 min grace
     }
 
+    job.journey = job.journey || {};
+    job.journey.arrived_at = arrivalTime;
+    job.journey.worker_location = location;
+
+    // Backward compatibility if needed, but mainly use journey object now
     job.arrival_confirmation = {
         confirmed_at: arrivalTime,
         is_late,
         worker_location: location
     };
-    job.status = 'eta_confirmed';
-    appendTimeline(job, 'eta_confirmed', 'worker', is_late ? `Worker arrived late by ${delayMinutes} mins` : 'Worker arrived on time');
+
+    job.status = 'arrived';
+    appendTimeline(job, 'arrived', 'worker', is_late ? `Worker arrived late by ${delayMinutes} mins` : 'Worker arrived on time');
 
     await job.save();
 
@@ -242,7 +307,7 @@ exports.confirmArrival = async (jobId, workerId, location) => {
             actualArrival: arrivalTime,
             delayMinutes: delayMinutes,
             isLate: is_late,
-            accuracyPercentage: is_late ? Math.max(0, 100 - (delayMinutes * 2)) : 100 // Simple decay function
+            accuracyPercentage: is_late ? Math.max(0, 100 - (delayMinutes * 2)) : 100
         });
     } catch (e) {
         logger.error('Failed to create ETA Tracking record', e);
@@ -252,10 +317,52 @@ exports.confirmArrival = async (jobId, workerId, location) => {
     if (is_late) {
         const worker = await Worker.findOne({ user: workerId });
         if (worker) {
-            worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 10); // Penalty
+            worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 5); // Reduced penalty
             await worker.save();
         }
     }
+
+    // Notify User
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Worker Arrived',
+        message: 'Worker has arrived. Please share the OTP to start the job.',
+        type: 'action_required',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
+ * B4. Report Delay
+ * Worker updates delay reason and new time.
+ */
+exports.reportDelay = async (jobId, workerId, reason, delayMinutes) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    if (job.status !== 'on_the_way') throw new Error('Can only report delay while on the way');
+
+    const newEta = new Date(Date.now() + delayMinutes * 60000); // Simple calculation from now, or use input time
+
+    job.journey = job.journey || {};
+    job.journey.delays.push({
+        reason: reason,
+        reported_at: new Date(),
+        new_eta: newEta
+    });
+
+    appendTimeline(job, 'on_the_way', 'worker', `reported delay: ${reason}. Extra ${delayMinutes} mins.`);
+    await job.save();
+
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Worker Delayed',
+        message: `Worker reported a delay: ${reason}.`,
+        type: 'alert',
+        data: { jobId: job._id }
+    });
 
     return job;
 };

@@ -69,7 +69,7 @@ const jobSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['open', 'assigned', 'eta_confirmed', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed'],
+            enum: ['open', 'assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed'],
             default: 'open',
             index: true,
         },
@@ -90,10 +90,16 @@ const jobSchema = new mongoose.Schema(
         started_at: { type: Date },
         completed_at: { type: Date },
 
-        // B. ETA Confirmation Layer
-        arrival_confirmation: {
-            confirmed_at: Date,
-            is_late: Boolean,
+        // B. ETA & Journey Validation
+        journey: {
+            confirmed_eta: Date,       // When worker promises to arrive
+            started_at: Date,          // When 'Start Journey' clicked
+            arrived_at: Date,          // When 'I Have Arrived' clicked
+            delays: [{
+                reason: String,
+                reported_at: Date,
+                new_eta: Date
+            }],
             worker_location: {
                 lat: Number,
                 lng: Number
