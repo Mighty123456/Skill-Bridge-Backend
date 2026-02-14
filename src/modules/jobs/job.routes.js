@@ -21,7 +21,7 @@ router.post('/:id/diagnosis/approve', protect, authorize('user'), jobController.
 router.post('/:id/materials', protect, authorize('worker'), jobController.requestMaterial);
 router.post('/:id/materials/:requestId/respond', protect, authorize('user'), jobController.respondToMaterial);
 
-router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.completeJob);
+router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.submitCompletion);
 router.post('/:id/confirm-completion', protect, authorize('user'), jobController.confirmCompletion);
 
 router.post('/:id/finalize', protect, jobController.finalizeJob);
