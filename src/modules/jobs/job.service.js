@@ -386,6 +386,41 @@ exports.updateLocation = async (jobId, workerId, lat, lng) => {
 };
 
 /**
+ * B4. Start Job (OTP Verification)
+ */
+exports.startJob = async (jobId, workerId, otp) => {
+    const job = await Job.findById(jobId).select('+start_otp');
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+
+    if (job.status !== 'arrived') {
+        // Optionally allow if skipped journey/etc? No, strict flow.
+        // throw new Error('You must confirm arrival first.');
+    }
+
+    if (!job.start_otp || job.start_otp !== otp) {
+        throw new Error('Invalid OTP. Please ask the customer for the code.');
+    }
+
+    job.status = 'in_progress';
+    job.started_at = new Date();
+    appendTimeline(job, 'in_progress', 'worker', 'Job started via OTP verification.');
+
+    await job.save();
+
+    // Notify User
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Job Started',
+        message: 'Worker has started the job.',
+        type: 'job_started',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
  * C. Diagnosis Mode: Submit Report
  */
 exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {

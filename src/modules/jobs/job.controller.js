@@ -281,6 +281,19 @@ exports.reportDelay = async (req, res) => {
     }
 };
 
+// B4b. Start Job (OTP)
+exports.startJob = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { otp } = req.body;
+        const job = await JobService.startJob(id, req.user._id, otp);
+        res.json({ success: true, message: 'Job Started', data: job });
+    } catch (error) {
+        logger.error('Start Job Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 // B5. Update Location
 exports.updateLocation = async (req, res) => {
     try {
