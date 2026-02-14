@@ -46,6 +46,29 @@ const workerSchema = new mongoose.Schema(
       default: 0
     },
 
+    // Warranty Offered (Days) - For filtering
+    warranty_days: {
+      type: Number,
+      default: 0, // 0 means no warranty
+      index: true
+    },
+
+    // Trust Score (0-100)
+    reliabilityScore: {
+      type: Number,
+      min: 0,
+      max: 100,
+      default: 50, // Initial Score
+      index: true
+    },
+
+    // Reliability detailed stats
+    reliabilityStats: {
+      punctuality: { type: Number, default: 0 }, // Positive or negative
+      disputes: { type: Number, default: 0 }, // Count of disputes involved in
+      cancellations: { type: Number, default: 0 }, // Count of cancellations initiated
+    },
+
     // Verification Documents (URLs)
     governmentId: {
       type: String,

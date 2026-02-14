@@ -64,6 +64,14 @@ router.delete(
   adminController.deleteUser,
 );
 
+// Update user status
+router.patch(
+  '/users/:userId/status',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.updateUserStatus,
+);
+
 // Get dashboard statistics
 router.get(
   '/stats',

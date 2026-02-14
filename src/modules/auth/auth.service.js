@@ -36,7 +36,16 @@ const register = async (userData, fileBuffers = {}) => {
     name,
     phone,
     dateOfBirth,
+    dateOfBirth,
     address: address || {},
+    status: 'active', // Default status
+    devices: userData.deviceId ? [{
+      deviceId: userData.deviceId,
+      deviceName: userData.deviceName || 'Registration Device',
+      isVerified: true, // First device can be trusted implies registration validates it OR false if we want stricter flow
+      addedAt: new Date(),
+      lastLogin: new Date()
+    }] : []
   });
 
   // 3. Create Role-Specific Profiles
@@ -215,7 +224,7 @@ const register = async (userData, fileBuffers = {}) => {
 /**
  * Login with email and password
  */
-const login = async (email, password) => {
+const login = async (email, password, deviceInfo = {}) => {
   logger.info('Login service started');
   // First, try finding in User collection
   let user = await User.findOne({ email: email.toLowerCase() }).select('+password');
@@ -233,10 +242,21 @@ const login = async (email, password) => {
     throw new Error('Invalid email or password');
   }
 
-  // Check if account is active
-  if (!user.isActive) {
-    throw new Error('Your account has been deactivated. Please contact support.');
+  // Check Account Status (Soft Suspension)
+  if (user.status === 'suspended') {
+    throw new Error('Your account has been suspended. Please contact support.');
   }
+  if (user.status === 'under_review') {
+    throw new Error('Your account is under review. You cannot login yet.');
+  }
+  // Fallback for legacy isActive
+  if (user.isActive === false && user.status === 'active') { // If status says active but isActive is false (legacy mismatch), trust status or legacy? Trust status.
+    // Do nothing, assuming status is source of truth now.
+  }
+  if (!user.isActive && user.status === 'deactivated') {
+    throw new Error('Your account is deactivated.');
+  }
+
 
   // Verify password
   logger.info('Comparing password');
@@ -246,9 +266,64 @@ const login = async (email, password) => {
     throw new Error('Invalid email or password');
   }
 
+  // DEVICE BINDING LOGIC (Only for Users, Admins might skip or use different logic)
+  if (isUser && deviceInfo.deviceId) {
+    const { deviceId, deviceName } = deviceInfo;
+
+    // Find device
+    const deviceIndex = user.devices.findIndex(d => d.deviceId === deviceId);
+
+    if (deviceIndex >= 0) {
+      // Device Found
+      if (!user.devices[deviceIndex].isVerified) {
+        // Existing but unverified? Treat as new verification needed
+        const otp = generateOTP();
+        await storeOTP(email.toLowerCase(), otp, 'device_verification');
+        await sendOTPEmail(email.toLowerCase(), otp, 'device_verification');
+        return {
+          requireDeviceVerification: true,
+          message: 'Device not verified. OTP sent to email.',
+          email: user.email,
+          deviceId
+        };
+      }
+      // Update last login
+      user.devices[deviceIndex].lastLogin = new Date();
+    } else {
+      // New Device
+      // Check Limit (Max 2)
+      // Filter out only verified devices for the limit? Or all? Usually active devices.
+      // The prompt says "Limit login from 2 active devices". 
+      if (user.devices.length >= 2) {
+        throw new Error('Device limit reached (Max 2). Please remove an old device to login with a new one.');
+      }
+
+      // Add new device (Unverified)
+      user.devices.push({
+        deviceId,
+        deviceName: deviceName || 'Unknown Device',
+        isVerified: false, // Requires confirmation
+        lastLogin: new Date()
+      });
+
+      await user.save({ validateBeforeSave: false });
+
+      // Send Verification OTP
+      const otp = generateOTP();
+      await storeOTP(email.toLowerCase(), otp, 'device_verification');
+      await sendOTPEmail(email.toLowerCase(), otp, 'device_verification');
+
+      return {
+        requireDeviceVerification: true,
+        message: 'New device detected. Please verify your email to authorize this device.',
+        email: user.email,
+        deviceId: deviceId, // Return so client knows
+        ...(config.NODE_ENV !== 'production' ? { debugOtp: otp } : {})
+      };
+    }
+  }
+
   // Update last login
-  // Note: Admin model has 'lastLogin', User model has 'lastLogin'. 
-  // If field names differed, we'd need a check. They seem consistent enough or we can use generic assignment.
   user.lastLogin = new Date();
 
   // Fix for invalid location data (missing coordinates)
@@ -284,6 +359,45 @@ const login = async (email, password) => {
   return {
     user: userResponse,
     token,
+  };
+};
+
+/**
+ * Verify Device OTP
+ */
+const verifyDevice = async (email, deviceId, otp) => {
+  // Verify OTP
+  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'device_verification');
+  if (!isOTPValid) {
+    throw new Error('Invalid or expired OTP');
+  }
+
+  const user = await User.findOne({ email: email.toLowerCase() });
+  if (!user) throw new Error('User not found');
+
+  // Find device
+  const deviceIndex = user.devices.findIndex(d => d.deviceId === deviceId);
+  if (deviceIndex === -1) {
+    throw new Error('Device not found');
+  }
+
+  // Mark verified
+  user.devices[deviceIndex].isVerified = true;
+  user.devices[deviceIndex].lastLogin = new Date();
+
+  // Generate Session
+  const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
+  user.currentSessionId = sessionId;
+
+  await user.save({ validateBeforeSave: false });
+
+  const token = generateToken({ userId: user._id, role: user.role, sessionId });
+  const userResponse = user.toJSON();
+
+  return {
+    user: userResponse,
+    token,
+    message: 'Device verified successfully'
   };
 };
 
@@ -755,5 +869,6 @@ module.exports = {
   deleteProfileImage,
   verifyRegistration,
   resendOTP,
+  verifyDevice
 };
 

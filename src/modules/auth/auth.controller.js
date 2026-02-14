@@ -30,13 +30,38 @@ const register = async (req, res) => {
  */
 const login = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const result = await authService.login(email, password);
+    const { email, password, deviceId, deviceName } = req.body;
+    const result = await authService.login(email, password, { deviceId, deviceName });
+
+    // Handle Device Verification Required
+    if (result.requireDeviceVerification) {
+      return res.status(202).json({
+        success: true,
+        message: result.message,
+        data: result
+      });
+    }
+
     return successResponse(res, 'Login successful', result);
   } catch (error) {
     logger.error(`Login error: ${error.message}`);
     logger.error(error.stack);
     return errorResponse(res, error.message, 401);
+  }
+};
+
+/**
+ * Verify Device OTP
+ * POST /api/auth/verify-device
+ */
+const verifyDevice = async (req, res) => {
+  try {
+    const { email, deviceId, otp } = req.body;
+    const result = await authService.verifyDevice(email, deviceId, otp);
+    return successResponse(res, 'Device verified successfully', result);
+  } catch (error) {
+    logger.error(`Verify device error: ${error.message}`);
+    return errorResponse(res, error.message, 400);
   }
 };
 
@@ -255,4 +280,5 @@ module.exports = {
   deleteProfileImage,
   verifyRegistration,
   resendOTP,
+  verifyDevice
 };

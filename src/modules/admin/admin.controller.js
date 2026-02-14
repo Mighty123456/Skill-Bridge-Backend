@@ -5,11 +5,14 @@ const Badge = require('../workers/badge.model');
 const Contractor = require('../contractors/contractor.model');
 const Job = require('../jobs/job.model');
 const Quotation = require('../quotations/quotation.model');
+const Payment = require('../payments/payment.model'); // Added
+const Wallet = require('../wallet/wallet.model'); // Added
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
 const emailService = require('../../common/services/email.service');
 const logger = require('../../config/logger');
+
 
 /**
  * List professionals for admin, with optional verificationStatus filter.
@@ -59,6 +62,7 @@ const listProfessionals = async (req, res) => {
           selfie: w.selfie,
           badges: w.badges,
           status: w.verificationStatus,
+          reliabilityScore: w.reliabilityScore,
           createdAt: w.createdAt,
         };
       });
@@ -83,6 +87,7 @@ const listProfessionals = async (req, res) => {
           governmentId: c.governmentId,
           selfie: c.selfie,
           status: c.verificationStatus,
+          reliabilityScore: c.reliabilityScore,
           createdAt: c.createdAt,
         };
       });
@@ -265,6 +270,38 @@ const listUsers = async (req, res) => {
 };
 
 /**
+ * Update user status (active, suspended, under_review, deactivated)
+ * PATCH /api/admin/users/:userId/status
+ */
+const updateUserStatus = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { status } = req.body;
+
+    const allowedStatuses = ['active', 'suspended', 'under_review', 'deactivated'];
+    if (!allowedStatuses.includes(status)) {
+      return errorResponse(res, 'Invalid status value', 400);
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return errorResponse(res, 'User not found', 404);
+    }
+
+    user.status = status;
+    // Pre-save hook will update isActive automatically
+    await user.save();
+
+    logger.info(`Admin ${req.userId} updated user ${userId} status to ${status}`);
+
+    return successResponse(res, 'User status updated successfully', { user });
+  } catch (error) {
+    logger.error(`Admin updateUserStatus error: ${error.message}`);
+    return errorResponse(res, 'Failed to update user status', 500);
+  }
+};
+
+/**
  * Get dashboard statistics
  * GET /api/admin/stats
  */
@@ -281,7 +318,8 @@ const getDashboardStats = async (req, res) => {
       activeJobs,
       completedJobs,
       emergencyJobs,
-      revenueData
+      revenueData,
+      escrowData
     ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
@@ -290,16 +328,21 @@ const getDashboardStats = async (req, res) => {
       Contractor.countDocuments({ verificationStatus: 'verified' }),
       User.countDocuments({ role: ROLES.CONTRACTOR }),
       User.countDocuments({ role: ROLES.USER }),
-      Job.countDocuments({ status: { $in: ['assigned', 'in_progress'] } }),
+      Job.countDocuments({ status: { $in: ['assigned', 'eta_confirmed', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] } }),
       Job.countDocuments({ status: 'completed' }),
       Job.countDocuments({ urgency_level: 'emergency', status: { $ne: 'completed' } }), // Active emergency jobs
-      Quotation.aggregate([
-        { $match: { status: 'accepted' } },
-        { $group: { _id: null, total: { $sum: '$total_cost' } } }
+      Payment.aggregate([
+        { $match: { type: 'commission', status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
+      ]),
+      Payment.aggregate([
+        { $match: { type: 'escrow', status: { $in: ['pending', 'completed'] } } },
+        { $group: { _id: null, total: { $sum: '$amount' } } }
       ])
     ]);
 
     const totalRevenue = revenueData[0]?.total || 0;
+    const escrowBalance = escrowData[0]?.total || 0;
 
     return successResponse(res, 'Stats fetched successfully', {
       pendingVerifications: pendingWorkers + pendingContractors,
@@ -313,7 +356,7 @@ const getDashboardStats = async (req, res) => {
       completedJobs,
       emergencyJobs,
       totalRevenue,
-      escrowBalance: 0, // Placeholder for now until wallet system is integrated
+      escrowBalance,
     });
   } catch (error) {
     logger.error(`Admin getDashboardStats error: ${error.message}`);
@@ -504,6 +547,8 @@ const listQuotations = async (req, res) => {
       totalCost: q.total_cost,
       status: q.status,
       createdAt: q.created_at,
+      rankingScore: q.rankingScore,
+      tier: q.tier,
     }));
 
     return successResponse(res, 'Quotations fetched successfully', { quotations: formattedQuotations });
@@ -524,6 +569,7 @@ module.exports = {
   assignBadge,
   removeBadge,
   deleteUser,
+  updateUserStatus,
   listJobs,
   listQuotations,
 };

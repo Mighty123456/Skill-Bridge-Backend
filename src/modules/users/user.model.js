@@ -67,6 +67,12 @@ const userSchema = new mongoose.Schema(
       type: String,
     },
     // Account status
+    status: {
+      type: String,
+      enum: ['active', 'suspended', 'under_review', 'deactivated'],
+      default: 'active',
+    },
+    // Legacy boolean flag (synced with status)
     isActive: {
       type: Boolean,
       default: true,
@@ -96,6 +102,15 @@ const userSchema = new mongoose.Schema(
       type: Date,
     },
     // Device Binding
+    devices: [
+      {
+        deviceId: { type: String, required: true }, // Unique fingerprint
+        deviceName: { type: String }, // e.g. "iPhone 13"
+        lastLogin: { type: Date, default: Date.now },
+        isVerified: { type: Boolean, default: false },
+        addedAt: { type: Date, default: Date.now }
+      }
+    ],
     currentSessionId: {
       type: String,
       select: false // Do not return by default
@@ -117,6 +132,18 @@ const userSchema = new mongoose.Schema(
 // Indexes
 userSchema.index({ role: 1 });
 userSchema.index({ location: '2dsphere' }); // GEOSPATIAL INDEX
+userSchema.index({ 'devices.deviceId': 1 });
+
+// Sync isActive with status
+userSchema.pre('save', function (next) {
+  if (this.isModified('status')) {
+    this.isActive = this.status === 'active';
+  } else if (this.isModified('isActive') && !this.isModified('status')) {
+    // If legacy isActive is changed directly, update status
+    this.status = this.isActive ? 'active' : 'deactivated';
+  }
+  next();
+});
 
 // Hash password before saving & Sync Location
 userSchema.pre('save', function (next) {

@@ -101,11 +101,28 @@ const resetPasswordSchema = [
     .withMessage('Password must be at least 6 characters long'),
 ];
 
+// Verify Device validation
+const verifyDeviceSchema = [
+  body('email')
+    .isEmail()
+    .withMessage('Please provide a valid email address')
+    .normalizeEmail(),
+  body('deviceId')
+    .notEmpty()
+    .withMessage('Device ID is required'),
+  body('otp')
+    .isLength({ min: 6, max: 6 })
+    .withMessage('OTP must be 6 digits')
+    .isNumeric()
+    .withMessage('OTP must contain only numbers'),
+];
+
 module.exports = {
   registerSchema,
   loginSchema,
   sendOTPSchema,
   loginOTPSchema,
   resetPasswordSchema,
+  verifyDeviceSchema
 };
 

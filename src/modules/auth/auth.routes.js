@@ -173,5 +173,12 @@ router.post('/verify-registration', validate(authSchema.loginOTPSchema), authCon
  */
 router.post('/resend-otp', validate(authSchema.sendOTPSchema), authController.resendOTP);
 
+/**
+ * @route   POST /api/auth/verify-device
+ * @desc    Verify OTP for device binding
+ * @access  Public
+ */
+router.post('/verify-device', validate(authSchema.verifyDeviceSchema), authController.verifyDevice);
+
 module.exports = router;
 

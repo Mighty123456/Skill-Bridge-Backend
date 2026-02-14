@@ -13,11 +13,19 @@ router.get('/my-jobs', protect, jobController.getWorkerJobs);
 router.get('/posted-jobs', protect, jobController.getTenantJobs);
 router.get('/:id', protect, jobController.getJob);
 router.post('/:id/accept', protect, jobController.acceptJob);
-router.post('/:id/submit-completion', protect, catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.submitCompletion);
-router.post('/:id/confirm-completion', protect, jobController.confirmCompletion);
 
-// Job Execution (Phase 4)
-router.post('/:id/start', protect, authorize('worker'), jobController.startJob);
+// Job Execution Lifecycle
+router.post('/:id/start', protect, authorize('worker'), jobController.confirmArrival); // Was startJob
+router.post('/:id/diagnosis', protect, authorize('worker'), jobController.submitDiagnosis);
+router.post('/:id/diagnosis/approve', protect, authorize('user'), jobController.approveDiagnosis);
+router.post('/:id/materials', protect, authorize('worker'), jobController.requestMaterial);
+router.post('/:id/materials/:requestId/respond', protect, authorize('user'), jobController.respondToMaterial);
+
 router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.completeJob);
+router.post('/:id/confirm-completion', protect, authorize('user'), jobController.confirmCompletion);
+
+router.post('/:id/finalize', protect, jobController.finalizeJob);
+router.post('/:id/dispute', protect, authorize('user'), jobController.raiseDispute);
+router.post('/:id/dispute/resolve', protect, authorize('admin', 'user'), jobController.resolveDispute);
 
 module.exports = router;

@@ -9,6 +9,18 @@ const { authorize } = require('../../common/middleware/role.middleware');
 router.get('/nearby', protect, workerController.getNearbyWorkers);
 router.get('/:id/passport', protect, workerController.getPassport);
 
+// Portfolio
+router.get('/:workerId/portfolio', protect, workerController.getPortfolio);
+router.post('/:workerId/portfolio', protect, workerController.addPortfolioItem);
+router.delete('/portfolio/:id', protect, workerController.deletePortfolioItem);
+
+// Availability
+router.get('/:workerId/availability', protect, workerController.getAvailability);
+router.put('/:workerId/availability', protect, workerController.updateAvailability);
+
+// ETA & Reliability
+router.get('/:workerId/eta-stats', protect, workerController.getEtaStats);
+router.patch('/eta/:jobId', protect, workerController.updateEta);
 
 // Admin / System Routes
 router.post('/check-decay', protect, authorize('admin'), workerController.checkSkillDecay);

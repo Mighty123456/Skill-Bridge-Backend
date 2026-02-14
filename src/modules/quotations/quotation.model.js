@@ -48,6 +48,16 @@ const quotationSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        rankingScore: {
+            type: Number,
+            default: 0,
+            index: true
+        },
+        tier: {
+            type: String,
+            enum: ['top', 'standard', 'entry'],
+            default: 'standard'
+        },
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

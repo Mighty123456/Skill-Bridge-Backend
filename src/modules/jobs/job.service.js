@@ -94,8 +94,8 @@ exports.findAndNotifyNearbyWorkers = async (job) => {
     await NotificationService.sendThrottledJobAlerts(nearbyUsers, job);
 };
 
-exports.getWorkerFeed = async (userId) => {
-    // ... (Existing Logic)
+exports.getWorkerFeed = async (userId, filters = {}) => {
+    // 1. Get Worker Profile & Verify
     const workerProfile = await Worker.findOne({ user: userId });
     if (!workerProfile) throw new Error('Worker profile not found');
     if (workerProfile.verificationStatus !== 'verified') {
@@ -107,22 +107,78 @@ exports.getWorkerFeed = async (userId) => {
     const workerSkills = workerProfile.skills;
     if (!workerSkills || workerSkills.length === 0) return [];
 
-    // Logic for getting jobs... matching existing controller for now to save tokens, 
-    // assuming it calls the same logic.
-    // Re-implementing simplified version for brevity in this tool call:
     const workerUser = await User.findById(userId);
-    let query = { status: 'open', skill_required: { $in: workerSkills } };
-    if (workerUser?.location?.coordinates) {
-        query['location'] = {
-            $near: {
-                $geometry: { type: 'Point', coordinates: workerUser.location.coordinates },
-                $maxDistance: 50000
-            }
-        };
+    if (!workerUser || !workerUser.location || !workerUser.location.coordinates) {
+        throw new Error('Worker location not set');
     }
-    const jobs = await Job.find(query).limit(50);
-    // ... Ranking Logic (omitted for brevity, assume strictly same as before)
-    return jobs.map(j => j.toObject()); // simplified
+
+    // 2. Build Aggregation Pipeline
+    const pipeline = [];
+
+    // GeoNear must be first
+    const maxDistance = (filters.distance || 50) * 1000; // Default 50km
+    pipeline.push({
+        $geoNear: {
+            near: { type: 'Point', coordinates: workerUser.location.coordinates },
+            distanceField: 'distance',
+            maxDistance: maxDistance,
+            spherical: true,
+            query: {
+                status: 'open',
+                skill_required: { $in: workerSkills }
+            }
+        }
+    });
+
+    // Filters
+    if (filters.urgency) {
+        pipeline.push({ $match: { urgency_level: filters.urgency } });
+    }
+    // Estimated Payout (Not in Job model, skipping or assuming derived)
+
+    // Lookup User for Reliability (Mocking reliability if not on User schema)
+    pipeline.push({
+        $lookup: {
+            from: 'users',
+            localField: 'user_id',
+            foreignField: '_id',
+            as: 'client'
+        }
+    });
+    pipeline.push({ $unwind: '$client' });
+
+    // Add Sort Fields
+    // Map urgency to numeric value for sorting
+    pipeline.push({
+        $addFields: {
+            urgencyScore: {
+                $switch: {
+                    branches: [
+                        { case: { $eq: ['$urgency_level', 'emergency'] }, then: 4 },
+                        { case: { $eq: ['$urgency_level', 'high'] }, then: 3 },
+                        { case: { $eq: ['$urgency_level', 'medium'] }, then: 2 },
+                        { case: { $eq: ['$urgency_level', 'low'] }, then: 1 }
+                    ],
+                    default: 0
+                }
+            },
+            clientReliability: { $ifNull: ['$client.rating', 5] } // Default 5 if missing
+        }
+    });
+
+    // Sort: Urgency (Desc), Distance (Asc), Reliability (Desc)
+    pipeline.push({
+        $sort: {
+            urgencyScore: -1,
+            distance: 1,
+            clientReliability: -1
+        }
+    });
+
+    pipeline.push({ $limit: 50 });
+
+    const jobs = await Job.aggregate(pipeline);
+    return jobs;
 };
 
 
@@ -131,42 +187,105 @@ exports.getWorkerFeed = async (userId) => {
 /**
  * Start Job with OTP
  */
-exports.startJob = async (jobId, workerId, otp) => {
-    const job = await Job.findById(jobId).select('+start_otp +start_otp_expires_at');
+/**
+ * B. ETA Confirmation Layer
+ * Worker confirms arrival.
+ */
+const EtaTracking = require('../workers/etaTracking.model');
+
+// ...
+
+/**
+ * B. ETA Confirmation Layer
+ * Worker confirms arrival.
+ */
+exports.confirmArrival = async (jobId, workerId, location) => {
+    const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
 
-    // 1. Constraint: Only assigned worker can access
     if (job.selected_worker_id.toString() !== workerId.toString()) {
         throw new Error('Unauthorized: You are not the assigned worker.');
     }
+    if (job.status !== 'assigned') throw new Error('Job is not in assigned state.');
 
-    // 2. Constraint: Strict Status Transition (Must be 'assigned')
-    if (job.status === 'in_progress') throw new Error('Job already started');
-    if (job.status !== 'assigned') throw new Error('Job not ready to start');
+    // Logic: Check Lateness
+    let is_late = false;
+    let delayMinutes = 0;
+    const arrivalTime = new Date();
 
-    // 3. Constraint: OTP Verification & Expiry
-    if (!job.start_otp || job.start_otp !== otp) {
-        throw new Error('Invalid OTP');
+    // Default to now if not set, but it should be set for assigned jobs
+    const promisedTime = job.preferred_start_time || new Date(job.updatedAt.getTime() + 60 * 60 * 1000);
+
+    if (arrivalTime > promisedTime) {
+        const diffMs = arrivalTime - promisedTime;
+        delayMinutes = Math.floor(diffMs / 60000);
+        if (delayMinutes > 15) is_late = true; // 15 min grace
     }
-    // Check Expiry (if set - Module 3 set generic OTP, now we enforce usage)
-    if (job.start_otp_expires_at && new Date() > job.start_otp_expires_at) {
-        throw new Error('OTP has expired. Ask client to regenerate.');
-    }
 
-    job.status = 'in_progress';
-    job.started_at = new Date();
-
-    // 4. Constraint: Timeline Log
-    appendTimeline(job, 'in_progress', 'worker', 'Job started via OTP verification');
+    job.arrival_confirmation = {
+        confirmed_at: arrivalTime,
+        is_late,
+        worker_location: location
+    };
+    job.status = 'eta_confirmed';
+    appendTimeline(job, 'eta_confirmed', 'worker', is_late ? `Worker arrived late by ${delayMinutes} mins` : 'Worker arrived on time');
 
     await job.save();
 
-    // Notify
+    // 1.4.2 C: ETA Accuracy Tracking
+    try {
+        await EtaTracking.create({
+            worker: workerId,
+            job: jobId,
+            status: 'arrived',
+            promisedArrival: promisedTime,
+            actualArrival: arrivalTime,
+            delayMinutes: delayMinutes,
+            isLate: is_late,
+            accuracyPercentage: is_late ? Math.max(0, 100 - (delayMinutes * 2)) : 100 // Simple decay function
+        });
+    } catch (e) {
+        logger.error('Failed to create ETA Tracking record', e);
+    }
+
+    // Penalty if late
+    if (is_late) {
+        const worker = await Worker.findOne({ user: workerId });
+        if (worker) {
+            worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 10); // Penalty
+            await worker.save();
+        }
+    }
+
+    return job;
+};
+
+/**
+ * C. Diagnosis Mode: Submit Report
+ */
+exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    // Allow if assigned or eta_confirmed
+    if (!['assigned', 'eta_confirmed'].includes(job.status)) throw new Error('Invalid job status for diagnosis');
+
+    job.diagnosis_report = {
+        ...diagnosisData,
+        submitted_at: new Date(),
+        status: 'pending'
+    };
+    job.status = 'diagnosis_mode';
+    appendTimeline(job, 'diagnosis_mode', 'worker', 'Diagnosis report submitted');
+
+    await job.save();
+
+    // Notify User
     await NotificationService.createNotification({
         recipient: job.user_id,
-        title: 'Job Started',
-        message: `Worker has verified OTP and started the job.`,
-        type: 'job_started',
+        title: 'Diagnosis Report Ready',
+        message: 'Worker has submitted final estimation. Please review to start job.',
+        type: 'action_required',
         data: { jobId: job._id }
     });
 
@@ -174,41 +293,122 @@ exports.startJob = async (jobId, workerId, otp) => {
 };
 
 /**
- * Submit Completion Proof
+ * C. Diagnosis Mode: Approve/Reject
+ */
+exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+
+    if (approved) {
+        // Escrow Activation Mock
+        job.status = 'in_progress';
+        job.diagnosis_report.status = 'approved';
+        job.diagnosis_report.approved_at = new Date();
+        job.started_at = new Date(); // Job officially starts
+        appendTimeline(job, 'in_progress', 'user', 'Diagnosis approved. Escrow locked. Job started.');
+
+        // Notify Worker
+        await NotificationService.createNotification({
+            recipient: job.selected_worker_id,
+            title: 'Job Started',
+            message: 'Diagnosis approved. You can begin work.',
+            type: 'job_started',
+            data: { jobId: job._id }
+        });
+    } else {
+        job.diagnosis_report.status = 'rejected';
+        job.diagnosis_report.rejection_reason = rejectionReason;
+        job.status = 'eta_confirmed'; // Send back to step before? Or cancel?
+        // Let's allow resubmission
+        appendTimeline(job, 'eta_confirmed', 'user', `Diagnosis rejected: ${rejectionReason}`);
+    }
+
+    await job.save();
+    return job;
+};
+
+/**
+ * D. Material Approval Subflow: Request
+ */
+exports.requestMaterial = async (jobId, workerId, requestData) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    if (job.status !== 'in_progress') throw new Error('Job must be in progress');
+
+    job.material_requests.push({
+        ...requestData, // item_name, cost, bill_proof, reason
+        status: 'pending',
+        requested_at: new Date()
+    });
+    job.status = 'material_pending_approval'; // Pause job? Or keeps running? Prompt says "Status -> MATERIAL_PENDING_APPROVAL"
+    appendTimeline(job, 'material_pending_approval', 'worker', `Material requested: ${requestData.item_name}`);
+
+    await job.save();
+
+    // Notify User
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Additional Material Requested',
+        message: `Worker needs approval for ${requestData.item_name} (${requestData.cost})`,
+        type: 'action_required',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
+ * D. Material Approval Subflow: Respond
+ */
+exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+
+    const request = job.material_requests.id(requestId);
+    if (!request) throw new Error('Request not found');
+
+    request.status = approved ? 'approved' : 'rejected';
+    request.responded_at = new Date();
+
+    // Check if any other pending?
+    const hasPending = job.material_requests.some(r => r.status === 'pending');
+    if (!hasPending) {
+        job.status = 'in_progress'; // Resume
+    }
+
+    appendTimeline(job, job.status, 'user', `Material ${approved ? 'Approved' : 'Rejected'}`);
+
+    await job.save();
+    return job;
+};
+
+/**
+ * Submit Completion Proof (Existing - Updated constraints)
  */
 exports.submitCompletion = async (jobId, workerId, files) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
-
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+    // Allow from in_progress
     if (job.status !== 'in_progress') throw new Error('Job must be in progress to complete.');
 
-    // 1. Constraint: Job cannot be completed without proof upload
-    if (!files || files.length === 0) {
-        throw new Error('Proof of work (photos) is required to complete the job.');
-    }
-
-    const completion_photos = [];
-    // Assume Controller handles the buffer-to-upload logic or passes file objects
-    // Here we assume 'files' contains uploaded URLs or we process them.
-    // For separation of concerns, let's assume Controller uploads and passes URLs, 
-    // OR we inject the Cloudinary service here. 
-    // Let's assume files are Multer objects and we upload here for purity.
-
+    let completion_photos = [];
     if (files && files.length > 0) {
         const uploadPromises = files.map(file =>
             cloudinaryService.uploadOptimizedImage(file.buffer, `skillbridge/completion/${jobId}`)
         );
         const uploadResults = await Promise.all(uploadPromises);
-        uploadResults.forEach(result => completion_photos.push(result.url));
+        completion_photos = uploadResults.map(r => r.url);
     }
 
     job.status = 'reviewing';
     job.completion_photos = completion_photos;
-    job.completed_at = new Date(); // Tentative completion time
+    job.completed_at = new Date();
 
     appendTimeline(job, 'reviewing', 'worker', 'Completion proof submitted');
-
     await job.save();
 
     await NotificationService.createNotification({
@@ -223,26 +423,64 @@ exports.submitCompletion = async (jobId, workerId, files) => {
 };
 
 /**
- * Confirm Completion (Client)
+ * E. Cooling Window (Prev. Confirm Completion)
  */
 exports.confirmCompletion = async (jobId, userId) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
-
     if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
     if (job.status !== 'reviewing') throw new Error('Job is not under review');
 
-    // Constraint: Job cannot reopen after payment release (implied by 'completed' final state)
-    // Release Payment Logic would go here (Stripe/Wallet)
+    // NEW: Cooling Window
+    job.status = 'cooling_window';
+    job.cooling_period = {
+        starts_at: new Date(),
+        ends_at: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
+        dispute_raised: false
+    };
 
+    appendTimeline(job, 'cooling_window', 'user', 'Client confirmed work. Cooling period started (24h).');
+    await job.save();
+
+    // Notify Worker
+    await NotificationService.createNotification({
+        recipient: job.selected_worker_id,
+        title: 'Work Accepted',
+        message: 'Client accepted work. Payment triggers in 24 hours if no disputes.',
+        type: 'info',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+/**
+ * F. Finalize Job (Post Cooling Window)
+ * Should be called by a scheduler or manual trigger after 24 hours.
+ */
+exports.finalizeJob = async (jobId) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+
+    if (job.status !== 'cooling_window') throw new Error('Job is not in cooling window');
+
+    // Check time
+    if (new Date() < new Date(job.cooling_period.ends_at)) {
+        throw new Error('Cooling period has not ended yet');
+    }
+
+    if (job.cooling_period.dispute_raised) {
+        throw new Error('Cannot finalize: Dispute is active');
+    }
+
+    // Release Payment
     job.status = 'completed';
-    job.payment_released = true; // Mark payment as logically released
-
-    appendTimeline(job, 'completed', 'user', 'Client confirmed completion');
+    job.payment_released = true;
+    appendTimeline(job, 'completed', 'system', 'Cooling period ended. Payment released.');
 
     await job.save();
 
-    // Update Worker Stats (Passport)
+    // Update Worker Stats (Passport) - Moved from confirmCompletion
     try {
         const worker = await Worker.findOne({ user: job.selected_worker_id });
         if (worker) {
@@ -260,14 +498,80 @@ exports.confirmCompletion = async (jobId, userId) => {
         logger.error('Failed to update worker stats', e);
     }
 
+    // Notify Both
     await NotificationService.createNotification({
         recipient: job.selected_worker_id,
-        title: 'Job Completed',
-        message: 'Client accepted your work. Payment released.',
-        type: 'job_completed',
+        title: 'Payment Released',
+        message: 'Job finalized successfully. Payment has been credited.',
+        type: 'payment_received',
         data: { jobId: job._id }
     });
 
+    return job;
+};
+
+
+
+/**
+ * G. Dispute Handling
+ */
+exports.raiseDispute = async (jobId, userId, reason) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+
+    // Allow dispute during cooling window (or execution if critical, but prompt emphasized cooling)
+    if (job.status !== 'cooling_window') throw new Error('Disputes can only be raised during the cooling window.');
+    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+
+    job.status = 'disputed';
+    job.dispute = {
+        is_disputed: true,
+        reason: reason,
+        opened_at: new Date(),
+        status: 'open'
+    };
+    job.cooling_period.dispute_raised = true;
+
+    appendTimeline(job, 'disputed', 'user', `Dispute raised: ${reason}`);
+    await job.save();
+
+    // Notify Admin & Worker
+    // await NotificationService.notifyAdmin(...) 
+    await NotificationService.createNotification({
+        recipient: job.selected_worker_id,
+        title: 'Dispute Raised',
+        message: 'Client has raised a dispute. Payment is on hold until resolved.',
+        type: 'alert',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+exports.resolveDispute = async (jobId, adminId, decision, notes) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (!job.dispute.is_disputed) throw new Error('Job is not disputed');
+
+    job.dispute.status = 'resolved';
+    job.dispute.resolved_at = new Date();
+
+    // Decision Logic: 'refund' or 'release'
+    if (decision === 'release_payment') {
+        job.status = 'completed';
+        job.payment_released = true;
+        appendTimeline(job, 'completed', 'admin', `Dispute resolved (Release Payment). Note: ${notes}`);
+    } else if (decision === 'refund_client') {
+        job.status = 'cancelled';
+        job.payment_released = false; // Refund logic would happen here
+        appendTimeline(job, 'cancelled', 'admin', `Dispute resolved (Refund Client). Note: ${notes}`);
+    } else {
+        // Continue cooling?
+        job.status = 'cooling_window';
+        appendTimeline(job, 'cooling_window', 'admin', `Dispute resolved (Continue Cooling). Note: ${notes}`);
+    }
+
+    await job.save();
     return job;
 };
 

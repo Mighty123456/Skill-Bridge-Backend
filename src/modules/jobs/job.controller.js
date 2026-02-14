@@ -225,26 +225,73 @@ exports.getTenantJobs = async (req, res) => {
 
 // Start Job (Phase 4: Worker enters OTP)
 // Start Job (Phase 4: Worker enters OTP)
-exports.startJob = async (req, res) => {
+// Worker confirms arrival (Replaces startJob)
+exports.confirmArrival = async (req, res) => {
     try {
         const { id } = req.params;
-        const { otp } = req.body;
+        let { location } = req.body;
+        // Handle potential string location if multi-part (unlikely here but safe)
+        if (typeof location === 'string') {
+            try { location = JSON.parse(location); } catch (e) { }
+        }
 
-        const job = await JobService.startJob(id, req.user._id, otp);
-
-        res.json({ success: true, message: 'Job started successfully', data: job });
-
+        const job = await JobService.confirmArrival(id, req.user._id, location);
+        res.json({ success: true, message: 'Arrival confirmed', data: job });
     } catch (error) {
-        logger.error('Start Job Error:', error);
-        res.status(500).json({ success: false, message: error.message || 'Failed to start job' });
+        logger.error('Confirm Arrival Error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// Aliases for route consistency if needed, but we already have submitCompletion
-// Aliases for route consistency if needed, but we already have submitCompletion
-exports.submitCompletion = exports.submitCompletion; // Ensure direct access
-exports.completeJob = async (req, res) => {
-    return exports.submitCompletion(req, res);
+// Diagnosis Mode
+exports.submitDiagnosis = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const diagnosisData = req.body; // materials, final_labor_cost, etc.
+        const job = await JobService.submitDiagnosis(id, req.user._id, diagnosisData);
+        res.json({ success: true, message: 'Diagnosis submitted', data: job });
+    } catch (error) {
+        logger.error('Submit Diagnosis Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.approveDiagnosis = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { approved, rejectionReason } = req.body;
+        const job = await JobService.approveDiagnosis(id, req.user._id, approved, rejectionReason);
+        res.json({ success: true, message: approved ? 'Diagnosis approved, job started' : 'Diagnosis rejected', data: job });
+    } catch (error) {
+        logger.error('Approve Diagnosis Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Material Requests
+exports.requestMaterial = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const requestData = req.body; // item_name, cost, reason, bill_proof (url)
+        // If file uploaded logic needed, handle here similar to completion
+        const job = await JobService.requestMaterial(id, req.user._id, requestData);
+        res.json({ success: true, message: 'Material requested', data: job });
+    } catch (error) {
+        logger.error('Request Material Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.respondToMaterial = async (req, res) => {
+    try {
+        const { id, requestId } = req.params;
+        const { approved } = req.body;
+        const job = await JobService.respondToMaterial(id, req.user._id, requestId, approved);
+        res.json({ success: true, message: 'Material response recorded', data: job });
+    } catch (error) {
+        logger.error('Respond Material Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 };
 
 // Worker submits completion proof
@@ -259,15 +306,52 @@ exports.submitCompletion = async (req, res) => {
     }
 };
 
-// Tenant confirms completion
+// Tenant confirms completion (Starts Cooling Window)
 exports.confirmCompletion = async (req, res) => {
     try {
         const { id } = req.params;
         const job = await JobService.confirmCompletion(id, req.user._id);
-        res.json({ success: true, message: 'Job marked as completed successfully', data: job });
+        res.json({ success: true, message: 'Work accepted. Cooling period started.', data: job });
     } catch (error) {
         logger.error('Confirm Completion Error:', error);
         res.status(500).json({ success: false, message: error.message || 'Failed to confirm completion' });
+    }
+};
+
+// Finalize (Post Cooling)
+exports.finalizeJob = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await JobService.finalizeJob(id); // Usually triggered by system, but maybe admin/user manual trigger
+        res.json({ success: true, message: 'Job finalized and payment released', data: job });
+    } catch (error) {
+        logger.error('Finalize Job Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Disputes
+exports.raiseDispute = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const job = await JobService.raiseDispute(id, req.user._id, reason);
+        res.json({ success: true, message: 'Dispute raised', data: job });
+    } catch (error) {
+        logger.error('Raise Dispute Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.resolveDispute = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { decision, notes } = req.body; // admin only
+        const job = await JobService.resolveDispute(id, req.user._id, decision, notes);
+        res.json({ success: true, message: 'Dispute resolved', data: job });
+    } catch (error) {
+        logger.error('Resolve Dispute Error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

@@ -33,6 +33,22 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
     const existing = await Quotation.findOne({ job_id: quotationData.job_id, worker_id: user._id });
     if (existing) throw new Error('You have already submitted a quotation for this job');
 
+    // Constraint: Max 10 bids per job
+    const bidCount = await Quotation.countDocuments({ job_id: quotationData.job_id });
+    if (bidCount >= 10) {
+        throw new Error('This job has reached the maximum number of bids (10).');
+    }
+
+    // 5. Availability Check (Clash Prevention)
+    const { isWorkerAvailable } = require('../workers/worker.controller');
+    if (job.preferred_start_time) {
+        const available = await isWorkerAvailable(workerProfile._id, job.preferred_start_time);
+        if (!available) {
+            throw new Error('You have a scheduling conflict at the requested job time. Please update your availability.');
+        }
+    }
+
+
     // 5. Handling Video Pitch (Validation Constraint: duration <= 30s)
     let video_url = null;
     if (videoFile) {
@@ -74,6 +90,12 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
         }
     }
 
+    // A. Rule-Based Ranking Engine
+    const rScore = (workerProfile.reliabilityScore || 50) + ((workerProfile.rating || 0) * 10);
+    let rTier = 'entry';
+    if (rScore >= 130) rTier = 'top'; // e.g. 80 reliability + 5.0 rating = 130
+    else if (rScore >= 90) rTier = 'standard';
+
     const quotation = new Quotation({
         job_id: quotationData.job_id,
         worker_id: user._id,
@@ -83,7 +105,9 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
         estimated_days: Number(quotationData.estimated_days),
         notes: quotationData.notes,
         tags: quotationData.tags,
-        video_url
+        video_url,
+        rankingScore: rScore,
+        tier: rTier
     });
 
     await quotation.save();
@@ -125,14 +149,20 @@ exports.getQuotationsForJob = async (jobId, userId) => {
         return {
             ...q.toObject(),
             worker_rating: workerProfile ? workerProfile.rating : 0,
+            worker_reliability: workerProfile ? workerProfile.reliabilityScore : 0,
             worker_jobs_completed: jobsCompleted,
             worker_verified: workerProfile ? workerProfile.verificationStatus === 'verified' : false
         };
     });
 
-    // Sort: Lowest Price, then Rating
+    // Sort: Ranking Score (Desc) -> Lowest Price (Asc) -> Rating (Desc)
     enriched.sort((a, b) => {
-        if (a.total_cost !== b.total_cost) return a.total_cost - b.total_cost;
+        // Use pre-calculated ranking score if available (falling back to 0 just in case)
+        const scoreA = a.rankingScore || 0;
+        const scoreB = b.rankingScore || 0;
+
+        if (scoreB !== scoreA) return scoreB - scoreA; // High score first
+        if (a.total_cost !== b.total_cost) return a.total_cost - b.total_cost; // Low price first
         return b.worker_rating - a.worker_rating;
     });
 

@@ -116,6 +116,7 @@ router.use('/chats', require('../modules/chat/chat.routes'));
 // Add other route modules here
 // router.use('/users', userRoutes);
 router.use('/workers', require('../modules/workers/worker.routes'));
+router.use('/payments', require('../modules/payments/payment.routes'));
 // router.use('/jobs', jobRoutes);
 
 module.exports = router;

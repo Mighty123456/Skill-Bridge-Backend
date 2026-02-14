@@ -57,6 +57,9 @@ const jobSchema = new mongoose.Schema(
             type: Number,
             default: 24,
         },
+        preferred_start_time: {
+            type: Date,
+        },
         quotation_start_time: {
             type: Date,
             default: Date.now,
@@ -66,7 +69,7 @@ const jobSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['open', 'assigned', 'in_progress', 'reviewing', 'completed', 'cancelled'],
+            enum: ['open', 'assigned', 'eta_confirmed', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed'],
             default: 'open',
             index: true,
         },
@@ -86,6 +89,46 @@ const jobSchema = new mongoose.Schema(
         start_otp: { type: String, select: false }, // Hidden by default
         started_at: { type: Date },
         completed_at: { type: Date },
+
+        // B. ETA Confirmation Layer
+        arrival_confirmation: {
+            confirmed_at: Date,
+            is_late: Boolean,
+            worker_location: {
+                lat: Number,
+                lng: Number
+            }
+        },
+
+        // C. Diagnosis Mode
+        diagnosis_report: {
+            materials: [{ name: String, estimated_cost: Number }],
+            final_labor_cost: Number,
+            final_total_cost: Number,
+            photos: [String],
+            status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+            submitted_at: Date,
+            approved_at: Date,
+            rejection_reason: String
+        },
+
+        // D. Material Approval Subflow
+        material_requests: [{
+            item_name: String,
+            cost: Number,
+            bill_proof: String, // URL
+            reason: String,
+            status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
+            requested_at: { type: Date, default: Date.now },
+            responded_at: Date
+        }],
+
+        // E. Cooling Window
+        cooling_period: {
+            starts_at: Date,
+            ends_at: Date,
+            dispute_raised: { type: Boolean, default: false }
+        },
 
         // Warranty / Recall Tracking
         warranty_claim: {

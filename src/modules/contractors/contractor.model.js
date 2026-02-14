@@ -39,6 +39,22 @@ const contractorSchema = new mongoose.Schema(
             default: 5.0
         },
 
+        // Trust Score
+        reliabilityScore: {
+            type: Number,
+            min: 0,
+            max: 100,
+            default: 50, // Initial Score
+            index: true
+        },
+
+        // Reliability detailed stats
+        reliabilityStats: {
+            punctuality: { type: Number, default: 0 },
+            disputes: { type: Number, default: 0 },
+            cancellations: { type: Number, default: 0 },
+        },
+
         // Verification Documents (URLs)
         governmentId: {
             type: String,
