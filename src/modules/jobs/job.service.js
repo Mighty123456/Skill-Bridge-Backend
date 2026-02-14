@@ -427,8 +427,8 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    // Allow if assigned or eta_confirmed
-    if (!['assigned', 'eta_confirmed'].includes(job.status)) throw new Error('Invalid job status for diagnosis');
+    // Allow if assigned, eta_confirmed, or arrived
+    if (!['assigned', 'eta_confirmed', 'arrived'].includes(job.status)) throw new Error('Invalid job status for diagnosis');
 
     job.diagnosis_report = {
         ...diagnosisData,
