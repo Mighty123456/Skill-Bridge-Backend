@@ -123,6 +123,7 @@ exports.getWorkerFeed = async (userId, filters = {}) => {
             distanceField: 'distance',
             maxDistance: maxDistance,
             spherical: true,
+            key: 'location',
             query: {
                 status: 'open',
                 skill_required: { $in: workerSkills }
