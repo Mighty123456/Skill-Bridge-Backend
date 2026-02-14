@@ -11,7 +11,7 @@ const logger = require('../../config/logger');
 // Create a new quotation
 exports.createQuotation = async (req, res) => {
     try {
-        const { job_id, labor_cost, material_cost, estimated_days, notes, tags } = req.body;
+        const { job_id, labor_cost, material_cost, estimated_days, notes, tags, arrival_time, completion_time, warranty } = req.body;
 
         let parsedTags = [];
         try {
@@ -26,6 +26,9 @@ exports.createQuotation = async (req, res) => {
             material_cost,
             estimated_days,
             notes,
+            arrival_time,
+            completion_time,
+            warranty,
             tags: parsedTags
         };
 

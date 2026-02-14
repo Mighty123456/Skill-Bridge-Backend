@@ -203,7 +203,7 @@ exports.confirmEta = async (jobId, workerId, etaTime) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    if (job.status !== 'assigned') throw new Error('Job must be in assigned state to set ETA');
+    if (job.status !== 'assigned' && job.status !== 'eta_confirmed') throw new Error('Job must be in assigned state to set ETA');
 
     job.status = 'eta_confirmed';
     job.journey = job.journey || {};

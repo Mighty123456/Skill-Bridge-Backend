@@ -178,7 +178,7 @@ exports.getWorkerJobs = async (req, res) => {
         };
 
         if (status === 'active') {
-            query.status = { $in: ['in_progress', 'assigned', 'reviewing'] };
+            query.status = { $in: ['assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window'] };
         } else if (status === 'completed') {
             query.status = 'completed';
         }
@@ -206,7 +206,7 @@ exports.getTenantJobs = async (req, res) => {
         if (status === 'pending') {
             query.status = 'open';
         } else if (status === 'active') {
-            query.status = { $in: ['in_progress', 'assigned', 'reviewing'] };
+            query.status = { $in: ['assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window'] };
         } else if (status === 'completed') {
             query.status = 'completed';
         }

@@ -105,6 +105,9 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
         estimated_days: Number(quotationData.estimated_days),
         notes: quotationData.notes,
         tags: quotationData.tags,
+        arrival_time: quotationData.arrival_time ? new Date(quotationData.arrival_time) : undefined,
+        completion_time: quotationData.completion_time ? new Date(quotationData.completion_time) : undefined,
+        warranty: quotationData.warranty,
         video_url,
         rankingScore: rScore,
         tier: rTier

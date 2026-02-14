@@ -58,6 +58,16 @@ const quotationSchema = new mongoose.Schema(
             enum: ['top', 'standard', 'entry'],
             default: 'standard'
         },
+        arrival_time: {
+            type: Date,
+        },
+        completion_time: {
+            type: Date,
+        },
+        warranty: {
+            type: String, // e.g., "6 months", "1 year"
+            trim: true,
+        },
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
