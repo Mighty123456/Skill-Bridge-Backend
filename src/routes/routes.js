@@ -117,6 +117,7 @@ router.use('/chats', require('../modules/chat/chat.routes'));
 // router.use('/users', userRoutes);
 router.use('/workers', require('../modules/workers/worker.routes'));
 router.use('/payments', require('../modules/payments/payment.routes'));
+router.use('/upload', require('../modules/upload/upload.routes')); // Generic Upload Route
 // router.use('/jobs', jobRoutes);
 
 module.exports = router;

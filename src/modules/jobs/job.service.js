@@ -535,6 +535,18 @@ exports.raiseDispute = async (jobId, userId, reason) => {
     appendTimeline(job, 'disputed', 'user', `Dispute raised: ${reason}`);
     await job.save();
 
+    // Update Worker Stats
+    try {
+        const worker = await Worker.findOne({ user: job.selected_worker_id });
+        if (worker) {
+            worker.reliabilityStats = worker.reliabilityStats || { disputes: 0, cancellations: 0, punctuality: 0 };
+            worker.reliabilityStats.disputes += 1;
+            await worker.save();
+        }
+    } catch (e) {
+        logger.error('Failed to update worker dispute stats', e);
+    }
+
     // Notify Admin & Worker
     // await NotificationService.notifyAdmin(...) 
     await NotificationService.createNotification({
