@@ -226,6 +226,7 @@ exports.getTenantJobs = async (req, res) => {
 // Start Job (Phase 4: Worker enters OTP)
 // Start Job (Phase 4: Worker enters OTP)
 // Worker confirms arrival (Replaces startJob)
+// Worker confirms arrival (Replaces startJob)
 exports.confirmArrival = async (req, res) => {
     try {
         const { id } = req.params;

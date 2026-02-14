@@ -51,7 +51,6 @@ const paymentSchema = new mongoose.Schema(
     }
 );
 
-paymentSchema.index({ transactionId: 1 });
 paymentSchema.index({ user: 1 });
 paymentSchema.index({ worker: 1 });
 paymentSchema.index({ job: 1 });
