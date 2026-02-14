@@ -750,5 +750,7 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
 
 exports.getJobById = async (jobId) => {
     // Return full job details including timeline
-    return Job.findById(jobId).populate('user_id', 'name phone address');
+    return Job.findById(jobId)
+        .populate('user_id', 'name phone address')
+        .populate('selected_worker_id', 'name phone profileImage');
 };
