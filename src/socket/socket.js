@@ -139,9 +139,9 @@ const initializeSocket = (server) => {
         });
 
         socket.on('update_location', (data) => {
-            const { jobId, lat, lng } = data;
+            const { jobId, lat, lng, heading } = data;
             // Broadcast to everyone tracking this job (except sender)
-            socket.to(`job_${jobId}`).emit('location_update', { lat, lng });
+            socket.to(`job_${jobId}`).emit('location_update', { lat, lng, heading });
         });
 
         // Handle new message
