@@ -53,3 +53,14 @@ exports.deleteNotification = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+exports.markAllAsRead = async (req, res) => {
+    try {
+        await Notification.updateMany(
+            { recipient: req.user._id, read: false },
+            { read: true }
+        );
+        res.json({ success: true, message: 'All notifications marked as read' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

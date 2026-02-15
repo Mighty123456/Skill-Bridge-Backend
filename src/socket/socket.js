@@ -39,6 +39,39 @@ const initializeSocket = (server) => {
         // Broadcast that user is online
         io.emit('user_status_change', { userId, status: 'online' });
 
+        // ✅ AUTO-DELIVER: Mark all undelivered messages for this user as 'delivered'
+        const markDelivered = async () => {
+            try {
+                // Find messages where this user is a participant but hasn't had the message delivered
+                const userChats = await Chat.find({ participants: userId });
+                const chatIds = userChats.map(c => c._id);
+
+                const undeliveredMessages = await Message.find({
+                    chatId: { $in: chatIds },
+                    senderId: { $ne: userId },
+                    deliveredTo: { $ne: userId }
+                });
+
+                if (undeliveredMessages.length > 0) {
+                    await Message.updateMany(
+                        { _id: { $in: undeliveredMessages.map(m => m._id) } },
+                        { $addToSet: { deliveredTo: userId } }
+                    );
+
+                    // Notify rooms
+                    chatIds.forEach(cId => {
+                        io.to(cId.toString()).emit('messages_delivered', {
+                            chatId: cId,
+                            deliveredTo: userId
+                        });
+                    });
+                }
+            } catch (err) {
+                logger.error(`Error marking delivered: ${err.message}`);
+            }
+        };
+        markDelivered();
+
         // Join a personal room for notifications
         socket.join(userId);
 
@@ -52,8 +85,46 @@ const initializeSocket = (server) => {
         });
 
         socket.on('leave_chat', (chatId) => {
-            socket.leave(chatId.toString());
-            logger.info(`User ${userId} left chat: ${chatId}`);
+            const chatIdStr = chatId.toString();
+            socket.leave(chatIdStr);
+            logger.info(`User ${userId} left chat: ${chatIdStr}`);
+        });
+
+        // ✅ Mark Messages as Read
+        socket.on('mark_read', async (data) => {
+            try {
+                const { chatId } = data;
+                const chatIdStr = chatId.toString();
+
+                // Find unread messages in this chat sent by the OTHER person
+                const unreadMessages = await Message.find({
+                    chatId: chatIdStr,
+                    senderId: { $ne: userId },
+                    readBy: { $ne: userId }
+                });
+
+                if (unreadMessages.length > 0) {
+                    const messageIds = unreadMessages.map(m => m._id);
+                    await Message.updateMany(
+                        { _id: { $in: messageIds } },
+                        { $addToSet: { readBy: userId, deliveredTo: userId } }
+                    );
+
+                    // Update unread count
+                    await Chat.findByIdAndUpdate(chatIdStr, {
+                        $set: { [`unreadCounts.${userId}`]: 0 }
+                    });
+
+                    // Broadcast to the room so sender sees blue ticks
+                    io.to(chatIdStr).emit('messages_read', {
+                        chatId: chatIdStr,
+                        messageIds: messageIds,
+                        readBy: userId
+                    });
+                }
+            } catch (e) {
+                logger.error(`Socket mark_read error: ${e.message}`);
+            }
         });
 
         // --- Real-time Location Tracking ---
