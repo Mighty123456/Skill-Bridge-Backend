@@ -6,13 +6,24 @@ const cloudinaryService = require('../../common/services/cloudinary.service'); /
 const { calculateDistance } = require('../../common/utils/geo');
 const logger = require('../../config/logger');
 
+// === HELPER: Sanitize PII ===
+const sanitizeNote = (text) => {
+    if (!text) return '';
+    // Mask Phone Numbers (simple pattern)
+    let sanitized = text.replace(/\b\d{10}\b/g, '[PHONE-REDACTED]');
+    // Mask Emails
+    sanitized = sanitized.replace(/\b[\w\.-]+@[\w\.-]+\.\w{2,4}\b/gi, '[EMAIL-REDACTED]');
+    return sanitized;
+};
+
 // === HELPER: Append to Timeline ===
-const appendTimeline = (job, status, actor, note = '') => {
+const appendTimeline = (job, status, actor, note = '', metadata = null) => {
     job.timeline.push({
         status,
         timestamp: new Date(),
         actor,
-        note
+        note: sanitizeNote(note),
+        metadata
     });
 };
 
@@ -268,6 +279,26 @@ exports.arrive = async (jobId, workerId, location) => {
         throw new Error('Invalid job status for arrival');
     }
 
+    // 1. Geofence Check (Production Constraint)
+    const jobCoords = { lat: job.location.coordinates[1], lng: job.location.coordinates[0] };
+    const workerCoords = location; // { lat, lng }
+
+    let geofenceWarning = null;
+    if (workerCoords && workerCoords.lat && workerCoords.lng) {
+        const distanceKm = calculateDistance(
+            jobCoords.lat, jobCoords.lng,
+            workerCoords.lat, workerCoords.lng
+        );
+
+        if (distanceKm > 0.5) { // 500m threshold
+            // In strict mode, we'd throw error. For now, we allow with a flagged warning in timeline.
+            // throw new Error(`You are too far from the job location (${distanceKm.toFixed(2)}km). Please get closer.`);
+            geofenceWarning = `Warning: Force Arrival used (Distance: ${distanceKm.toFixed(2)}km)`;
+        }
+    } else {
+        geofenceWarning = 'Warning: No GPS location provided at arrival.';
+    }
+
     // Logic: Check Lateness based on Confirmed ETA
     let is_late = false;
     let delayMinutes = 0;
@@ -286,15 +317,16 @@ exports.arrive = async (jobId, workerId, location) => {
     job.journey.arrived_at = arrivalTime;
     job.journey.worker_location = location;
 
-    // Backward compatibility if needed, but mainly use journey object now
-    job.arrival_confirmation = {
-        confirmed_at: arrivalTime,
-        is_late,
-        worker_location: location
-    };
-
     job.status = 'arrived';
-    appendTimeline(job, 'arrived', 'worker', is_late ? `Worker arrived late by ${delayMinutes} mins` : 'Worker arrived on time');
+
+    let note = is_late ? `Worker arrived late by ${delayMinutes} mins` : 'Worker arrived on time';
+    if (geofenceWarning) note += `. ${geofenceWarning}`;
+
+    appendTimeline(job, 'arrived', 'worker', note, {
+        lat: location?.lat,
+        lng: location?.lng,
+        distance_check: geofenceWarning ? 'failed' : 'passed'
+    });
 
     await job.save();
 
@@ -394,18 +426,40 @@ exports.startJob = async (jobId, workerId, otp) => {
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
 
+    // 1. Security: Check Lockout
+    if (job.start_otp_lockout_until && new Date() < job.start_otp_lockout_until) {
+        const minutesLeft = Math.ceil((job.start_otp_lockout_until - new Date()) / 60000);
+        throw new Error(`Security Lockout: Too many failed attempts. Try again in ${minutesLeft} minutes.`);
+    }
+
     if (job.status !== 'arrived') {
         // Optionally allow if skipped journey/etc? No, strict flow.
         // throw new Error('You must confirm arrival first.');
     }
 
     if (!job.start_otp || job.start_otp !== otp) {
-        throw new Error('Invalid OTP. Please ask the customer for the code.');
+        // 2. Security: Increment Attempts & Lock
+        job.start_otp_attempts = (job.start_otp_attempts || 0) + 1;
+
+        if (job.start_otp_attempts >= 3) {
+            job.start_otp_lockout_until = new Date(Date.now() + 5 * 60000); // 5 mins lockout
+            job.start_otp_attempts = 0; // Reset counter for next cycle
+            appendTimeline(job, job.status, 'system', 'Security Alert: OTP Lockout triggered due to 3 failed attempts.', { type: 'security_alert' });
+            await job.save();
+            throw new Error('Invalid OTP. Account locked for 5 minutes due to multiple failed attempts.');
+        }
+
+        await job.save();
+        throw new Error(`Invalid OTP. Please ask the customer for the code. (${3 - job.start_otp_attempts} attempts remaining)`);
     }
+
+    // Success: Reset counters
+    job.start_otp_attempts = 0;
+    job.start_otp_lockout_until = null;
 
     job.status = 'in_progress';
     job.started_at = new Date();
-    appendTimeline(job, 'in_progress', 'worker', 'Job started via OTP verification.');
+    appendTimeline(job, 'in_progress', 'worker', 'Job started via OTP verification.', { otp_verified: true });
 
     await job.save();
 

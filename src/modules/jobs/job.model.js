@@ -145,14 +145,17 @@ const jobSchema = new mongoose.Schema(
         },
 
         // Module 4: Execution & Timeline
-        start_otp_expires_at: { type: Date, select: false },
+        // Security & Constraints
+        start_otp_attempts: { type: Number, default: 0 },
+        start_otp_lockout_until: { type: Date },
 
         timeline: [
             {
                 status: { type: String, required: true },
                 timestamp: { type: Date, default: Date.now },
-                note: { type: String },
-                actor: { type: String, enum: ['user', 'worker', 'system', 'admin'] } // Who performed the action
+                actor: { type: String, enum: ['user', 'worker', 'system', 'admin'] },
+                note: { type: String }, // Sanitized text
+                metadata: { type: mongoose.Schema.Types.Mixed } // For transaction IDs, warnings, lat/lng, etc.
             }
         ],
 
