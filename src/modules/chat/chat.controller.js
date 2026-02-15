@@ -357,7 +357,10 @@ exports.sendMessage = async (req, res) => {
             const { getIo } = require('../../socket/socket');
             const io = getIo();
             const chatIdStr = chatId.toString();
-            io.to(chatIdStr).emit('receive_message', message);
+
+            // Convert Mongoose doc to plain object for socket emit to ensure reliable serialization
+            const messageObj = message.toObject ? message.toObject() : message;
+            io.to(chatIdStr).emit('receive_message', messageObj);
 
             // 7. Inject System Warning if triggered
             if (systemWarningMessage) {
