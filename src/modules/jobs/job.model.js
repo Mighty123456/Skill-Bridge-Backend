@@ -115,7 +115,12 @@ const jobSchema = new mongoose.Schema(
             status: { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
             submitted_at: Date,
             approved_at: Date,
-            rejection_reason: String
+            rejection_reason: String,
+            // Warranty Details
+            warranty_offered: { type: Boolean, default: false },
+            warranty_cost: { type: Number, default: 0 },
+            warranty_duration_days: { type: Number, default: 0 },
+            warranty_description: { type: String }
         },
 
         // D. Material Approval Subflow
@@ -168,6 +173,13 @@ const jobSchema = new mongoose.Schema(
         },
 
         payment_released: { type: Boolean, default: false },
+
+        cancelled_by: {
+            user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            reason: String,
+            penalty: Number,
+            at: Date
+        }
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },

@@ -30,6 +30,7 @@ router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(upl
 router.post('/:id/confirm-completion', protect, authorize('user'), jobController.confirmCompletion);
 
 router.post('/:id/finalize', protect, jobController.finalizeJob);
+router.post('/:id/cancel', protect, jobController.cancelJob); // New Cancellation Route
 router.post('/:id/dispute', protect, authorize('user'), jobController.raiseDispute);
 router.post('/:id/dispute/resolve', protect, authorize('admin', 'user'), jobController.resolveDispute);
 

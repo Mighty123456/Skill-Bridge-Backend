@@ -39,9 +39,28 @@ const initializeSocket = (server) => {
             logger.info(`User ${socket.decoded.id} joined chat: ${chatId}`);
         });
 
+
         socket.on('leave_chat', (chatId) => {
             socket.leave(chatId);
-            logger.info(`User ${socket.decoded.id} left chat: ${chatId}`);
+            logger.info(`User ${socket.decoded} left chat: ${chatId}`);
+        });
+
+        // --- Real-time Location Tracking ---
+        socket.on('join_job_tracking', (jobId) => {
+            socket.join(`job_${jobId}`);
+            logger.info(`User ${socket.decoded.id} tracking job: ${jobId}`);
+        });
+
+        socket.on('leave_job_tracking', (jobId) => {
+            socket.leave(`job_${jobId}`);
+            logger.info(`User ${socket.decoded.id} stopped tracking job: ${jobId}`);
+        });
+
+        socket.on('update_location', (data) => {
+            // data: { jobId, lat, lng }
+            const { jobId, lat, lng } = data;
+            // Broadcast to everyone tracking this job (except sender)
+            socket.to(`job_${jobId}`).emit('location_update', { lat, lng });
         });
 
         // Handle new message

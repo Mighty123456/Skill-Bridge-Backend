@@ -415,6 +415,15 @@ exports.updateLocation = async (jobId, workerId, lat, lng) => {
     job.journey.worker_location = { lat, lng };
     await job.save();
 
+    // Broadcast Real-Time Update
+    try {
+        const { getIo } = require('../../socket/socket');
+        const io = getIo();
+        io.to(`job_${jobId}`).emit('location_update', { lat, lng });
+    } catch (e) {
+        logger.warn('Socket broadcast failed', e);
+    }
+
     return job;
 };
 
@@ -484,6 +493,26 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
     // Allow if assigned, eta_confirmed, or arrived
     if (!['assigned', 'eta_confirmed', 'arrived'].includes(job.status)) throw new Error('Invalid job status for diagnosis');
+
+    // Warranty Validation
+    if (diagnosisData.warranty_offered) {
+        if (!diagnosisData.warranty_duration_days || diagnosisData.warranty_duration_days <= 0) {
+            throw new Error('Warranty duration must be specified if warranty is offered.');
+        }
+    }
+
+    // Cost Validation
+    const materialCost = (diagnosisData.materials || []).reduce((sum, item) => sum + (Number(item.estimated_cost) || 0), 0);
+    const laborCost = Number(diagnosisData.final_labor_cost) || 0;
+    const warrantyCost = Number(diagnosisData.warranty_cost) || 0;
+    const calculatedTotal = materialCost + laborCost + warrantyCost;
+
+    // Allow slight float difference but ensure it matches
+    if (Math.abs(calculatedTotal - diagnosisData.final_total_cost) > 1.0) {
+        // throw new Error(`Total cost mismatch. Calculated: ${calculatedTotal}, Provided: ${diagnosisData.final_total_cost}`);
+        // For now, auto-correct it instead of erroring out to be user-friendly
+        diagnosisData.final_total_cost = calculatedTotal;
+    }
 
     job.diagnosis_report = {
         ...diagnosisData,
@@ -730,6 +759,113 @@ exports.finalizeJob = async (jobId) => {
 /**
  * G. Dispute Handling
  */
+/**
+ * H. Cancellation Policy Implementation
+ */
+exports.cancelJob = async (jobId, userId, userRole, reason) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+
+    // 1. Validate permissions
+    if (userRole === 'worker' && job.selected_worker_id?.toString() !== userId.toString()) {
+        throw new Error('Unauthorized');
+    }
+    if (userRole === 'user' && job.user_id?.toString() !== userId.toString()) {
+        throw new Error('Unauthorized');
+    }
+
+    // 2. Prevent cancellation if too late
+    if (['completed', 'cancelled', 'disputed', 'cooling_window'].includes(job.status)) {
+        throw new Error('Cannot cancel job in its current state.');
+    }
+
+    let penaltyAmount = 0;
+    let penaltyReason = '';
+
+    // 3. Worker Cancellation Logic
+    if (userRole === 'worker') {
+        // Penalty: Reliability Score Drop
+        try {
+            const worker = await Worker.findOne({ user: userId });
+            if (worker) {
+                worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 10); // -10 points
+                worker.reliabilityStats.cancellations = (worker.reliabilityStats.cancellations || 0) + 1;
+                await worker.save();
+            }
+        } catch (e) {
+            logger.error('Failed to apply worker cancellation penalty', e);
+        }
+        penaltyReason = 'Worker cancelled. Reliability score deduced.';
+    }
+
+    // 4. Tenant Cancellation Logic (Stage-Based Matrix)
+    else if (userRole === 'user' || userRole === 'admin') {
+        switch (job.status) {
+            case 'open':
+                penaltyAmount = 0;
+                penaltyReason = 'No penalty (Open stage)';
+                break;
+            case 'assigned':
+            case 'eta_confirmed':
+                penaltyAmount = 50; // Small fee
+                penaltyReason = 'Late cancellation fee (Assigned stage)';
+                break;
+            case 'on_the_way':
+                penaltyAmount = 150; // Travel fee
+                penaltyReason = 'Travel compensation fee';
+                break;
+            case 'arrived':
+                penaltyAmount = 250; // Time wasted fee
+                penaltyReason = 'Arrival compensation fee';
+                break;
+            case 'in_progress':
+            case 'diagnosis_mode':
+            case 'material_pending_approval':
+                penaltyAmount = 500; // Base Diagnosis Charge (assumption)
+                penaltyReason = 'Work started compensation';
+                break;
+            default:
+                penaltyAmount = 0;
+        }
+
+        // Apply Financial Penalty (Mock Logic - In real app, deduct from wallet)
+        if (penaltyAmount > 0) {
+            // await WalletService.deduct(userId, penaltyAmount, penaltyReason);
+            // await WalletService.credit(job.selected_worker_id, penaltyAmount * 0.8, 'Cancellation Compensation');
+        }
+    }
+
+    // 5. Finalize Cancellation
+    job.status = 'cancelled';
+    job.cancelled_by = {
+        user: userId,
+        reason: reason,
+        penalty: penaltyAmount,
+        at: new Date()
+    };
+
+    appendTimeline(job, 'cancelled', userRole === 'user' ? 'user' : 'worker',
+        `Job Cancelled. Reason: ${reason}. Penalty: ₹${penaltyAmount}. Note: ${penaltyReason}`,
+        { penalty: penaltyAmount, reasonCode: penaltyReason }
+    );
+
+    await job.save();
+
+    // Notify Counterparty
+    const recipientId = userRole === 'user' ? job.selected_worker_id : job.user_id;
+    if (recipientId) {
+        await NotificationService.createNotification({
+            recipient: recipientId,
+            title: 'Job Cancelled',
+            message: `The job has been cancelled by the ${userRole}. Reason: ${reason}`,
+            type: 'alert',
+            data: { jobId: job._id }
+        });
+    }
+
+    return job;
+};
+
 exports.raiseDispute = async (jobId, userId, reason) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');

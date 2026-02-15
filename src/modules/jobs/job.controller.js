@@ -8,6 +8,19 @@ const logger = require('../../config/logger');
 const JobService = require('./job.service');
 
 // Create a new job
+// Cancel Job (New)
+exports.cancelJob = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const job = await JobService.cancelJob(id, req.user._id, req.user.role, reason);
+        res.json({ success: true, message: 'Job cancelled successfully', data: job });
+    } catch (error) {
+        logger.error('Cancel Job Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 exports.createJob = async (req, res) => {
     try {
         let { job_title, job_description, material_requirements, skill_required, location, urgency_level, quotation_window_hours } = req.body;
