@@ -80,7 +80,9 @@ exports.createJob = async (req, res) => {
 
 exports.getJob = async (req, res) => {
     try {
-        const job = await Job.findById(req.params.id).populate('user_id', 'name phone address profileImage');
+        const job = await Job.findById(req.params.id)
+            .populate('user_id', 'name phone address profileImage')
+            .populate('selected_worker_id', 'name phone profileImage');
 
         if (!job) {
             return res.status(404).json({ success: false, message: 'Job not found' });
