@@ -355,6 +355,7 @@ exports.updateEta = async (req, res) => {
 exports.getPassport = async (req, res) => {
     try {
         const { id } = req.params;
+        const Job = require('../jobs/job.model');
         let worker;
 
         // Try finding by User ID first, then Worker ID
@@ -372,6 +373,12 @@ exports.getPassport = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Worker profile not found' });
         }
 
+        // Calculate total jobs completed
+        const jobsCompleted = await Job.countDocuments({
+            selected_worker_id: worker.user._id,
+            status: 'completed'
+        });
+
         // Prepare Passport Data
         const passport = {
             workerId: worker._id,
@@ -382,10 +389,12 @@ exports.getPassport = async (req, res) => {
             verified: worker.verificationStatus === 'verified',
             rating: worker.rating,
             experienceYears: worker.experience,
+            reliabilityScore: worker.reliabilityScore || 50,
+            jobsCompleted: jobsCompleted,
 
             // Skill Identity
             skills: worker.skills,
-            skillStats: worker.skill_stats || [], // Enhanced Stats
+            skillStats: worker.skill_stats || [],
 
             // Badges
             badges: worker.badges || [],
