@@ -22,7 +22,7 @@ router.post('/:id/start', protect, authorize('worker'), jobController.startJob);
 router.post('/:id/delay', protect, authorize('worker'), jobController.reportDelay); // New
 router.post('/:id/location', protect, authorize('worker'), jobController.updateLocation);
 router.post('/:id/diagnosis', protect, authorize('worker'), jobController.submitDiagnosis);
-router.post('/:id/diagnosis/approve', protect, authorize('user'), jobController.approveDiagnosis);
+router.post('/:id/approve-diagnosis', protect, authorize('user'), jobController.approveDiagnosis);
 router.post('/:id/materials', protect, authorize('worker'), jobController.requestMaterial);
 router.post('/:id/materials/:requestId/respond', protect, authorize('user'), jobController.respondToMaterial);
 
