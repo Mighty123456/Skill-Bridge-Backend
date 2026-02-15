@@ -119,37 +119,6 @@ exports.getJob = async (req, res) => {
 
 exports.acceptJob = async (req, res) => {
     return res.status(400).json({ success: false, message: 'Direct acceptance is disabled. Please wait for Quotation System in Phase 3.' });
-    /*
-    try {
-        const job = await Job.findById(req.params.id);
-
-        if (!job) {
-            return res.status(404).json({ success: false, message: 'Job not found' });
-        }
-
-        if (job.status !== 'open') {
-            return res.status(400).json({ success: false, message: 'Job is already taken or closed' });
-        }
-
-        // Assign worker
-        job.status = 'in_progress';
-        job.selected_worker_id = req.user._id;
-        await job.save();
-
-        // Create Notification for User
-        await Notification.create({
-            recipient: job.user_id,
-            title: 'Job Accepted',
-            message: `A worker has accepted your job request: ${job.job_title}`,
-            type: 'system',
-            data: { jobId: job._id }
-        });
-
-        res.json({ success: true, message: 'Job accepted successfully', data: job });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-    */
 };
 
 // Get jobs feed for a worker (matching skills and location)
