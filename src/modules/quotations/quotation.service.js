@@ -149,8 +149,15 @@ exports.getQuotationsForJob = async (jobId, userId) => {
             ? workerProfile.reputation_zones.reduce((sum, z) => sum + z.jobs_completed, 0)
             : 0;
 
+        // Ensure we use the real image (selfie) if profileImage is missing
+        const workerUser = q.worker_id.toObject ? q.worker_id.toObject() : q.worker_id;
+        if (!workerUser.profileImage && workerProfile && workerProfile.selfie) {
+            workerUser.profileImage = workerProfile.selfie;
+        }
+
         return {
             ...q.toObject(),
+            worker_id: workerUser,
             worker_rating: workerProfile ? workerProfile.rating : 0,
             worker_reliability: workerProfile ? workerProfile.reliabilityScore : 0,
             worker_jobs_completed: jobsCompleted,

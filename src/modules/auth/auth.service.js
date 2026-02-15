@@ -95,6 +95,7 @@ const register = async (userData, fileBuffers = {}) => {
           const res = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
           selfieUrl = res.url;
           workerData.selfie = selfieUrl;
+          user.profileImage = selfieUrl;
           logger.info(`Selfie uploaded: ${selfieUrl}`);
         } catch (err) {
           logger.error(`Selfie upload failed: ${err.message}`);
@@ -131,6 +132,7 @@ const register = async (userData, fileBuffers = {}) => {
         const createdDocs = await WorkerDocument.insertMany(docsToCreate);
         newWorker.documents = createdDocs.map(d => d._id);
         await newWorker.save();
+        await user.save({ validateBeforeSave: false });
         logger.info(`Worker documents linked: ${createdDocs.length} documents`);
       }
     }
@@ -165,6 +167,7 @@ const register = async (userData, fileBuffers = {}) => {
           logger.info('Uploading contractor selfie...');
           const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
           contractorData.selfie = uploadResult.url;
+          user.profileImage = uploadResult.url;
           logger.info(`Contractor selfie uploaded: ${uploadResult.url}`);
         } catch (err) {
           logger.error(`Failed to upload selfie: ${err.message}`);
@@ -174,6 +177,7 @@ const register = async (userData, fileBuffers = {}) => {
 
       logger.info(`Creating Contractor record with data: ${JSON.stringify(contractorData)}`);
       const newContractor = await Contractor.create(contractorData);
+      await user.save({ validateBeforeSave: false });
       logger.info(`✅ Contractor record created successfully: ${newContractor._id}`);
     }
   } catch (error) {
