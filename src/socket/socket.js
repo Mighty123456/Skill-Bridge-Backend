@@ -27,69 +27,61 @@ const initializeSocket = (server) => {
         }
     });
 
+    // Track connected users for online status
+    const connectedUsers = new Set();
+
     io.on('connection', (socket) => {
-        logger.info(`Socket connected: ${socket.id} (User: ${socket.decoded.id})`);
+        const userId = socket.decoded.id;
+        logger.info(`Socket connected: ${socket.id} (User: ${userId})`);
+
+        connectedUsers.add(userId);
+
+        // Broadcast that user is online
+        io.emit('user_status_change', { userId, status: 'online' });
 
         // Join a personal room for notifications
-        socket.join(socket.decoded.id);
+        socket.join(userId);
 
         // Join a specific chat room
         socket.on('join_chat', (chatId) => {
             socket.join(chatId);
-            logger.info(`User ${socket.decoded.id} joined chat: ${chatId}`);
-        });
+            logger.info(`User ${userId} joined chat: ${chatId}`);
 
+            // Optional: When joining a chat, we could also emit that the user is now active in THIS specific chat
+            // to support the "blue tick" logic if they read existing messages.
+        });
 
         socket.on('leave_chat', (chatId) => {
             socket.leave(chatId);
-            logger.info(`User ${socket.decoded} left chat: ${chatId}`);
-        });
-
-        // --- Real-time Location Tracking ---
-        socket.on('join_job_tracking', (jobId) => {
-            socket.join(`job_${jobId}`);
-            logger.info(`User ${socket.decoded.id} tracking job: ${jobId}`);
-        });
-
-        socket.on('leave_job_tracking', (jobId) => {
-            socket.leave(`job_${jobId}`);
-            logger.info(`User ${socket.decoded.id} stopped tracking job: ${jobId}`);
-        });
-
-        socket.on('update_location', (data) => {
-            // data: { jobId, lat, lng }
-            const { jobId, lat, lng } = data;
-            // Broadcast to everyone tracking this job (except sender)
-            socket.to(`job_${jobId}`).emit('location_update', { lat, lng });
+            logger.info(`User ${userId} left chat: ${chatId}`);
         });
 
         // Handle new message
         socket.on('send_message', async (data) => {
             try {
-                const { chatId, text, recipientId, encrypted } = data; // Expecting 'text' to be encrypted string
-
-                // NOTE: We trust the client to have encrypted 'text' if 'encrypted' flag is true.
-                // Even if not, we treat 'text' as the payload to save.
+                const { chatId, text, recipientId, encrypted } = data;
 
                 // 1. Save to DB
+                // We check if recipient is currently connected to mark as 'delivered'
+                const isRecipientConnected = connectedUsers.has(recipientId);
+
                 const newMessage = await Message.create({
                     chatId,
-                    senderId: socket.decoded.id,
-                    text: text, // Saved as is (encrypted string)
-                    isEncrypted: encrypted || false // Flag to know if we need to decrypt on client
+                    senderId: userId,
+                    text: text,
+                    isEncrypted: encrypted || false,
+                    deliveredTo: isRecipientConnected ? [recipientId] : []
                 });
 
                 // 2. Update Chat
                 await Chat.findByIdAndUpdate(chatId, {
-                    lastMessage: text, // Show encrypted text in preview? Or "Encrypted Message"
+                    lastMessage: text,
                     lastMessageTime: Date.now(),
                     $inc: { [`unreadCounts.${recipientId}`]: 1 }
                 });
 
-                // 3. Emit to Room (Sender and Recipient if in room)
+                // 3. Emit to Room
                 io.to(chatId).emit('receive_message', newMessage);
-
-                // 4. Notification (if recipient not in room?) - Optional for now
 
             } catch (e) {
                 logger.error(`Socket message error: ${e.message}`);
@@ -98,7 +90,15 @@ const initializeSocket = (server) => {
         });
 
         socket.on('disconnect', () => {
-            logger.info(`Socket disconnected: ${socket.id}`);
+            connectedUsers.delete(userId);
+            logger.info(`Socket disconnected: ${socket.id} (User: ${userId})`);
+
+            // Broadcast that user is offline with last seen
+            io.emit('user_status_change', {
+                userId,
+                status: 'offline',
+                lastSeen: new Date()
+            });
         });
     });
 };
