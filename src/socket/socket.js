@@ -52,21 +52,38 @@ const initializeSocket = (server) => {
         });
 
         socket.on('leave_chat', (chatId) => {
-            socket.leave(chatId);
+            socket.leave(chatId.toString());
             logger.info(`User ${userId} left chat: ${chatId}`);
+        });
+
+        // --- Real-time Location Tracking ---
+        socket.on('join_job_tracking', (jobId) => {
+            socket.join(`job_${jobId}`);
+            logger.info(`User ${userId} tracking job: ${jobId}`);
+        });
+
+        socket.on('leave_job_tracking', (jobId) => {
+            socket.leave(`job_${jobId}`);
+            logger.info(`User ${userId} stopped tracking job: ${jobId}`);
+        });
+
+        socket.on('update_location', (data) => {
+            const { jobId, lat, lng } = data;
+            // Broadcast to everyone tracking this job (except sender)
+            socket.to(`job_${jobId}`).emit('location_update', { lat, lng });
         });
 
         // Handle new message
         socket.on('send_message', async (data) => {
             try {
                 const { chatId, text, recipientId, encrypted } = data;
+                const chatIdStr = chatId.toString();
 
                 // 1. Save to DB
-                // We check if recipient is currently connected to mark as 'delivered'
-                const isRecipientConnected = connectedUsers.has(recipientId);
+                const isRecipientConnected = connectedUsers.has(recipientId.toString());
 
                 const newMessage = await Message.create({
-                    chatId,
+                    chatId: chatIdStr,
                     senderId: userId,
                     text: text,
                     isEncrypted: encrypted || false,
@@ -74,14 +91,14 @@ const initializeSocket = (server) => {
                 });
 
                 // 2. Update Chat
-                await Chat.findByIdAndUpdate(chatId, {
+                await Chat.findByIdAndUpdate(chatIdStr, {
                     lastMessage: text,
                     lastMessageTime: Date.now(),
                     $inc: { [`unreadCounts.${recipientId}`]: 1 }
                 });
 
                 // 3. Emit to Room
-                io.to(chatId).emit('receive_message', newMessage);
+                io.to(chatIdStr).emit('receive_message', newMessage);
 
             } catch (e) {
                 logger.error(`Socket message error: ${e.message}`);

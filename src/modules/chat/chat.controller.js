@@ -356,25 +356,25 @@ exports.sendMessage = async (req, res) => {
         try {
             const { getIo } = require('../../socket/socket');
             const io = getIo();
-            io.to(chatId).emit('receive_message', message);
+            const chatIdStr = chatId.toString();
+            io.to(chatIdStr).emit('receive_message', message);
 
             // 7. Inject System Warning if triggered
             if (systemWarningMessage) {
                 const sysMsg = await Message.create({
-                    chatId,
+                    chatId: chatIdStr,
                     isSystemMessage: true,
                     text: systemWarningMessage,
                     readBy: [],
                     deliveredTo: []
                 });
-                io.to(chatId).emit('receive_message', sysMsg);
+                io.to(chatIdStr).emit('receive_message', sysMsg);
 
                 // Update chat with system warning as last message
                 chat.lastMessage = systemWarningMessage;
                 chat.lastMessageTime = Date.now();
                 await chat.save();
             }
-
         } catch (err) {
             console.error('Socket emit error:', err);
         }
