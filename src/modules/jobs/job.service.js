@@ -441,9 +441,8 @@ exports.startJob = async (jobId, workerId, otp) => {
         throw new Error(`Security Lockout: Too many failed attempts. Try again in ${minutesLeft} minutes.`);
     }
 
-    if (job.status !== 'arrived') {
-        // Optionally allow if skipped journey/etc? No, strict flow.
-        // throw new Error('You must confirm arrival first.');
+    if (!['arrived', 'diagnosed', 'diagnosis_mode'].includes(job.status)) {
+        throw new Error('You must confirm arrival and diagnosis before starting.');
     }
 
     if (!job.start_otp || job.start_otp !== otp) {
@@ -545,19 +544,18 @@ exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
     if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
 
     if (approved) {
-        // Escrow Activation Mock
-        job.status = 'in_progress';
+        // NEW: Require OTP to start work. Status goes to 'diagnosed' first.
+        job.status = 'diagnosed';
         job.diagnosis_report.status = 'approved';
         job.diagnosis_report.approved_at = new Date();
-        job.started_at = new Date(); // Job officially starts
-        appendTimeline(job, 'in_progress', 'user', 'Diagnosis approved. Escrow locked. Job started.');
+        appendTimeline(job, 'diagnosed', 'user', 'Diagnosis approved. Waiting for OTP to start job.');
 
         // Notify Worker
         await NotificationService.createNotification({
             recipient: job.selected_worker_id,
-            title: 'Job Started',
-            message: 'Diagnosis approved. You can begin work.',
-            type: 'job_started',
+            title: 'Diagnosis Approved',
+            message: 'Client approved your estimate. Please enter OTP to start the job.',
+            type: 'info',
             data: { jobId: job._id }
         });
     } else {
