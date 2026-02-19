@@ -2,7 +2,8 @@ const Payment = require('./payment.model');
 const Wallet = require('../wallet/wallet.model');
 const logger = require('../../config/logger');
 const config = require('../../config/env');
-const stripe = require('stripe')(config.STRIPE_SECRET_KEY);
+const stripeKey = config.STRIPE_SECRET_KEY;
+const stripe = stripeKey ? require('stripe')(stripeKey) : null;
 const PaymentService = require('./payment.service');
 const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
@@ -139,6 +140,11 @@ exports.createJobPaymentSession = async (req, res, next) => {
 exports.handleStripeWebhook = async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
+
+    if (!stripe) {
+        logger.error('Stripe is not configured. Webhook ignored.');
+        return res.status(500).json({ message: 'Stripe not configured' });
+    }
 
     try {
         event = stripe.webhooks.constructEvent(req.body, sig, config.STRIPE_WEBHOOK_SECRET);

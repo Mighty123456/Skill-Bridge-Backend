@@ -4,7 +4,8 @@ const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const Worker = require('../workers/worker.model');
 const config = require('../../config/env');
-const stripe = require('stripe')(config.STRIPE_SECRET_KEY);
+const stripeKey = config.STRIPE_SECRET_KEY;
+const stripe = stripeKey ? require('stripe')(stripeKey) : null;
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
@@ -463,6 +464,8 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
     // 1. Convert amount to cents for Stripe
     const amountInCents = Math.round(amount * 100);
 
+    if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
+
     // 2. Create Checkout Session
     const session = await stripe.checkout.sessions.create({
         payment_method_types: ['card'],
@@ -502,6 +505,8 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
 
     const amount = job.diagnosis_report.final_total_cost;
     const breakdown = await this.calculateBreakdown(amount, job.selected_worker_id);
+
+    if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
 
     // Create Checkout Session
     const session = await stripe.checkout.sessions.create({
