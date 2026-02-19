@@ -686,3 +686,32 @@ exports.getJobCategories = async (req, res) => {
     }
 };
 
+
+/**
+ * Claim Warranty
+ */
+exports.claimWarranty = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const job = await JobService.claimWarranty(id, req.userId, reason);
+        res.json({ success: true, message: 'Warranty claim raised successfully', data: job });
+    } catch (error) {
+        logger.error('Claim Warranty Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Resolve Warranty
+ */
+exports.resolveWarranty = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await JobService.resolveWarranty(id, req.userId);
+        res.json({ success: true, message: 'Warranty claim resolved successfully', data: job });
+    } catch (error) {
+        logger.error('Resolve Warranty Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

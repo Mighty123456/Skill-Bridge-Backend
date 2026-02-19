@@ -8,6 +8,7 @@ const PaymentService = require('./payment.service');
 const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const JobService = require('../jobs/job.service');
+const User = require('../users/user.model');
 const mongoose = require('mongoose');
 
 /**
@@ -159,6 +160,7 @@ exports.handleStripeWebhook = async (req, res) => {
     try {
         switch (event.type) {
             case 'checkout.session.completed':
+            case 'checkout.session.async_payment_succeeded':
                 const session = event.data.object;
 
                 // Idempotency check
@@ -180,7 +182,11 @@ exports.handleStripeWebhook = async (req, res) => {
                         type: 'topup',
                         status: 'completed',
                         paymentMethod: 'stripe',
-                        gatewayResponse: { stripeSessionId: session.id }
+                        gatewayResponse: {
+                            stripeSessionId: session.id,
+                            paymentIntentId: session.payment_intent,
+                            customerEmail: session.customer_details?.email
+                        }
                     });
                     await payment.save({ session: session_stripe });
                     await WalletService.creditWallet(userId, amount, session_stripe);
@@ -192,14 +198,50 @@ exports.handleStripeWebhook = async (req, res) => {
                 }
                 break;
 
+            case 'charge.refunded':
+                const refund = event.data.object;
+                const refundAmount = refund.amount_refunded / 100;
+                const chargeId = refund.id;
+                await PaymentService.handleExternalRefund(chargeId, refundAmount, session_stripe);
+                break;
+
+            case 'charge.dispute.created':
+                const dispute = event.data.object;
+                const disputedChargeId = dispute.charge;
+                const disputePayment = await Payment.findOne({
+                    $or: [
+                        { transactionId: disputedChargeId },
+                        { 'gatewayResponse.chargeId': disputedChargeId }
+                    ]
+                }).session(session_stripe);
+
+                if (disputePayment) {
+                    const FraudDetectionService = require('../fraud/fraud-detection.service');
+                    await FraudDetectionService.createAlert({
+                        type: 'payment_dispute',
+                        severity: 'critical',
+                        userId: disputePayment.user,
+                        title: 'Stripe Payment Dispute Created',
+                        description: `A dispute has been opened for transaction ${disputedChargeId} (Amount: ₹${dispute.amount / 100})`,
+                        metadata: {
+                            disputeId: dispute.id,
+                            chargeId: disputedChargeId,
+                            reason: dispute.reason,
+                            status: dispute.status,
+                            detectionSource: 'stripe_webhook'
+                        }
+                    });
+                }
+                break;
+
             case 'payment_intent.payment_failed':
                 const failedPayment = event.data.object;
-                const userId = failedPayment.metadata?.userId;
+                const failUserId = failedPayment.metadata?.userId;
 
-                if (userId) {
+                if (failUserId) {
                     const payment = new Payment({
                         transactionId: failedPayment.id,
-                        user: userId,
+                        user: failUserId,
                         amount: failedPayment.amount / 100,
                         type: failedPayment.metadata?.type || 'topup',
                         status: 'failed',
@@ -209,12 +251,17 @@ exports.handleStripeWebhook = async (req, res) => {
                     await payment.save({ session: session_stripe });
 
                     try {
-                        const fraudDetectionService = require('../fraud/fraud-detection.service');
-                        await fraudDetectionService.detectPaymentFailures(userId);
+                        const FraudDetectionService = require('../fraud/fraud-detection.service');
+                        await FraudDetectionService.detectPaymentFailures(failUserId);
                     } catch (err) {
                         logger.error(`Fraud detection trigger failed: ${err.message}`);
                     }
                 }
+                break;
+
+            case 'checkout.session.expired':
+                const expiredSession = event.data.object;
+                logger.info(`Stripe Checkout Session ${expiredSession.id} expired.`);
                 break;
 
             default:
@@ -265,6 +312,107 @@ exports.getJobPaymentDetails = async (req, res, next) => {
                 workerName: job.selected_worker_id?.name || 'Worker'
             }
         });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * Process Partial Settlement (Admin Only)
+ */
+exports.processSettlement = async (req, res, next) => {
+    try {
+        const { jobId, workerAmount, tenantAmount } = req.body;
+
+        if (!jobId || workerAmount === undefined || tenantAmount === undefined) {
+            return res.status(400).json({ success: false, message: 'jobId, workerAmount, and tenantAmount are required' });
+        }
+
+        const result = await PaymentService.processSettlement(
+            jobId,
+            Number(workerAmount),
+            Number(tenantAmount),
+            req.user._id
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Settlement processed successfully',
+            data: result
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * Download Invoice for a payment (Tenant)
+ */
+exports.downloadInvoice = async (req, res, next) => {
+    try {
+        const { paymentId } = req.params;
+        const InvoiceService = require('./invoice.service');
+
+        const payment = await Payment.findById(paymentId);
+        if (!payment) return res.status(404).json({ message: 'Payment not found' });
+
+        // Security check: Only the involved user or admin can download
+        if (payment.user.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Unauthorized access to invoice' });
+        }
+
+        const job = await Job.findById(payment.job).populate('selected_worker_id', 'name').lean();
+        const user = await User.findById(payment.user).lean();
+
+        if (!job || !user) {
+            return res.status(404).json({ message: 'Associated job or user not found' });
+        }
+
+        const pdfBuffer = await InvoiceService.generateTenantInvoice(payment, job, user);
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=SB_Invoice_${payment.transactionId.slice(-8).toUpperCase()}.pdf`);
+        res.status(200).send(pdfBuffer);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * Export Transactions as CSV (Admin Only)
+ */
+exports.exportTransactions = async (req, res, next) => {
+    try {
+        const transactions = await Payment.find({})
+            .populate('user', 'name email')
+            .populate('worker', 'name email')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        if (!transactions.length) return res.status(404).json({ message: 'No transactions to export' });
+
+        // Define headers
+        const headers = ['Date', 'Transaction ID', 'Type', 'Amount', 'Currency', 'Status', 'User Name', 'User Email', 'Worker Name', 'Job ID'];
+
+        // Map rows
+        const rows = transactions.map(t => [
+            new Date(t.createdAt).toISOString(),
+            t.transactionId,
+            t.type,
+            t.amount,
+            t.currency,
+            t.status,
+            t.user?.name || 'N/A',
+            t.user?.email || 'N/A',
+            t.worker?.name || 'N/A',
+            t.job?.toString() || 'N/A'
+        ].map(val => `"${String(val).replace(/"/g, '""')}"`).join(','));
+
+        const csvContent = [headers.join(','), ...rows].join('\n');
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=SB_Transactions_${new Date().toISOString().split('T')[0]}.csv`);
+        res.status(200).send(csvContent);
     } catch (error) {
         next(error);
     }

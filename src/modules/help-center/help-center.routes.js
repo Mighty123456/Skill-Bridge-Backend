@@ -32,6 +32,7 @@ router.post('/emergency', protect, helpCenterController.triggerEmergency);
 
 // Admin: Ticket Management
 router.get('/admin/tickets', protect, authorize('admin'), helpCenterController.getAllTickets);
+router.post('/admin/tickets/:ticketId/reply', protect, authorize('admin'), helpCenterController.adminReplyToTicket);
 router.put('/admin/tickets/:ticketId/status', protect, authorize('admin'), helpCenterController.updateTicketStatus);
 
 // Admin: Knowledge Base Management

@@ -32,9 +32,9 @@ class HelpCenterService {
 
       // Verify user has access to this job
       const isOwner = job.user_id.toString() === userId.toString();
-      const isWorker = job.selected_worker_id && 
-                      job.selected_worker_id.toString() === userId.toString();
-      
+      const isWorker = job.selected_worker_id &&
+        job.selected_worker_id.toString() === userId.toString();
+
       if (!isOwner && !isWorker) {
         return null;
       }
@@ -42,12 +42,12 @@ class HelpCenterService {
       // Get chat logs
       const Message = require('../chat/message.model');
       const chat = await Chat.findOne({ job: jobId });
-      const chatLogs = chat 
+      const chatLogs = chat
         ? await Message.find({ chatId: chat._id })
-            .sort({ createdAt: -1 })
-            .limit(50)
-            .select('senderId text createdAt')
-            .lean()
+          .sort({ createdAt: -1 })
+          .limit(50)
+          .select('senderId text createdAt')
+          .lean()
         : []; // Last 50 messages
 
       // Get timeline
@@ -129,7 +129,7 @@ class HelpCenterService {
   async getTickets(userId, filters = {}) {
     try {
       const query = { userId };
-      
+
       if (filters.status) {
         query.status = filters.status;
       }
@@ -155,9 +155,9 @@ class HelpCenterService {
    */
   async getTicket(ticketId, userId) {
     try {
-      const ticket = await SupportTicket.findOne({ 
-        _id: ticketId, 
-        userId 
+      const ticket = await SupportTicket.findOne({
+        _id: ticketId,
+        userId
       })
         .populate('jobId', 'job_title status')
         .populate('resolvedBy', 'name email');
@@ -178,9 +178,9 @@ class HelpCenterService {
    */
   async addTicketUpdate(ticketId, userId, message, attachments = []) {
     try {
-      const ticket = await SupportTicket.findOne({ 
-        _id: ticketId, 
-        userId 
+      const ticket = await SupportTicket.findOne({
+        _id: ticketId,
+        userId
       });
 
       if (!ticket) {
@@ -226,9 +226,9 @@ class HelpCenterService {
    */
   async submitFeedback(ticketId, userId, rating, feedback) {
     try {
-      const ticket = await SupportTicket.findOne({ 
-        _id: ticketId, 
-        userId 
+      const ticket = await SupportTicket.findOne({
+        _id: ticketId,
+        userId
       });
 
       if (!ticket) {
@@ -330,7 +330,7 @@ class HelpCenterService {
   async getCategories(role = null) {
     try {
       const query = {};
-      
+
       if (role) {
         query.$or = [
           { role: 'all' },
@@ -407,7 +407,7 @@ class HelpCenterService {
       // In a real app, you'd fetch admin users or support team members
       // For now, we'll just log it
       logger.warn(`🚨 HIGH PRIORITY TICKET: ${ticket._id} - ${ticket.title} (Priority: ${ticket.priority})`);
-      
+
       // You can add admin notification logic here
       // await NotificationService.createNotification({
       //   recipient: adminUserId,
@@ -428,7 +428,7 @@ class HelpCenterService {
     try {
       logger.error(`🚨🚨🚨 EMERGENCY SUPPORT REQUESTED: ${ticket._id} - ${ticket.title}`);
       logger.error(`User ID: ${ticket.userId}, Job ID: ${ticket.jobId || 'N/A'}`);
-      
+
       if (ticket.emergencyLocation) {
         logger.error(`Location: ${ticket.emergencyLocation.latitude}, ${ticket.emergencyLocation.longitude}`);
       }
@@ -448,13 +448,13 @@ class HelpCenterService {
   async updateTicketStatus(ticketId, status, adminId, notes) {
     try {
       const ticket = await SupportTicket.findById(ticketId);
-      
+
       if (!ticket) {
         throw new Error('Ticket not found');
       }
 
       ticket.status = status;
-      
+
       if (status === 'resolved') {
         ticket.resolvedAt = new Date();
         ticket.resolvedBy = adminId;
@@ -481,6 +481,47 @@ class HelpCenterService {
       return ticket;
     } catch (error) {
       logger.error(`Error updating ticket status: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Admin: Add reply to ticket (without status change)
+   */
+  async adminReplyToTicket(ticketId, adminId, message, attachments = []) {
+    try {
+      const ticket = await SupportTicket.findById(ticketId);
+
+      if (!ticket) {
+        throw new Error('Ticket not found');
+      }
+
+      ticket.updates.push({
+        message,
+        actor: 'admin',
+        attachments,
+        timestamp: new Date()
+      });
+
+      // If status was 'open', move it to 'under_review' automatically on admin reply
+      if (ticket.status === 'open') {
+        ticket.status = 'under_review';
+      }
+
+      await ticket.save();
+
+      // Notify user
+      await NotificationService.createNotification({
+        recipient: ticket.userId,
+        title: 'New Support Message',
+        message: `Support team has replied to your ticket: "${ticket.title}"`,
+        type: 'ticket_reply',
+        data: { ticketId: ticket._id }
+      });
+
+      return ticket;
+    } catch (error) {
+      logger.error(`Error adding admin ticket reply: ${error.message}`);
       throw error;
     }
   }

@@ -9,21 +9,21 @@ const logger = require('../../config/logger');
 exports.getTickets = async (req, res) => {
   try {
     const { status, priority } = req.query;
-    
+
     const tickets = await HelpCenterService.getTickets(req.user._id, {
       status,
       priority
     });
 
-    res.json({ 
-      success: true, 
-      data: tickets 
+    res.json({
+      success: true,
+      data: tickets
     });
   } catch (error) {
     logger.error(`Get Tickets Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -47,7 +47,7 @@ exports.createTicket = async (req, res) => {
     const attachments = [];
     if (req.files && req.files.length > 0) {
       logger.info(`Uploading ${req.files.length} attachments for ticket...`);
-      
+
       const uploadPromises = req.files.map(file =>
         uploadOptimizedImage(file.buffer, `skillbridge/help-center/tickets/${req.user._id}`)
       );
@@ -61,8 +61,8 @@ exports.createTicket = async (req, res) => {
     let parsedAutoData = null;
     if (autoAttachedData) {
       try {
-        parsedAutoData = typeof autoAttachedData === 'string' 
-          ? JSON.parse(autoAttachedData) 
+        parsedAutoData = typeof autoAttachedData === 'string'
+          ? JSON.parse(autoAttachedData)
           : autoAttachedData;
       } catch (e) {
         logger.warn('Failed to parse autoAttachedData, using as is');
@@ -83,16 +83,16 @@ exports.createTicket = async (req, res) => {
       attachments
     );
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: 'Ticket created successfully',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Create Ticket Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -103,26 +103,26 @@ exports.createTicket = async (req, res) => {
 exports.getTicket = async (req, res) => {
   try {
     const { ticketId } = req.params;
-    
+
     const ticket = await HelpCenterService.getTicket(ticketId, req.user._id);
 
-    res.json({ 
-      success: true, 
-      data: ticket 
+    res.json({
+      success: true,
+      data: ticket
     });
   } catch (error) {
     logger.error(`Get Ticket Error: ${error.message}`);
-    
+
     if (error.message === 'Ticket not found') {
-      return res.status(404).json({ 
-        success: false, 
-        message: error.message 
+      return res.status(404).json({
+        success: false,
+        message: error.message
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -135,15 +135,15 @@ exports.updateTicket = async (req, res) => {
     const { ticketId } = req.params;
     const updates = req.body;
 
-    const ticket = await SupportTicket.findOne({ 
-      _id: ticketId, 
-      userId: req.user._id 
+    const ticket = await SupportTicket.findOne({
+      _id: ticketId,
+      userId: req.user._id
     });
 
     if (!ticket) {
-      return res.status(404).json({ 
-        success: false, 
-        message: 'Ticket not found' 
+      return res.status(404).json({
+        success: false,
+        message: 'Ticket not found'
       });
     }
 
@@ -154,16 +154,16 @@ exports.updateTicket = async (req, res) => {
 
     await ticket.save();
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Ticket updated successfully',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Update Ticket Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -187,7 +187,7 @@ exports.addTicketUpdate = async (req, res) => {
     const attachments = [];
     if (req.files && req.files.length > 0) {
       logger.info(`Uploading ${req.files.length} attachments for ticket update...`);
-      
+
       const uploadPromises = req.files.map(file =>
         uploadOptimizedImage(file.buffer, `skillbridge/help-center/tickets/${req.user._id}/updates`)
       );
@@ -203,24 +203,24 @@ exports.addTicketUpdate = async (req, res) => {
       attachments
     );
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Update added successfully',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Add Ticket Update Error: ${error.message}`);
-    
+
     if (error.message === 'Ticket not found') {
-      return res.status(404).json({ 
-        success: false, 
-        message: error.message 
+      return res.status(404).json({
+        success: false,
+        message: error.message
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -247,24 +247,24 @@ exports.submitFeedback = async (req, res) => {
       feedback || ''
     );
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Feedback submitted successfully',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Submit Feedback Error: ${error.message}`);
-    
+
     if (error.message === 'Ticket not found') {
-      return res.status(404).json({ 
-        success: false, 
-        message: error.message 
+      return res.status(404).json({
+        success: false,
+        message: error.message
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -283,15 +283,15 @@ exports.getArticles = async (req, res) => {
       featured: featured === 'true' || featured === true
     });
 
-    res.json({ 
-      success: true, 
-      data: articles 
+    res.json({
+      success: true,
+      data: articles
     });
   } catch (error) {
     logger.error(`Get Articles Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -302,26 +302,26 @@ exports.getArticles = async (req, res) => {
 exports.getArticle = async (req, res) => {
   try {
     const { articleId } = req.params;
-    
+
     const article = await HelpCenterService.getArticle(articleId);
 
-    res.json({ 
-      success: true, 
-      data: article 
+    res.json({
+      success: true,
+      data: article
     });
   } catch (error) {
     logger.error(`Get Article Error: ${error.message}`);
-    
+
     if (error.message === 'Article not found') {
-      return res.status(404).json({ 
-        success: false, 
-        message: error.message 
+      return res.status(404).json({
+        success: false,
+        message: error.message
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -332,18 +332,18 @@ exports.getArticle = async (req, res) => {
 exports.getCategories = async (req, res) => {
   try {
     const { role } = req.query;
-    
+
     const categories = await HelpCenterService.getCategories(role);
 
-    res.json({ 
-      success: true, 
-      data: categories 
+    res.json({
+      success: true,
+      data: categories
     });
   } catch (error) {
     logger.error(`Get Categories Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -355,21 +355,21 @@ exports.getContextualHelp = async (req, res) => {
   try {
     const { jobStatus, role } = req.query;
     const userRole = role || req.user?.role || 'user';
-    
+
     const articles = await HelpCenterService.getContextualHelp(
       jobStatus || 'open',
       userRole
     );
 
-    res.json({ 
-      success: true, 
-      data: articles 
+    res.json({
+      success: true,
+      data: articles
     });
   } catch (error) {
     logger.error(`Get Contextual Help Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -395,16 +395,16 @@ exports.triggerEmergency = async (req, res) => {
       location || null
     );
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: 'Emergency support request submitted. Our team will contact you immediately.',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Trigger Emergency Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -417,22 +417,22 @@ exports.triggerEmergency = async (req, res) => {
 exports.getAllTickets = async (req, res) => {
   try {
     const { status, priority, userId } = req.query;
-    
+
     const tickets = await HelpCenterService.getAllTickets({
       status,
       priority,
       userId
     });
 
-    res.json({ 
-      success: true, 
-      data: tickets 
+    res.json({
+      success: true,
+      data: tickets
     });
   } catch (error) {
     logger.error(`Admin Get All Tickets Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -467,24 +467,59 @@ exports.updateTicketStatus = async (req, res) => {
       notes || ''
     );
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Ticket status updated successfully',
-      data: ticket 
+      data: ticket
     });
   } catch (error) {
     logger.error(`Admin Update Ticket Status Error: ${error.message}`);
-    
+
     if (error.message === 'Ticket not found') {
-      return res.status(404).json({ 
-        success: false, 
-        message: error.message 
+      return res.status(404).json({
+        success: false,
+        message: error.message
       });
     }
-    
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
+
+/**
+ * Admin: Reply to ticket
+ */
+exports.adminReplyToTicket = async (req, res) => {
+  try {
+    const { ticketId } = req.params;
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({
+        success: false,
+        message: 'Message is required'
+      });
+    }
+
+    const ticket = await HelpCenterService.adminReplyToTicket(
+      ticketId,
+      req.user._id,
+      message
+    );
+
+    res.json({
+      success: true,
+      message: 'Reply sent successfully',
+      data: ticket
+    });
+  } catch (error) {
+    logger.error(`Admin Reply to Ticket Error: ${error.message}`);
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -525,16 +560,16 @@ exports.createArticle = async (req, res) => {
       relatedArticles: relatedArticles || []
     });
 
-    res.status(201).json({ 
-      success: true, 
+    res.status(201).json({
+      success: true,
       message: 'Article created successfully',
-      data: article 
+      data: article
     });
   } catch (error) {
     logger.error(`Admin Create Article Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -548,7 +583,7 @@ exports.updateArticle = async (req, res) => {
     const updates = req.body;
 
     const article = await KnowledgeBaseArticle.findById(articleId);
-    
+
     if (!article) {
       return res.status(404).json({
         success: false,
@@ -568,16 +603,16 @@ exports.updateArticle = async (req, res) => {
     Object.assign(article, updates);
     await article.save();
 
-    res.json({ 
-      success: true, 
+    res.json({
+      success: true,
       message: 'Article updated successfully',
-      data: article 
+      data: article
     });
   } catch (error) {
     logger.error(`Admin Update Article Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };
@@ -590,7 +625,7 @@ exports.deleteArticle = async (req, res) => {
     const { articleId } = req.params;
 
     const article = await KnowledgeBaseArticle.findByIdAndDelete(articleId);
-    
+
     if (!article) {
       return res.status(404).json({
         success: false,
@@ -598,15 +633,15 @@ exports.deleteArticle = async (req, res) => {
       });
     }
 
-    res.json({ 
-      success: true, 
-      message: 'Article deleted successfully' 
+    res.json({
+      success: true,
+      message: 'Article deleted successfully'
     });
   } catch (error) {
     logger.error(`Admin Delete Article Error: ${error.message}`);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message 
+    res.status(500).json({
+      success: false,
+      message: error.message
     });
   }
 };

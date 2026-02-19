@@ -1,8 +1,21 @@
 const Notification = require('./notification.model');
 const logger = require('../../config/logger');
 
+const { getIo } = require('../../socket/socket');
+
 exports.createNotification = async (data) => {
-    return await Notification.create(data);
+    const notification = await Notification.create(data);
+
+    // Attempt real-time delivery via Socket.io
+    try {
+        const io = getIo();
+        const recipientRoom = data.recipient.toString();
+        io.to(recipientRoom).emit('notification', notification);
+    } catch (err) {
+        // Socket not initialized or connection error - silent fail as it's saved in DB
+    }
+
+    return notification;
 };
 
 exports.sendThrottledJobAlerts = async (users, job) => {

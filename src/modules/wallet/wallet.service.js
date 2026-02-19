@@ -1,6 +1,7 @@
 const Wallet = require('./wallet.model');
 const mongoose = require('mongoose');
 const Withdrawal = require('./withdrawal.model');
+const NotificationService = require('../notifications/notification.service');
 
 /**
  * Get or create wallet for a user
@@ -41,6 +42,14 @@ exports.checkAndReleasePending = async (userId) => {
         wallet.pendingBalance = Math.max(0, wallet.pendingBalance - releasedAmount);
         wallet.pendingPayouts = remainingPayouts;
         await wallet.save();
+        // Send Notification
+        await NotificationService.createNotification({
+            recipient: userId,
+            title: 'Funds Available!',
+            message: `₹${releasedAmount.toStringAsFixed(2)} has been released and is now available in your balance.`,
+            type: 'payment',
+            data: { type: 'payout_released' }
+        });
         // logger.info(`Released ₹${releasedAmount} pending funds for user ${userId}`);
     }
 };
@@ -50,11 +59,22 @@ exports.checkAndReleasePending = async (userId) => {
  */
 exports.creditWallet = async (userId, amount, session = null) => {
     const opts = session ? { session } : {};
-    return await Wallet.findOneAndUpdate(
+    const updatedWallet = await Wallet.findOneAndUpdate(
         { user: userId },
         { $inc: { balance: amount } },
         { new: true, upsert: true, ...opts }
     );
+
+    // Send Notification
+    await NotificationService.createNotification({
+        recipient: userId,
+        title: 'Wallet Topped Up!',
+        message: `₹${amount.toStringAsFixed(2)} has been added to your wallet.`,
+        type: 'payment',
+        data: { type: 'topup_success', amount }
+    }).catch(err => logger.error(`Failed to send topup notification: ${err.message}`));
+
+    return updatedWallet;
 };
 
 /**
@@ -164,6 +184,15 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetail
             }).catch(err => logger.error(`Failed to send withdrawal email: ${err.message}`));
         }
 
+        // Send App Notification
+        await NotificationService.createNotification({
+            recipient: userId,
+            title: 'Withdrawal Requested',
+            message: `Your request for ₹${amount.toStringAsFixed(2)} has been received.`,
+            type: 'payment',
+            data: { withdrawalId: withdrawal._id, status: 'pending' }
+        });
+
         await session.commitTransaction();
         return withdrawal;
 
@@ -229,6 +258,17 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                 notes: notes || (status === 'completed' ? 'Funds have been transferred to your bank account.' : 'Please contact support for more information.')
             }).catch(err => logger.error(`Failed to send withdrawal status email: ${err.message}`));
         }
+
+        // Send App Notification
+        await NotificationService.createNotification({
+            recipient: withdrawal.user,
+            title: status === 'completed' ? 'Withdrawal Successful' : 'Withdrawal Rejected',
+            message: status === 'completed'
+                ? `Your withdrawal of ₹${withdrawal.amount.toStringAsFixed(2)} has been processed.`
+                : `Your withdrawal of ₹${withdrawal.amount.toStringAsFixed(2)} was rejected. ${notes || ''}`,
+            type: 'payment',
+            data: { withdrawalId: withdrawal._id, status: status }
+        });
 
         await session.commitTransaction();
         return withdrawal;

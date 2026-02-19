@@ -197,6 +197,21 @@ router.get(
   adminController.listLegalAuditLogs
 );
 
+// Chat Moderation Terminal
+router.get(
+  '/chats',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listAllChats
+);
+
+router.get(
+  '/chats/:chatId/messages',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getChatMessages
+);
+
 module.exports = router;
 
 

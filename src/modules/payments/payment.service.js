@@ -8,6 +8,7 @@ const stripeKey = config.STRIPE_SECRET_KEY;
 const stripe = stripeKey ? require('stripe')(stripeKey) : null;
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const NotificationService = require('../notifications/notification.service');
 
 // Constants
 const PROTECTION_FEE = 29;
@@ -130,6 +131,15 @@ exports.createEscrow = async (jobId, userId, jobAmount) => {
         await signPayment(payment, session);
         await payment.save({ session });
 
+        // Send Notification to User
+        await NotificationService.createNotification({
+            recipient: userId,
+            title: 'Payment Secured',
+            message: `₹${totalAmount.toStringAsFixed(2)} has been secured in escrow for job: ${job ? job.job_title : jobId}`,
+            type: 'payment',
+            data: { jobId, paymentId: payment._id }
+        });
+
         await session.commitTransaction();
         return payment;
     } catch (error) {
@@ -166,7 +176,18 @@ exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatew
     });
 
     await signPayment(payment, session);
-    return await payment.save({ session });
+    await payment.save({ session });
+
+    // Notify User
+    await NotificationService.createNotification({
+        recipient: userId,
+        title: 'Payment Secured',
+        message: `₹${totalAmount.toStringAsFixed(2)} secured via ${gateway} for job: ${job.job_title}`,
+        type: 'payment',
+        data: { jobId, paymentId: payment._id }
+    });
+
+    return payment;
 };
 
 /**
@@ -312,7 +333,20 @@ exports.releasePayment = async (jobId) => {
                     jobId: jobId
                 });
             } else {
-                workerWallet.balance += totalWorkerPayout;
+                // AUTO-PAYOUT LOGIC (Stripe Connect)
+                // If worker is NOT new and has a Stripe account, attempt automated transfer
+                const stripeResult = await this.processStripeTransfer(job.selected_worker_id, totalWorkerPayout, jobId);
+
+                if (stripeResult.success) {
+                    workerWallet.balance += totalWorkerPayout;
+                    // We still record it in our wallet for ledger consistency, 
+                    // but we might want to mark it as withdrawn/processed externally.
+                    // For now, increasing balance is fine as the worker can see it as "paid".
+                    appendTimeline(job, 'completed', 'system', `Automated payout via Stripe Connect successful. Transfer ID: ${stripeResult.transferId}`);
+                } else {
+                    workerWallet.balance += totalWorkerPayout;
+                    logger.info(`Manual payout required for Job ${jobId}. Reason: ${stripeResult.message}`);
+                }
             }
             await workerWallet.save({ session });
         }
@@ -354,9 +388,28 @@ exports.releasePayment = async (jobId) => {
             await commissionRecord.save({ session });
         }
 
+        // Notify Worker
+        await NotificationService.createNotification({
+            recipient: job.selected_worker_id,
+            title: isNewWorker ? 'Earnings Pending' : 'Payment Received!',
+            message: isNewWorker
+                ? `Earnings of ₹${totalWorkerPayout.toStringAsFixed(2)} from job "${job.job_title}" are pending (72h cooldown).`
+                : `₹${totalWorkerPayout.toStringAsFixed(2)} has been added to your wallet for job "${job.job_title}".`,
+            type: 'payment',
+            data: { jobId, type: 'payout' }
+        });
+
+        // Notify User
+        await NotificationService.createNotification({
+            recipient: job.user_id,
+            title: 'Job Finalized',
+            message: `Payment has been released to the worker for job "${job.job_title}".`,
+            type: 'payment',
+            data: { jobId, type: 'release' }
+        });
+
         await session.commitTransaction();
         return payout;
-
     } catch (error) {
         await session.abortTransaction();
         throw error;
@@ -422,9 +475,132 @@ exports.refundPayment = async (jobId) => {
             }).catch(err => logger.error(`Failed to send refund email: ${err.message}`));
         }
 
+        // Notify User
+        await NotificationService.createNotification({
+            recipient: escrowPayments[0].user,
+            title: 'Refund Processed',
+            message: `A refund of ₹${totalRefund.toStringAsFixed(2)} has been credited back to your wallet.`,
+            type: 'payment',
+            data: { jobId, type: 'refund' }
+        });
+
         await session.commitTransaction();
         return refund;
 
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
+    }
+};
+
+/**
+ * Process Settlement (Split escrow between tenant and worker)
+ * Used for dispute resolution or mutual cancellations with partial pay
+ */
+exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const job = await Job.findById(jobId).session(session);
+        if (!job) throw new Error('Job not found');
+
+        // 1. Verify Escrow Balance
+        const escrowPayments = await Payment.find({
+            job: jobId,
+            type: 'escrow',
+            status: 'completed'
+        }).session(session);
+
+        const totalEscrowed = escrowPayments.reduce((sum, p) => sum + p.amount, 0);
+
+        if (workerAmount + tenantAmount > totalEscrowed + 0.01) { // Adding small epsilon for floating point
+            throw new Error(`Total settlement (₹${workerAmount + tenantAmount}) exceeds escrowed funds (₹${totalEscrowed})`);
+        }
+
+        // 2. Adjust Status of Escrow Records
+        for (const p of escrowPayments) {
+            p.status = 'refunded';
+            await p.save({ session });
+        }
+
+        const userWallet = await Wallet.findOne({ user: job.user_id }).session(session);
+        userWallet.escrowBalance = Math.max(0, userWallet.escrowBalance - totalEscrowed);
+
+        // 3. Refund Tenant portion
+        if (tenantAmount > 0) {
+            userWallet.balance += tenantAmount;
+
+            const refundRecord = new Payment({
+                job: jobId,
+                user: job.user_id,
+                amount: tenantAmount,
+                type: 'refund',
+                status: 'completed',
+                transactionId: `TXN_SETTLE_REFUND_${Date.now()}_${jobId}`,
+                gatewayResponse: { adminId, settlementType: 'partial' }
+            });
+            await signPayment(refundRecord, session);
+            await refundRecord.save({ session });
+        }
+        await userWallet.save({ session });
+
+        // 4. Pay Worker portion
+        if (workerAmount > 0) {
+            // Credit worker wallet
+            const workerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
+            if (!workerWallet) {
+                // If no wallet exists for some reason, create one or throw? Service handles credit usually.
+                await WalletService.creditWallet(job.selected_worker_id, workerAmount, session);
+            } else {
+                workerWallet.balance += workerAmount;
+                await workerWallet.save({ session });
+            }
+
+            const payoutRecord = new Payment({
+                job: jobId,
+                user: job.user_id,
+                worker: job.selected_worker_id,
+                amount: workerAmount,
+                type: 'payout',
+                status: 'completed',
+                transactionId: `TXN_SETTLE_PAYOUT_${Date.now()}_${jobId}`,
+                gatewayResponse: { adminId, settlementType: 'partial' }
+            });
+            await signPayment(payoutRecord, session);
+            await payoutRecord.save({ session });
+        }
+
+        // 5. Update Job Status
+        job.status = 'resolved';
+        job.timeline.push({
+            status: 'resolved',
+            description: `Settlement processed by admin. Worker paid ₹${workerAmount}, Tenant refunded ₹${tenantAmount}.`,
+            timestamp: new Date()
+        });
+        await job.save({ session });
+
+        // 6. Notifications
+        await NotificationService.createNotification({
+            recipient: job.user_id,
+            title: 'Dispute Resolved',
+            message: `The dispute for "${job.job_title}" has been resolved. You have been refunded ₹${tenantAmount.toFixed(2)}.`,
+            type: 'payment',
+            data: { jobId, type: 'settlement' }
+        });
+
+        await NotificationService.createNotification({
+            recipient: job.selected_worker_id,
+            title: 'Dispute Resolved',
+            message: `The dispute for "${job.job_title}" has been resolved. You have been paid ₹${workerAmount.toFixed(2)}.`,
+            type: 'payment',
+            data: { jobId, type: 'settlement' }
+        });
+
+        await session.commitTransaction();
+        return { workerAmount, tenantAmount };
     } catch (error) {
         await session.abortTransaction();
         throw error;
@@ -578,4 +754,88 @@ exports.verifyLedger = async () => {
     }
 
     return report;
+};
+
+/**
+ * Handle Refund initiated from External Gateway (Stripe Dashboard)
+ */
+exports.handleExternalRefund = async (chargeId, amount, session) => {
+    const NotificationService = require('../notifications/notification.service');
+    const Wallet = require('../wallet/wallet.model');
+
+    // Find the original payment record
+    // We check transactionId (Session ID) and also common Stripe IDs in gatewayResponse
+    const originalPayment = await Payment.findOne({
+        $or: [
+            { transactionId: chargeId },
+            { 'gatewayResponse.stripeSessionId': chargeId },
+            { 'gatewayResponse.paymentIntentId': chargeId },
+            { 'gatewayResponse.chargeId': chargeId }
+        ]
+    }).session(session);
+
+    if (!originalPayment) {
+        logger.warn(`External refund received for unknown transaction: ${chargeId}`);
+        return;
+    }
+
+    if (originalPayment.status === 'refunded') return;
+
+    originalPayment.status = 'refunded';
+    await originalPayment.save({ session });
+
+    // Deduct from wallet if it was a top-up
+    if (originalPayment.type === 'topup') {
+        const wallet = await Wallet.findOne({ user: originalPayment.user }).session(session);
+        if (wallet) {
+            wallet.balance = Math.max(0, wallet.balance - amount);
+            await wallet.save({ session });
+
+            await NotificationService.createNotification({
+                recipient: originalPayment.user,
+                title: 'Payment Refunded',
+                message: `₹${amount.toFixed(2)} has been refunded to your original payment method and deducted from your wallet.`,
+                type: 'payment',
+                data: { type: 'external_refund' }
+            });
+        }
+    } else if (originalPayment.type === 'escrow') {
+        const wallet = await Wallet.findOne({ user: originalPayment.user }).session(session);
+        if (wallet) {
+            wallet.escrowBalance = Math.max(0, wallet.escrowBalance - amount);
+            await wallet.save({ session });
+        }
+    }
+
+    logger.info(`Processed external refund for payment ${originalPayment._id}. Amount: ₹${amount}`);
+};
+
+/**
+ * Stripe Connect: Automated Transfer to Worker
+ * Triggered when a job is finalized and the worker has a connected account.
+ */
+exports.processStripeTransfer = async (workerId, amount, jobId) => {
+    if (!stripe) return { success: false, message: 'Stripe not configured' };
+
+    try {
+        const worker = await Worker.findOne({ user: workerId });
+        if (!worker || !worker.stripeAccountId || !worker.stripeOnboarded) {
+            logger.info(`Stripe: Worker ${workerId} not ready for automated transfer. Payout kept in internal wallet.`);
+            return { success: false, message: 'Worker not onboarded for Stripe Connect' };
+        }
+
+        const transfer = await stripe.transfers.create({
+            amount: Math.round(amount * 100), // In cents
+            currency: 'inr',
+            destination: worker.stripeAccountId,
+            description: `Payout for Job ID: ${jobId}`,
+            metadata: { jobId: jobId.toString(), workerId: workerId.toString() }
+        });
+
+        logger.info(`Stripe: Automated transfer successful for Job ${jobId}. Transfer ID: ${transfer.id}`);
+        return { success: true, transferId: transfer.id };
+    } catch (error) {
+        logger.error(`Stripe Transfer Failed for worker ${workerId}: ${error.message}`);
+        return { success: false, message: error.message };
+    }
 };

@@ -4,6 +4,7 @@ const config = require('../config/env');
 const logger = require('../config/logger');
 const Chat = require('../modules/chat/chat.model');
 const Message = require('../modules/chat/message.model');
+const Job = require('../modules/jobs/job.model');
 
 let io;
 
@@ -138,10 +139,27 @@ const initializeSocket = (server) => {
             logger.info(`User ${userId} stopped tracking job: ${jobId}`);
         });
 
-        socket.on('update_location', (data) => {
+
+
+        socket.on('update_location', async (data) => {
             const { jobId, lat, lng, heading } = data;
+
             // Broadcast to everyone tracking this job (except sender)
             socket.to(`job_${jobId}`).emit('location_update', { lat, lng, heading });
+
+            // Persist to DB so Admin Map (polling) sees the update
+            try {
+                if (jobId && lat && lng) {
+                    await Job.findByIdAndUpdate(jobId, {
+                        $set: {
+                            'journey.worker_location': { lat, lng },
+                            'journey.last_location_update': new Date()
+                        }
+                    });
+                }
+            } catch (err) {
+                logger.error(`Location save error: ${err.message}`);
+            }
         });
 
         // Handle new message

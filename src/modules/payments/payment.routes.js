@@ -11,6 +11,9 @@ router.get('/transactions', protect, authorize('admin'), paymentController.getAl
 router.post('/create-checkout-session', protect, paymentController.createCheckoutSession);
 router.post('/create-job-session', protect, paymentController.createJobPaymentSession);
 router.get('/job/:jobId', protect, paymentController.getJobPaymentDetails);
+router.post('/settle', protect, authorize('admin'), paymentController.processSettlement);
+router.get('/invoice/:paymentId', protect, paymentController.downloadInvoice);
+router.get('/export', protect, authorize('admin'), paymentController.exportTransactions);
 
 // Stripe Webhook (Stripe needs to call this without JWT)
 router.post('/webhook', express.raw({ type: 'application/json' }), paymentController.handleStripeWebhook);

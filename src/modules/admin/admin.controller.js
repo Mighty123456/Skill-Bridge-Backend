@@ -9,6 +9,8 @@ const Quotation = require('../quotations/quotation.model');
 const Payment = require('../payments/payment.model'); // Added
 const Wallet = require('../wallet/wallet.model'); // Added
 const Notification = require('../notifications/notification.model');
+const Chat = require('../chat/chat.model');
+const Message = require('../chat/message.model');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
@@ -504,14 +506,18 @@ const deleteUser = async (req, res) => {
 };
 
 /**
- * List all jobs for admin
+ * List all jobs for admin (with map data)
  * GET /api/admin/jobs
  */
 const listJobs = async (req, res) => {
   try {
-    const jobs = await Job.find()
-      .populate('user_id', 'name email')
-      .populate('selected_worker_id', 'name email')
+    const { status } = req.query; // optional filter e.g. ?status=in_progress
+    const filter = {};
+    if (status) filter.status = status;
+
+    const jobs = await Job.find(filter)
+      .populate('user_id', 'name email phone')
+      .populate('selected_worker_id', 'name email phone')
       .sort({ created_at: -1 });
 
     const formattedJobs = jobs.map(job => ({
@@ -519,11 +525,19 @@ const listJobs = async (req, res) => {
       jobTitle: job.job_title,
       skill: job.skill_required,
       userName: job.user_id?.name || 'Unknown',
+      userEmail: job.user_id?.email || '',
       location: job.location?.address_text || 'Unknown',
+      coordinates: job.location?.coordinates || [0, 0], // [lng, lat]
       urgency: job.urgency_level,
+      isEmergency: job.is_emergency,
       status: job.status,
       selectedWorker: job.selected_worker_id?.name || null,
-      createdAt: job.created_at
+      selectedWorkerEmail: job.selected_worker_id?.email || null,
+      workerLocation: job.journey?.worker_location || null, // live worker GPS
+      startedAt: job.started_at || job.journey?.started_at || null,
+      completedAt: job.completed_at || null,
+      createdAt: job.created_at,
+      updatedAt: job.updated_at,
     }));
 
     return successResponse(res, 'Jobs fetched successfully', { jobs: formattedJobs });
@@ -888,9 +902,65 @@ const getPerformanceAnalytics = async (req, res) => {
       }
     ]);
 
+    // Job Success vs Failure Rates
+    const jobSuccessStats = await Job.aggregate([
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Monthly Revenue Trend (Last 6 Months)
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    const revenueTrend = await Payment.aggregate([
+      {
+        $match: {
+          type: 'commission',
+          status: 'completed',
+          createdAt: { $gte: sixMonthsAgo }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          revenue: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      },
+      { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    // Geo Distribution of Jobs
+    const geoDistribution = await Job.aggregate([
+      {
+        $match: {
+          status: { $in: ['open', 'assigned', 'in_progress', 'completed'] },
+          'location.coordinates': { $exists: true }
+        }
+      },
+      {
+        $project: {
+          lat: { $arrayElemAt: ['$location.coordinates', 1] },
+          lng: { $arrayElemAt: ['$location.coordinates', 0] },
+          skill: '$skill_required',
+          status: '$status'
+        }
+      }
+    ]);
+
     return successResponse(res, 'Performance analytics fetched', {
       skillTrends: stats,
-      emergencySla: emergencySla[0] || { avgResponseTimeMin: 0, totalEmergencyJobs: 0 }
+      emergencySla: emergencySla[0] || { avgResponseTimeMin: 0, totalEmergencyJobs: 0 },
+      jobSuccessStats,
+      revenueTrend,
+      geoDistribution
     });
   } catch (error) {
     logger.error(`Admin getPerformanceAnalytics error: ${error.message}`);
@@ -920,6 +990,43 @@ const listLegalAuditLogs = async (req, res) => {
   }
 };
 
+/**
+ * Admin: List all active job chats
+ */
+const listAllChats = async (req, res) => {
+  try {
+    const { status, jobId } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+    if (jobId) filter.job = jobId;
+
+    const chats = await Chat.find(filter)
+      .populate('participants', 'name email role profileImage chatStrikes chatMutedUntil')
+      .populate('job', 'job_title status user_id selected_worker_id')
+      .sort({ lastMessageTime: -1 })
+      .limit(100);
+
+    return successResponse(res, 'All chats fetched', { chats });
+  } catch (error) {
+    logger.error(`Admin listAllChats error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch chats', 500);
+  }
+};
+
+/**
+ * Admin: View messages for any chat
+ */
+const getChatMessages = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+    const messages = await Message.find({ chatId }).sort({ createdAt: 1 });
+    return successResponse(res, 'Messages fetched', { messages });
+  } catch (error) {
+    logger.error(`Admin getChatMessages error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch messages', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -943,6 +1050,8 @@ module.exports = {
   broadcastNotification,
   getPerformanceAnalytics,
   listLegalAuditLogs,
+  listAllChats,
+  getChatMessages,
 };
 
 
