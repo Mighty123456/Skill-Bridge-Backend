@@ -122,6 +122,25 @@ const userSchema = new mongoose.Schema(
     },
     chatMutedUntil: {
       type: Date
+    },
+    // Anti-Brute Force Protection
+    loginAttempts: {
+      type: Number,
+      default: 0
+    },
+    lockUntil: {
+      type: Date
+    },
+    // Legal & Compliance
+    legal: {
+      termsAccepted: { type: Boolean, default: false },
+      termsAcceptedAt: { type: Date },
+      termsVersion: { type: String, default: '1.0' },
+      privacyAccepted: { type: Boolean, default: false },
+      privacyAcceptedAt: { type: Date },
+      privacyVersion: { type: String, default: '1.0' },
+      ipAddress: { type: String }, // For audit trail
+      userAgent: { type: String }
     }
   },
   {

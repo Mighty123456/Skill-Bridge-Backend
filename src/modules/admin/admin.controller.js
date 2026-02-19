@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Worker = require('../workers/worker.model');
 const User = require('../users/user.model');
 const Admin = require('./admin.model');
@@ -7,10 +8,12 @@ const Job = require('../jobs/job.model');
 const Quotation = require('../quotations/quotation.model');
 const Payment = require('../payments/payment.model'); // Added
 const Wallet = require('../wallet/wallet.model'); // Added
+const Notification = require('../notifications/notification.model');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
 const emailService = require('../../common/services/email.service');
+const paymentService = require('../payments/payment.service');
 const logger = require('../../config/logger');
 
 
@@ -344,6 +347,9 @@ const getDashboardStats = async (req, res) => {
     const totalRevenue = revenueData[0]?.total || 0;
     const escrowBalance = escrowData[0]?.total || 0;
 
+    // New: Platform Financial Stats
+    const platformStats = await paymentService.getPlatformStats();
+
     return successResponse(res, 'Stats fetched successfully', {
       pendingVerifications: pendingWorkers + pendingContractors,
       verifiedWorkers,
@@ -355,8 +361,9 @@ const getDashboardStats = async (req, res) => {
       activeJobs,
       completedJobs,
       emergencyJobs,
-      totalRevenue,
+      totalRevenue: platformStats.totalRevenue || totalRevenue,
       escrowBalance,
+      transactionCount: platformStats.transactionCount || 0
     });
   } catch (error) {
     logger.error(`Admin getDashboardStats error: ${error.message}`);
@@ -558,6 +565,361 @@ const listQuotations = async (req, res) => {
   }
 };
 
+/**
+ * Verify Ledger Integrity
+ * GET /api/admin/ledger/verify
+ */
+const verifyLedger = async (req, res) => {
+  try {
+    const report = await paymentService.verifyLedger();
+    return successResponse(res, 'Ledger verification completed', report);
+  } catch (error) {
+    logger.error(`Admin verifyLedger error: ${error.message}`);
+    return errorResponse(res, 'Failed to verify ledger', 500);
+  }
+};
+
+/**
+ * Get Tenant Financial Profile (Spending, Escrow, Wallet)
+ * GET /api/admin/tenants/:tenantId/financials
+ */
+const getTenantFinancials = async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+
+    const user = await User.findById(tenantId).select('name email role');
+    if (!user) return errorResponse(res, 'Tenant not found', 404);
+
+    const [wallet, spendingData, transactionHistory] = await Promise.all([
+      Wallet.findOne({ user: tenantId }),
+      Payment.aggregate([
+        { $match: { user: new mongoose.Types.ObjectId(tenantId) } },
+        {
+          $group: {
+            _id: '$type',
+            total: { $sum: '$amount' },
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+      Payment.find({ user: tenantId })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .populate('job', 'job_title status')
+    ]);
+
+    // Format spending stats
+    const stats = {
+      totalTopups: 0,
+      totalSpent: 0, // Sum of completed escrows/payments
+      activeEscrow: 0,
+      totalRefunds: 0
+    };
+
+    spendingData.forEach(item => {
+      if (item._id === 'topup') stats.totalTopups = item.total;
+      if (item._id === 'escrow') stats.totalSpent = item.total; // Total ever committed to jobs
+      if (item._id === 'refund') stats.totalRefunds = item.total;
+    });
+
+    return successResponse(res, 'Tenant financials fetched', {
+      tenant: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role
+      },
+      wallet: {
+        balance: wallet?.balance || 0,
+        escrowBalance: wallet?.escrowBalance || 0,
+        currency: wallet?.currency || 'INR'
+      },
+      stats,
+      history: transactionHistory.map(p => ({
+        id: p._id,
+        type: p.type,
+        amount: p.amount,
+        status: p.status,
+        date: p.createdAt,
+        jobTitle: p.job?.job_title || 'N/A',
+        transactionId: p.transactionId
+      }))
+    });
+  } catch (error) {
+    logger.error(`Admin getTenantFinancials error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch tenant financials', 500);
+  }
+};
+
+/**
+ * Get Worker Financial Profile (Earnings, Wallet, Payouts)
+ * GET /api/admin/workers/:workerId/financials
+ */
+const getWorkerFinancials = async (req, res) => {
+  try {
+    const { workerId } = req.params;
+
+    // Find the worker profile first
+    const worker = await Worker.findById(workerId).populate('user', 'name email');
+    if (!worker) return errorResponse(res, 'Worker not found', 404);
+
+    const userId = worker.user._id;
+
+    const [wallet, earningsData, history] = await Promise.all([
+      Wallet.findOne({ user: userId }),
+      Payment.aggregate([
+        { $match: { worker: userId, type: 'payout', status: 'completed' } },
+        { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
+      ]),
+      Payment.find({
+        $or: [
+          { worker: userId },
+          { user: userId, type: { $in: ['payout', 'escrow', 'refund'] } }
+        ]
+      })
+        .sort({ createdAt: -1 })
+        .limit(20)
+    ]);
+
+    return successResponse(res, 'Worker financials fetched', {
+      worker: {
+        id: worker._id,
+        name: worker.user.name,
+        email: worker.user.email,
+        totalJobsCompleted: worker.totalJobsCompleted || 0
+      },
+      wallet: {
+        balance: wallet?.balance || 0,
+        pendingBalance: wallet?.pendingBalance || 0,
+        currency: wallet?.currency || 'INR',
+        pendingPayouts: wallet?.pendingPayouts || []
+      },
+      stats: {
+        totalEarnings: earningsData[0]?.total || 0,
+        payoutCount: earningsData[0]?.count || 0
+      },
+      history: history.map(p => ({
+        id: p._id,
+        type: p.type,
+        amount: p.amount,
+        status: p.status,
+        date: p.createdAt,
+        jobId: p.job,
+        transactionId: p.transactionId
+      }))
+    });
+  } catch (error) {
+    logger.error(`Admin getWorkerFinancials error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch worker financials', 500);
+  }
+};
+
+/**
+ * List all active disputes
+ * GET /api/admin/disputes
+ */
+const listDisputes = async (req, res) => {
+  try {
+    const disputes = await Job.find({ 'dispute.is_disputed': true })
+      .populate('user_id', 'name email phone')
+      .populate('selected_worker_id', 'name email phone')
+      .sort({ 'dispute.opened_at': -1 });
+
+    const formatted = disputes.map(job => ({
+      jobId: job._id,
+      jobTitle: job.job_title,
+      tenant: job.user_id,
+      worker: job.selected_worker_id,
+      reason: job.dispute.reason,
+      openedAt: job.dispute.opened_at,
+      status: job.dispute.status,
+      totalCost: job.diagnosis_report?.final_total_cost || 0
+    }));
+
+    return successResponse(res, 'Disputes fetched successfully', { disputes: formatted });
+  } catch (error) {
+    logger.error(`Admin listDisputes error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch disputes', 500);
+  }
+};
+
+/**
+ * List all active warranty claims
+ * GET /api/admin/warranties
+ */
+const listWarrantyClaims = async (req, res) => {
+  try {
+    const claims = await Job.find({ 'warranty_claim.active': true })
+      .populate('user_id', 'name email phone')
+      .populate('selected_worker_id', 'name email phone')
+      .sort({ 'warranty_claim.claimed_at': -1 });
+
+    const formatted = claims.map(job => ({
+      jobId: job._id,
+      jobTitle: job.job_title,
+      tenant: job.user_id,
+      worker: job.selected_worker_id,
+      reason: job.warranty_claim.reason,
+      claimedAt: job.warranty_claim.claimed_at,
+      resolved: job.warranty_claim.resolved,
+      warrantyDuration: job.diagnosis_report?.warranty_duration_days || 0
+    }));
+
+    return successResponse(res, 'Warranty claims fetched successfully', { claims: formatted });
+  } catch (error) {
+    logger.error(`Admin listWarrantyClaims error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch warranty claims', 500);
+  }
+};
+
+/**
+ * Get System Health
+ * GET /api/admin/health
+ */
+const getSystemHealth = async (req, res) => {
+  try {
+    const uptime = process.uptime();
+    const memUsage = process.memoryUsage();
+
+    // Database Health
+    const dbStatus = mongoose.connection.readyState === 1 ? 'connected' : 'disconnected';
+
+    const healthData = {
+      status: 'healthy',
+      timestamp: new Date(),
+      nodeVersion: process.version,
+      platform: process.platform,
+      uptime: {
+        seconds: Math.floor(uptime),
+        formatted: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`
+      },
+      memory: {
+        rss: `${Math.round(memUsage.rss / 1024 / 1024 * 100) / 100} MB`,
+        heapTotal: `${Math.round(memUsage.heapTotal / 1024 / 1024 * 100) / 100} MB`,
+        heapUsed: `${Math.round(memUsage.heapUsed / 1024 / 1024 * 100) / 100} MB`
+      },
+      database: {
+        status: dbStatus,
+        name: mongoose.connection.name
+      }
+    };
+
+    return successResponse(res, 'System health fetched successfully', healthData);
+  } catch (error) {
+    logger.error(`Admin getSystemHealth error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch system health', 500);
+  }
+};
+
+/**
+ * Broadcast notification to all or specific roles
+ * POST /api/admin/notifications/broadcast
+ */
+const broadcastNotification = async (req, res) => {
+  try {
+    const { title, message, targetRole, type = 'system' } = req.body;
+
+    if (!title || !message) {
+      return errorResponse(res, 'Title and message are required', 400);
+    }
+
+    const filter = {};
+    if (targetRole && targetRole !== 'all') {
+      filter.role = targetRole;
+    }
+
+    // Find all target users
+    const users = await User.find(filter).select('_id');
+
+    // Create notifications in bulk
+    const notifications = users.map(u => ({
+      recipient: u._id,
+      title,
+      message,
+      type,
+      data: { broadcast: true }
+    }));
+
+    await Notification.insertMany(notifications);
+
+    logger.info(`Admin ${req.userId} broadcasted notification to ${users.length} users (Role: ${targetRole || 'all'})`);
+
+    return successResponse(res, `Broadcast successful to ${users.length} users`);
+  } catch (error) {
+    logger.error(`Admin broadcastNotification error: ${error.message}`);
+    return errorResponse(res, 'Failed to broadcast notification', 500);
+  }
+};
+
+/**
+ * Get Performance Analytics (SLAs, Delays, Skill Trends)
+ * GET /api/admin/analytics/performance
+ */
+const getPerformanceAnalytics = async (req, res) => {
+  try {
+    const stats = await Job.aggregate([
+      { $match: { status: 'completed' } },
+      {
+        $group: {
+          _id: '$skill_required',
+          avgCompletionTimeHrs: {
+            $avg: { $divide: [{ $subtract: ['$completed_at', '$started_at'] }, 3600000] }
+          },
+          totalJobs: { $sum: 1 },
+          delayCount: {
+            $sum: { $cond: [{ $gt: [{ $size: { $ifNull: ['$journey.delays', []] } }, 0] }, 1, 0] }
+          }
+        }
+      },
+      { $sort: { totalJobs: -1 } }
+    ]);
+
+    // SLA Breakdown for Emergency Jobs
+    const emergencySla = await Job.aggregate([
+      { $match: { urgency_level: 'emergency', status: 'completed' } },
+      {
+        $group: {
+          _id: null,
+          avgResponseTimeMin: {
+            $avg: { $divide: [{ $subtract: ['$journey.arrived_at', '$created_at'] }, 60000] }
+          },
+          totalEmergencyJobs: { $sum: 1 }
+        }
+      }
+    ]);
+
+    return successResponse(res, 'Performance analytics fetched', {
+      skillTrends: stats,
+      emergencySla: emergencySla[0] || { avgResponseTimeMin: 0, totalEmergencyJobs: 0 }
+    });
+  } catch (error) {
+    logger.error(`Admin getPerformanceAnalytics error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch performance analytics', 500);
+  }
+};
+
+/**
+ * List Legal Audit Logs (Terms/Privacy Acceptance)
+ * GET /api/admin/legal/audit
+ */
+const listLegalAuditLogs = async (req, res) => {
+  try {
+    const { role } = req.query;
+    const filter = { 'legal.termsAccepted': true };
+    if (role) filter.role = role;
+
+    const logs = await User.find(filter)
+      .select('name email role legal.termsAcceptedAt legal.termsVersion legal.privacyAcceptedAt legal.privacyVersion legal.ipAddress')
+      .sort({ 'legal.termsAcceptedAt': -1 })
+      .limit(100);
+
+    return successResponse(res, 'Legal audit logs fetched', { logs });
+  } catch (error) {
+    logger.error(`Admin listLegalAuditLogs error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch legal logs', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -572,6 +934,15 @@ module.exports = {
   updateUserStatus,
   listJobs,
   listQuotations,
+  verifyLedger,
+  getWorkerFinancials,
+  getTenantFinancials,
+  listDisputes,
+  listWarrantyClaims,
+  getSystemHealth,
+  broadcastNotification,
+  getPerformanceAnalytics,
+  listLegalAuditLogs,
 };
 
 

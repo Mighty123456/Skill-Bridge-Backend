@@ -6,6 +6,8 @@ const { initializeEmailService } = require('./common/services/email.service');
 
 const http = require('http');
 const { initializeSocket } = require('./socket/socket');
+const { initializeScheduler } = require('./common/services/scheduler.service');
+const { initializeQueues } = require('./common/services/queue.service');
 
 // Start server function
 const startServer = async () => {
@@ -25,6 +27,12 @@ const startServer = async () => {
 
     // Initialize Socket.io
     initializeSocket(server);
+
+    // Initialize Background Queues
+    initializeQueues();
+
+    // Start background tasks
+    initializeScheduler();
 
     server.listen(PORT, () => {
       logger.info(`🚀 Server is soaring! Running in ${config.NODE_ENV} mode on port ${PORT}`);
@@ -52,4 +60,9 @@ const startServer = async () => {
 
 // Start the server
 startServer();
+
+// Server logic successfully running
+
+
+
 

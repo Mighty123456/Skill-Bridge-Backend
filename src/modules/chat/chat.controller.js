@@ -176,6 +176,14 @@ exports.sendMessage = async (req, res) => {
                 currentUser.chatMutedUntil = new Date(Date.now() + 15 * 60000); // 15 mins mute
                 currentUser.chatStrikes = 0; // Reset cycle
                 warningMessage = 'Violation 3/3. You have been muted for 15 minutes due to repeated abusive language.';
+                
+                // Trigger fraud detection
+                try {
+                    const fraudDetectionService = require('../fraud/fraud-detection.service');
+                    await fraudDetectionService.detectProfanityViolation(senderId, text, 3);
+                } catch (err) {
+                    logger.error(`Failed to create fraud alert for profanity: ${err.message}`);
+                }
             } else {
                 warningMessage += ` Violation ${currentUser.chatStrikes}/3. Continued abuse will lead to a mute.`;
             }
@@ -285,6 +293,14 @@ exports.sendMessage = async (req, res) => {
             CONTACT_PATTERNS.UPI.lastIndex = 0;
 
             if (hasPhone || hasEmail || hasLinks || hasUPI) {
+                // Trigger fraud detection for contact sharing
+                try {
+                    const fraudDetectionService = require('../fraud/fraud-detection.service');
+                    await fraudDetectionService.detectContactSharing(senderId, jobId);
+                } catch (err) {
+                    logger.error(`Failed to create fraud alert for contact sharing: ${err.message}`);
+                }
+                
                 // We block the message entirely to prevent circumvention.
                 return errorResponse(res, 'Sharing contact details (phone, email, links, UPI) is strictly prohibited. Keep all communication on SkillBridge for your safety and protection.', 400);
             }

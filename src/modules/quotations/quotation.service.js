@@ -75,18 +75,51 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
         throw new Error('Total quotation amount must be greater than zero.');
     }
 
-    // 7. Underpricing Warning Logic
+    // 7. Suspicious Pricing Detection
     let warning = null;
-    // Calculate average of other quotes for this job
-    const otherQuotes = await Quotation.aggregate([
-        { $match: { job_id: job._id } },
-        { $group: { _id: null, avg: { $avg: '$total_cost' } } }
+
+    // Check against global market average for this skill
+    const marketStats = await Quotation.aggregate([
+        {
+            $lookup: {
+                from: 'jobs',
+                localField: 'job_id',
+                foreignField: '_id',
+                as: 'job'
+            }
+        },
+        { $unwind: '$job' },
+        { $match: { 'job.skill_required': job.skill_required, status: 'accepted' } },
+        { $group: { _id: null, avg: { $avg: '$total_cost' }, count: { $sum: 1 } } }
     ]);
 
-    if (otherQuotes.length > 0 && otherQuotes[0].avg > 0) {
-        const avg = otherQuotes[0].avg;
-        if (total_cost < (avg * 0.5)) {
-            warning = 'Your quotation is significantly lower than other workers. Ensure you have calculated costs correctly.';
+    if (marketStats.length > 0 && marketStats[0].count >= 3) {
+        const marketAvg = marketStats[0].avg;
+        if (total_cost < (marketAvg * 0.4)) {
+            warning = '⚠️ Suspiciously Low Price: Your quote is less than 40% of the market average for this skill. This may lead to job rejection or system flags for quality concerns.';
+        } else if (total_cost < (marketAvg * 0.3)) {
+            // Extremely low price - trigger fraud detection
+            try {
+                const fraudDetectionService = require('../fraud/fraud-detection.service');
+                await fraudDetectionService.detectSuspiciousPricing(null, job._id, user._id, total_cost);
+            } catch (err) {
+                logger.error(`Failed to create fraud alert for suspicious pricing: ${err.message}`);
+            }
+        } else if (total_cost > (marketAvg * 2.5)) {
+            warning = '🚩 High Price Alert: Your quote is more than 2.5x the market average. Ensure your premium pricing is justified in your notes/video.';
+        }
+    } else {
+        // Fallback: Calculate average of other quotes for this specific job
+        const otherQuotes = await Quotation.aggregate([
+            { $match: { job_id: job._id } },
+            { $group: { _id: null, avg: { $avg: '$total_cost' } } }
+        ]);
+
+        if (otherQuotes.length > 0 && otherQuotes[0].avg > 0) {
+            const avg = otherQuotes[0].avg;
+            if (total_cost < (avg * 0.5)) {
+                warning = 'Your quotation is significantly lower than other bidders. Ensure you have calculated costs correctly.';
+            }
         }
     }
 
@@ -195,8 +228,10 @@ exports.acceptQuotation = async (quotationId, userId) => {
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
     job.start_otp = otp;
     job.start_otp_expires_at = new Date(Date.now() + 72 * 60 * 60 * 1000); // 72 Hours Expiry
-    job.timeline = job.timeline || []; // Ensure timeline exists
-    job.timeline.push({ status: 'assigned', actor: 'user', note: 'Worker hired. OTP generated.' });
+    // job.timeline = job.timeline || []; // Ensure timeline exists
+    // job.timeline.push({ status: 'assigned', actor: 'user', note: 'Worker hired. OTP generated.' });
+    const { appendTimeline } = require('../jobs/job.service');
+    appendTimeline(job, 'assigned', 'user', 'Worker hired. OTP generated.');
 
     await job.save();
 

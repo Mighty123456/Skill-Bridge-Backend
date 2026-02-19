@@ -591,3 +591,41 @@ exports.getNearbyWorkers = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to fetch nearby workers' });
     }
 };
+
+/**
+ * Subscribe to Premium Plan
+ */
+exports.subscribe = async (req, res) => {
+    try {
+        const { plan } = req.body; // 'gold' or 'platinum'
+        if (!['gold', 'platinum'].includes(plan)) {
+            return res.status(400).json({ success: false, message: 'Invalid plan selected' });
+        }
+
+        const worker = await Worker.findOne({ user: req.user._id });
+        if (!worker) return res.status(404).json({ message: 'Worker profile not found' });
+
+        // Payment Logic Here (Mock Integration)
+        // const amount = plan === 'gold' ? 499 : 999;
+        // await PaymentGateway.charge(...)
+
+        // Update Subscription
+        worker.subscription = {
+            plan: plan,
+            expiry: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 Days
+            autoRenew: true
+        };
+
+        await worker.save();
+
+        res.json({
+            success: true,
+            message: `Successfully subscribed to ${plan} plan! Commision reduced.`,
+            data: worker.subscription
+        });
+
+    } catch (error) {
+        logger.error(`Subscribe Error: ${error.message}`);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

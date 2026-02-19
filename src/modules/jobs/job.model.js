@@ -84,6 +84,8 @@ const jobSchema = new mongoose.Schema(
         completion_photos: [{
             type: String, // URLs for work completion proof
         }],
+        work_summary: { type: String, trim: true },
+        digital_signature: { type: String }, // URL to signature image
 
         // Execution Details
         start_otp: { type: String, select: false }, // Hidden by default

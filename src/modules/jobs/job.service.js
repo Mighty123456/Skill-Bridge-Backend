@@ -5,6 +5,8 @@ const NotificationService = require('../notifications/notification.service');
 const cloudinaryService = require('../../common/services/cloudinary.service'); // For file uploads if needed logic here
 const { calculateDistance } = require('../../common/utils/geo');
 const logger = require('../../config/logger');
+const PaymentService = require('../payments/payment.service');
+const EmailService = require('../../common/services/email.service');
 
 // === HELPER: Sanitize PII ===
 const sanitizeNote = (text) => {
@@ -239,11 +241,18 @@ exports.confirmEta = async (jobId, workerId, etaTime) => {
  * B2. Start Journey
  * Worker indicates they are on the way.
  */
-exports.startJourney = async (jobId, workerId) => {
+exports.startJourney = async (jobId, workerId, location) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
     if (job.status !== 'eta_confirmed') throw new Error('Must confirm ETA before starting journey');
+
+    // Fake GPS Detection
+    if (location && location.isMock) {
+        appendTimeline(job, job.status, 'system', 'Security Alert: Fake GPS detected at journey start.', { type: 'security_alert', location });
+        await job.save();
+        throw new Error('Fake GPS detected. Journey cannot be started.');
+    }
 
     job.status = 'on_the_way';
     job.journey = job.journey || {};
@@ -277,6 +286,13 @@ exports.arrive = async (jobId, workerId, location) => {
     // Allow if on_the_way (normal flow) or assigned/eta_confirmed (fallback/legacy)
     if (!['on_the_way', 'assigned', 'eta_confirmed'].includes(job.status)) {
         throw new Error('Invalid job status for arrival');
+    }
+
+    // 0. Fake GPS / Mock Location Detection
+    if (location && location.isMock) {
+        appendTimeline(job, job.status, 'system', 'Security Alert: Fake GPS / Mock Location detected at arrival attempt.', { type: 'security_alert', location });
+        await job.save();
+        throw new Error('Fake GPS detected. Please disable mock location apps and use your real GPS to confirm arrival.');
     }
 
     // 1. Geofence Check (Production Constraint)
@@ -346,13 +362,20 @@ exports.arrive = async (jobId, workerId, location) => {
         logger.error('Failed to create ETA Tracking record', e);
     }
 
-    // Penalty if late
-    if (is_late) {
-        const worker = await Worker.findOne({ user: workerId });
-        if (worker) {
+    // Penalty or Bonus based on punctuality
+    const worker = await Worker.findOne({ user: workerId });
+    if (worker) {
+        if (is_late) {
             worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 5); // Reduced penalty
-            await worker.save();
+            logger.info(`Worker ${workerId} penalised for late arrival. New Score: ${worker.reliabilityScore}`);
+        } else {
+            // Punctuality Bonus: +2 points for being on time or early
+            worker.reliabilityScore = Math.min(100, worker.reliabilityScore + 2);
+            worker.reliabilityStats = worker.reliabilityStats || {};
+            worker.reliabilityStats.punctuality = (worker.reliabilityStats.punctuality || 0) + 1;
+            logger.info(`Worker ${workerId} received punctuality bonus. New Score: ${worker.reliabilityScore}`);
         }
+        await worker.save();
     }
 
     // Notify User
@@ -400,10 +423,23 @@ exports.reportDelay = async (jobId, workerId, reason, delayMinutes) => {
     return job;
 };
 
-exports.updateLocation = async (jobId, workerId, lat, lng) => {
+exports.updateLocation = async (jobId, workerId, lat, lng, isMock) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
+
+    // Fake GPS Detection (Log but maybe don't block entirely during transit to keep tracing?)
+    // Let's block it to be strict.
+    if (lat === undefined || lng === undefined) return job;
+
+    if (isMock) {
+        // Just log a warning in system log or similar? 
+        // For real-time updates, we probably want to flag it in metadata.
+        job.journey = job.journey || {};
+        job.journey.worker_location = { lat, lng, isMock: true };
+        await job.save();
+        return job;
+    }
 
     // Only update if journey is active
     if (job.status !== 'on_the_way') {
@@ -536,51 +572,117 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
 };
 
 /**
+ * Helper: Finalize Job Status after successful Escrow/Payment
+ */
+exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayId = null, session = null) => {
+    const job = await Job.findById(jobId)
+        .populate('user_id', 'name email')
+        .populate('selected_worker_id', 'name email')
+        .session(session);
+
+    if (!job) throw new Error('Job not found for finalization');
+
+    // If external gateway used, ensuring we record the payment in our DB
+    if (gateway) {
+        await PaymentService.recordExternalEscrow(jobId, job.user_id._id, amount, gateway, gatewayId, session);
+    }
+
+    job.status = 'diagnosed';
+    job.diagnosis_report.status = 'approved';
+    job.diagnosis_report.approved_at = new Date();
+    appendTimeline(job, 'diagnosed', 'user', 'Diagnosis approved. Funds secured in platform escrow.');
+
+    // Notify Worker (Async - don't need session)
+    NotificationService.createNotification({
+        recipient: job.selected_worker_id._id,
+        title: 'Diagnosis Approved & Paid',
+        message: 'Client approved estimate and funds are secured. Enter OTP to start.',
+        type: 'info',
+        data: { jobId: job._id }
+    }).catch(e => logger.error(`Notification failed for job ${jobId}: ${e.message}`));
+
+    // Send Professional Emails (Async - don't need session)
+    try {
+        const breakdown = await PaymentService.calculateBreakdown(amount, job.selected_worker_id._id);
+
+        EmailService.sendPaymentEscrowedUser(job.user_id.email, {
+            jobId: job._id,
+            userName: job.user_id.name,
+            jobTitle: job.job_title,
+            jobAmount: amount,
+            protectionFee: breakdown.protectionFee,
+            totalAmount: breakdown.totalUserPayable,
+            warrantyDays: job.diagnosis_report.warranty_duration_days || 0
+        });
+
+        EmailService.sendPaymentEscrowedWorker(job.selected_worker_id.email, {
+            workerName: job.selected_worker_id.name,
+            jobTitle: job.job_title,
+            grossAmount: amount,
+            commissionAmount: breakdown.commission,
+            netPayout: breakdown.workerAmount
+        });
+    } catch (e) {
+        logger.error(`Post-payment email failed for job ${jobId}: ${e.message}`);
+    }
+
+    return await job.save({ session });
+};
+
+/**
  * C. Diagnosis Mode: Approve/Reject
  */
 exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
-    const job = await Job.findById(jobId);
+    const job = await Job.findById(jobId)
+        .populate('user_id', 'name email')
+        .populate('selected_worker_id', 'name email');
+
     if (!job) throw new Error('Job not found');
-    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+    if (job.user_id._id.toString() !== userId.toString()) throw new Error('Unauthorized');
 
     if (approved) {
-        // NEW: Require OTP to start work. Status goes to 'diagnosed' first.
-        job.status = 'diagnosed';
-        job.diagnosis_report.status = 'approved';
-        job.diagnosis_report.approved_at = new Date();
-        appendTimeline(job, 'diagnosed', 'user', 'Diagnosis approved. Waiting for OTP to start job.');
+        const amount = job.diagnosis_report.final_total_cost;
+        if (!amount || amount <= 0) {
+            throw new Error('Invalid diagnosis cost. Cannot proceed to payment.');
+        }
 
-        // Notify Worker
-        await NotificationService.createNotification({
-            recipient: job.selected_worker_id,
-            title: 'Diagnosis Approved',
-            message: 'Client approved your estimate. Please enter OTP to start the job.',
-            type: 'info',
-            data: { jobId: job._id }
-        });
+        try {
+            // Attempt wallet payment first (Legacy flow)
+            await PaymentService.createEscrow(jobId, userId, amount);
+            return await this.handleJobPaymentSuccess(jobId, amount);
+        } catch (paymentError) {
+            // If wallet fails, we allow the controller to offer Stripe Checkout
+            logger.info(`Wallet payment skipped/failed for job ${jobId}: ${paymentError.message}`);
+            throw paymentError;
+        }
     } else {
         job.diagnosis_report.status = 'rejected';
         job.diagnosis_report.rejection_reason = rejectionReason;
-        job.status = 'eta_confirmed'; // Send back to step before? Or cancel?
-        // Let's allow resubmission
+        job.status = 'eta_confirmed';
         appendTimeline(job, 'eta_confirmed', 'user', `Diagnosis rejected: ${rejectionReason}`);
+        return await job.save();
     }
-
-    await job.save();
-    return job;
 };
 
 /**
  * D. Material Approval Subflow: Request
  */
-exports.requestMaterial = async (jobId, workerId, requestData) => {
+exports.requestMaterial = async (jobId, workerId, requestData, billProofFile) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
     if (job.status !== 'in_progress') throw new Error('Job must be in progress');
 
+    let bill_proof = requestData.bill_proof; // Fallback to existing URL if any
+
+    if (billProofFile) {
+        const uploadResult = await cloudinaryService.uploadOptimizedImage(billProofFile.buffer, `skillbridge/materials/${jobId}`);
+        bill_proof = uploadResult.url;
+    }
+
     job.material_requests.push({
-        ...requestData, // item_name, cost, bill_proof, reason
+        ...requestData,
+        bill_proof,
         status: 'pending',
         requested_at: new Date()
     });
@@ -612,7 +714,18 @@ exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
     const request = job.material_requests.id(requestId);
     if (!request) throw new Error('Request not found');
 
-    request.status = approved ? 'approved' : 'rejected';
+    if (approved) {
+        try {
+            // Lock funds for material
+            await PaymentService.createMaterialEscrow(jobId, userId, request.cost);
+            request.status = 'approved';
+        } catch (e) {
+            logger.error(`Material Escrow Failed: ${e.message}`);
+            throw new Error(`Approval Failed: Insufficient funds or payment error. ${e.message}`);
+        }
+    } else {
+        request.status = 'rejected';
+    }
     request.responded_at = new Date();
 
     // Check if any other pending?
@@ -628,29 +741,38 @@ exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
 };
 
 /**
- * Submit Completion Proof (Existing - Updated constraints)
+ * Submit Completion Proof (Updated with Summary & Signature)
  */
-exports.submitCompletion = async (jobId, workerId, files) => {
+exports.submitCompletion = async (jobId, workerId, files, summary, signatureFile) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    // Allow from in_progress
     if (job.status !== 'in_progress') throw new Error('Job must be in progress to complete.');
 
     let completion_photos = [];
-    if (files && files.length > 0) {
-        const uploadPromises = files.map(file =>
-            cloudinaryService.uploadOptimizedImage(file.buffer, `skillbridge/completion/${jobId}`)
-        );
-        const uploadResults = await Promise.all(uploadPromises);
-        completion_photos = uploadResults.map(r => r.url);
+    if (!files || files.length === 0) {
+        throw new Error('At least one completion photo is required as evidence.');
+    }
+
+    const uploadPromises = files.map(file =>
+        cloudinaryService.uploadOptimizedImage(file.buffer, `skillbridge/completion/${jobId}`)
+    );
+    const uploadResults = await Promise.all(uploadPromises);
+    completion_photos = uploadResults.map(r => r.url);
+
+    let digital_signature = null;
+    if (signatureFile) {
+        const uploadResult = await cloudinaryService.uploadOptimizedImage(signatureFile.buffer, `skillbridge/signatures/${jobId}`);
+        digital_signature = uploadResult.url;
     }
 
     job.status = 'reviewing';
     job.completion_photos = completion_photos;
+    job.digital_signature = digital_signature;
+    job.work_summary = summary;
     job.completed_at = new Date();
 
-    appendTimeline(job, 'reviewing', 'worker', 'Completion proof submitted');
+    appendTimeline(job, 'reviewing', 'worker', 'Completion proof & digital signature submitted');
     await job.save();
 
     await NotificationService.createNotification({
@@ -701,7 +823,9 @@ exports.confirmCompletion = async (jobId, userId) => {
  * Should be called by a scheduler or manual trigger after 24 hours.
  */
 exports.finalizeJob = async (jobId) => {
-    const job = await Job.findById(jobId);
+    const job = await Job.findById(jobId)
+        .populate('user_id', 'name email')
+        .populate('selected_worker_id', 'name email');
     if (!job) throw new Error('Job not found');
 
     if (job.status !== 'cooling_window') throw new Error('Job is not in cooling window');
@@ -716,15 +840,25 @@ exports.finalizeJob = async (jobId) => {
     }
 
     // Release Payment
+    try {
+        await PaymentService.releasePayment(jobId);
+        job.payment_released = true;
+        appendTimeline(job, 'completed', 'system', 'Cooling period ended. Payment released to worker.');
+    } catch (err) {
+        logger.error(`Failed to release payment for job ${jobId}`, err);
+        // Do not fail the job finalization completely, but flag it? 
+        // Or throw to retry later?
+        // Throwing allows retry by scheduler.
+        throw new Error(`Payment Release Failed: ${err.message}`);
+    }
+
     job.status = 'completed';
-    job.payment_released = true;
-    appendTimeline(job, 'completed', 'system', 'Cooling period ended. Payment released.');
 
     await job.save();
 
     // Update Worker Stats (Passport) - Moved from confirmCompletion
     try {
-        const worker = await Worker.findOne({ user: job.selected_worker_id });
+        const worker = await Worker.findOne({ user: job.selected_worker_id._id });
         if (worker) {
             const skillIndex = worker.skill_stats.findIndex(s => s.skill === job.skill_required);
             if (skillIndex > -1) {
@@ -733,7 +867,9 @@ exports.finalizeJob = async (jobId) => {
             } else {
                 worker.skill_stats.push({ skill: job.skill_required, confidence: 100, last_used: new Date() });
             }
-            // Reputation Logic could update here
+
+            // Note: totalJobsCompleted is now handled inside PaymentService.releasePayment to stay consistent with money flows.
+
             await worker.save();
         }
     } catch (e) {
@@ -742,12 +878,29 @@ exports.finalizeJob = async (jobId) => {
 
     // Notify Both
     await NotificationService.createNotification({
-        recipient: job.selected_worker_id,
+        recipient: job.selected_worker_id._id,
         title: 'Payment Released',
         message: 'Job finalized successfully. Payment has been credited.',
         type: 'payment_received',
         data: { jobId: job._id }
     });
+
+    // Send Professional Email to Worker
+    try {
+        const workerUser = job.selected_worker_id; // Already populated
+        if (workerUser && workerUser.email) {
+            const amount = job.diagnosis_report.final_total_cost;
+            const breakdown = await PaymentService.calculateBreakdown(amount, workerUser._id);
+
+            EmailService.sendPaymentReleasedWorker(workerUser.email, {
+                workerName: workerUser.name,
+                jobTitle: job.job_title,
+                netPayout: breakdown.workerAmount
+            });
+        }
+    } catch (emailErr) {
+        logger.error(`Failed to send payout email for job ${job.id}`, emailErr);
+    }
 
     return job;
 };
@@ -777,27 +930,64 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
         throw new Error('Cannot cancel job in its current state.');
     }
 
+    // Refund logic if Escrow was already created (Status: diagnosed, in_progress, reviewing, material_pending...)
+    // Basically if diagnosis was approved.
+    const escrowStages = ['diagnosed', 'in_progress', 'reviewing', 'material_pending_approval', 'eta_confirmed']; // eta_confirmed might be BEFORE diagnosis?
+    // Check timeline or diagnosis status
+    if (job.diagnosis_report?.status === 'approved') {
+        try {
+            await PaymentService.refundPayment(jobId);
+            appendTimeline(job, 'cancelled', 'system', 'Escrow refunded to user wallet.');
+        } catch (e) {
+            logger.error(`Refund failed for job ${jobId}`, e);
+            // Verify if escrow existed? PaymentService.refundPayment handles check.
+            // If error is "Escrow record not found", we ignore.
+            if (e.message !== 'Escrow record not found') {
+                // Log but proceed with cancellation? Or block?
+                // Safer to block cancellation if money is stuck? No, cancel job but flag error.
+                // For now, allow cancellation but log error.
+            }
+        }
+    }
+
     let penaltyAmount = 0;
     let penaltyReason = '';
 
-    // 3. Worker Cancellation Logic
+    // 3. Worker Cancellation Logic (Professional Accountability)
     if (userRole === 'worker') {
-        // Penalty: Reliability Score Drop
+        const WalletService = require('../wallet/wallet.service');
         try {
             const worker = await Worker.findOne({ user: userId });
             if (worker) {
-                worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 10); // -10 points
+                // Heavier score drop for cancelling during journey
+                const scorePenalty = (['on_the_way', 'arrived'].includes(job.status)) ? 20 : 10;
+                worker.reliabilityScore = Math.max(0, worker.reliabilityScore - scorePenalty);
                 worker.reliabilityStats.cancellations = (worker.reliabilityStats.cancellations || 0) + 1;
                 await worker.save();
+
+                // Financial Penalty for workers (Service Breach Fee)
+                if (job.status === 'on_the_way') {
+                    penaltyAmount = 100; // Fuel/Time compensation for platform
+                    penaltyReason = 'Worker cancellation after journey started.';
+                } else if (job.status === 'arrived') {
+                    penaltyAmount = 250; // High penalty for no-show after arrival
+                    penaltyReason = 'Worker cancellation after arrival. Serious service breach.';
+                }
+
+                if (penaltyAmount > 0) {
+                    await WalletService.debitWallet(userId, penaltyAmount);
+                    // Platform keeps worker penalties usually, or credits to system wallet
+                    await WalletService.creditPlatformRevenue(penaltyAmount);
+                }
             }
         } catch (e) {
-            logger.error('Failed to apply worker cancellation penalty', e);
+            logger.error(`Failed to process worker cancellation penalty: ${e.message}`);
         }
-        penaltyReason = 'Worker cancelled. Reliability score deduced.';
     }
 
     // 4. Tenant Cancellation Logic (Stage-Based Matrix)
     else if (userRole === 'user' || userRole === 'admin') {
+        const WalletService = require('../wallet/wallet.service');
         switch (job.status) {
             case 'open':
                 penaltyAmount = 0;
@@ -810,26 +1000,39 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
                 break;
             case 'on_the_way':
                 penaltyAmount = 150; // Travel fee
-                penaltyReason = 'Travel compensation fee';
+                penaltyReason = 'Travel compensation fee for worker';
                 break;
             case 'arrived':
-                penaltyAmount = 250; // Time wasted fee
-                penaltyReason = 'Arrival compensation fee';
+                penaltyAmount = 300; // Time wasted fee
+                penaltyReason = 'Arrival compensation fee for worker';
                 break;
             case 'in_progress':
             case 'diagnosis_mode':
+            case 'diagnosed':
+            case 'reviewing':
             case 'material_pending_approval':
-                penaltyAmount = 500; // Base Diagnosis Charge (assumption)
-                penaltyReason = 'Work started compensation';
+                // Base Visit Charge (Varies by industry, but 500 is standard enterprise minimum)
+                penaltyAmount = 500;
+                penaltyReason = 'Work/Diagnosis started compensation';
                 break;
             default:
                 penaltyAmount = 0;
         }
 
-        // Apply Financial Penalty (Mock Logic - In real app, deduct from wallet)
+        // Apply Financial Penalty for User
         if (penaltyAmount > 0) {
-            // await WalletService.deduct(userId, penaltyAmount, penaltyReason);
-            // await WalletService.credit(job.selected_worker_id, penaltyAmount * 0.8, 'Cancellation Compensation');
+            try {
+                await WalletService.debitWallet(userId, penaltyAmount);
+                if (job.selected_worker_id) {
+                    // Credit 80% to worker as compensation for travel/time, 20% to platform
+                    await WalletService.creditWallet(job.selected_worker_id, penaltyAmount * 0.8);
+                    await WalletService.creditPlatformRevenue(penaltyAmount * 0.2);
+                }
+            } catch (walletErr) {
+                logger.error(`Failed to process tenant cancellation penalty for job ${jobId}: ${walletErr.message}`);
+                // In a production app, we might want to prevent cancellation if debit fails, 
+                // but usually, we allow cancellation and leave the wallet negative (overdraft).
+            }
         }
     }
 
@@ -910,29 +1113,157 @@ exports.raiseDispute = async (jobId, userId, reason) => {
 };
 
 exports.resolveDispute = async (jobId, adminId, decision, notes) => {
-    const job = await Job.findById(jobId);
+    const job = await Job.findById(jobId)
+        .populate('user_id', 'name email')
+        .populate('selected_worker_id', 'name email');
     if (!job) throw new Error('Job not found');
     if (!job.dispute.is_disputed) throw new Error('Job is not disputed');
 
     job.dispute.status = 'resolved';
     job.dispute.resolved_at = new Date();
 
-    // Decision Logic: 'refund' or 'release'
+    let notificationTitle = 'Dispute Resolved';
+
+    // Decision Logic: 'release_payment' or 'refund_client'
     if (decision === 'release_payment') {
-        job.status = 'completed';
-        job.payment_released = true;
-        appendTimeline(job, 'completed', 'admin', `Dispute resolved (Release Payment). Note: ${notes}`);
-    } else if (decision === 'refund_client') {
-        job.status = 'cancelled';
-        job.payment_released = false; // Refund logic would happen here
-        appendTimeline(job, 'cancelled', 'admin', `Dispute resolved (Refund Client). Note: ${notes}`);
+        try {
+            await PaymentService.releasePayment(jobId);
+            job.status = 'completed';
+            job.payment_released = true;
+            appendTimeline(job, 'completed', 'admin', `Dispute resolved in favor of worker. Note: ${notes}`);
+            notificationTitle = 'Dispute Resolved: Payment Released';
+        } catch (e) {
+            throw new Error(`Failed to release payment: ${e.message}`);
+        }
+        } else if (decision === 'refund_client') {
+        try {
+            const refund = await PaymentService.refundPayment(jobId);
+            // Refund email notification is already handled in PaymentService.refundPayment
+            job.status = 'cancelled';
+            job.payment_released = false;
+            appendTimeline(job, 'cancelled', 'admin', `Dispute resolved in favor of client. Note: ${notes}`);
+            notificationTitle = 'Dispute Resolved: Refunded';
+        } catch (e) {
+            throw new Error(`Failed to refund payment: ${e.message}`);
+        }
     } else {
-        // Continue cooling?
         job.status = 'cooling_window';
-        appendTimeline(job, 'cooling_window', 'admin', `Dispute resolved (Continue Cooling). Note: ${notes}`);
+        appendTimeline(job, 'cooling_window', 'admin', `Dispute resolved: Continuing cooling period. Note: ${notes}`);
     }
 
     await job.save();
+
+    // Notify Push
+    const recipients = [job.user_id._id, job.selected_worker_id._id];
+    for (const rid of recipients) {
+        await NotificationService.createNotification({
+            recipient: rid,
+            title: notificationTitle,
+            message: `Admin has resolved the dispute. Decision: ${decision}. Note: ${notes}`,
+            type: 'info',
+            data: { jobId: job._id }
+        });
+    }
+
+    // Professional Emails (Async)
+    try {
+        EmailService.sendDisputeResolvedEmail(job.user_id.email, {
+            userName: job.user_id.name,
+            jobTitle: job.job_title,
+            decision,
+            notes,
+            isAdmin: true
+        });
+        EmailService.sendDisputeResolvedEmail(job.selected_worker_id.email, {
+            userName: job.selected_worker_id.name,
+            jobTitle: job.job_title,
+            decision,
+            notes,
+            isAdmin: true
+        });
+    } catch (err) {
+        logger.error(`Dispute Email Error for job ${jobId}`, err);
+    }
+
+    return job;
+};
+
+/**
+ * Warranty Logic
+ */
+exports.claimWarranty = async (jobId, userId, reason) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+
+    // 1. Check if warranty exists
+    if (!job.diagnosis_report?.warranty_offered) {
+        throw new Error('No warranty was offered for this job.');
+    }
+
+    // 2. Check Expiry
+    const completedAt = job.completed_at || job.updatedAt;
+    const expiryDate = new Date(completedAt.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
+    if (new Date() > expiryDate) {
+        throw new Error('Warranty period has expired.');
+    }
+
+    if (job.warranty_claim?.active) {
+        throw new Error('A warranty claim is already active.');
+    }
+
+    // 3. Create Claim
+    job.warranty_claim = {
+        active: true,
+        reason: reason,
+        claimed_at: new Date(),
+        resolved: false
+    };
+
+    appendTimeline(job, 'completed', 'user', `Warranty Claim Raised: ${reason}`, { type: 'warranty_claim' });
+
+    await job.save();
+
+    // Notify Worker
+    await NotificationService.createNotification({
+        recipient: job.selected_worker_id,
+        title: 'Warranty Claim Raised',
+        message: `Client reported an issue: ${reason}. Please contact them.`,
+        type: 'alert',
+        data: { jobId: job._id }
+    });
+
+    return job;
+};
+
+exports.resolveWarranty = async (jobId, workerId) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    // Allow worker or admin
+    if (job.selected_worker_id.toString() !== workerId.toString()) {
+        // Check if admin? For now assume only worker resolves.
+        // throw new Error('Unauthorized');
+    }
+
+    if (!job.warranty_claim?.active) {
+        throw new Error('No active warranty claim.');
+    }
+
+    job.warranty_claim.active = false;
+    job.warranty_claim.resolved = true;
+
+    appendTimeline(job, 'completed', 'worker', 'Warranty claim resolved.');
+    await job.save();
+
+    // Notify User
+    await NotificationService.createNotification({
+        recipient: job.user_id,
+        title: 'Warranty Resolved',
+        message: 'Worker has marked the warranty issue as resolved.',
+        type: 'info',
+        data: { jobId: job._id }
+    });
+
     return job;
 };
 

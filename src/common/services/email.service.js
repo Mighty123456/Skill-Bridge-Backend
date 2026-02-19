@@ -446,11 +446,488 @@ const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost
   }
 };
 
+/**
+ * Send Payment Escrowed Email to User (Client)
+ */
+const sendPaymentEscrowedUser = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, jobTitle, jobAmount, protectionFee, totalAmount, warrantyDays } = data;
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Payment Secured in Escrow 🔒</h2>
+      <p>Hi ${userName},</p>
+      <p>This is to confirm that your payment for <strong>"${jobTitle}"</strong> has been successfully secured in our escrow system. The funds will be held safely and only released once the job is completed and the cooling-off period ends.</p>
+      
+      <div style="background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <h3 style="margin: 0 0 16px 0; font-size: 16px; color: #111827;">Receipt Summary</h3>
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Labor / Service Cost</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 600; text-align: right;">₹${jobAmount.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Platform Protection Fee</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 600; text-align: right;">₹${protectionFee.toFixed(2)}</td>
+          </tr>
+          <tr style="border-top: 1px solid #e5e7eb;">
+            <td style="padding: 16px 0 0 0; color: #111827; font-size: 16px; font-weight: 700;">Total Charged</td>
+            <td style="padding: 16px 0 0 0; color: #008080; font-size: 20px; font-weight: 800; text-align: right;">₹${totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+
+      ${warrantyDays > 0 ? `
+      <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 16px; margin-bottom: 25px;">
+        <p style="margin: 0; color: #166534; font-size: 14px; font-weight: 500;">
+          🛡️ <strong>Warranty Included:</strong> This service comes with a ${warrantyDays}-day warranty provided by the worker.
+        </p>
+      </div>
+      ` : ''}
+
+      <p style="font-size: 14px; color: #6b7280;">You can download your official tax invoice and warranty card from the job details page in the app.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/jobs/${data.jobId}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job Detail</a>
+      </div>
+    `, 'SkillBridge - Payment Receipt');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Receipt for "${jobTitle}" - Payment Secured`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending payment escrowed email to user: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Payment Notification to Worker
+ */
+const sendPaymentEscrowedWorker = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { workerName, jobTitle, grossAmount, commissionAmount, netPayout } = data;
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Funds Secured & Work Authorized 🚀</h2>
+      <p>Hi ${workerName},</p>
+      <p>Great news! The client has approved your diagnosis and the payment for <strong>"${jobTitle}"</strong> has been secured in escrow. You are now authorized to complete the work.</p>
+      
+      <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <h3 style="margin: 0 0 16px 0; font-size: 16px; color: #1e293b; text-transform: uppercase; letter-spacing: 0.5px;">Financial Breakdown</h3>
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="padding: 8px 0; color: #64748b; font-size: 14px;">Total Quotation (Gross)</td>
+            <td style="padding: 8px 0; color: #1e293b; font-size: 14px; font-weight: 600; text-align: right;">₹${grossAmount.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #ef4444; font-size: 14px;">Platform Service Fee</td>
+            <td style="padding: 8px 0; color: #ef4444; font-size: 14px; font-weight: 600; text-align: right;">- ₹${commissionAmount.toFixed(2)}</td>
+          </tr>
+          <tr style="border-top: 2px solid #e2e8f0;">
+            <td style="padding: 16px 0 0 0; color: #1e293b; font-size: 16px; font-weight: 700;">Net Payout Amount</td>
+            <td style="padding: 16px 0 0 0; color: #008080; font-size: 22px; font-weight: 800; text-align: right;">₹${netPayout.toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p>The net amount will be credited to your SkillBridge Wallet within 24 hours after the job is finalized and the cooling-off period ends.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Open Job Console</a>
+      </div>
+    `, 'SkillBridge - Payment Secured');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Payment Secured for "${jobTitle}" - Net Payout: ₹${netPayout.toFixed(2)}`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending payment escrowed email to worker: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Payment Released Email to Worker (Payout Confirmed)
+ */
+const sendPaymentReleasedWorker = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { workerName, jobTitle, netPayout } = data;
+
+    const html = baseEmailTemplate(`
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="background-color: #f0fdf4; width: 64px; height: 64px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin: 0 auto 20px auto;">
+           <span style="font-size: 32px;">💰</span>
+        </div>
+        <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #059669;">Money's In Your Wallet!</h2>
+      </div>
+
+      <p>Hi ${workerName},</p>
+      <p>Congratulations! The cooling-off period for <strong>"${jobTitle}"</strong> has ended without any disputes. We have officially released the funds to your SkillBridge wallet.</p>
+      
+      <div style="background-color: #008080; border-radius: 12px; padding: 30px; margin: 25px 0; text-align: center; color: #ffffff;">
+        <p style="margin: 0; font-size: 14px; opacity: 0.9;">Amount Credited</p>
+        <p style="margin: 10px 0 0 0; font-size: 36px; font-weight: 800;">₹${netPayout.toFixed(2)}</p>
+      </div>
+
+      <p>You can now use these funds or request a bank withdrawal from your dashboard.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Check Wallet Balance</a>
+      </div>
+    `, 'SkillBridge - Payout Successful');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Payout Released: ₹${netPayout.toFixed(2)} credited to your wallet`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending payment released email to worker: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Payment Success Email to User
+ */
+const sendPaymentSuccessEmail = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, jobTitle, totalAmount, transactionId, invoiceUrl } = data;
+
+    const html = baseEmailTemplate(`
+      <div style="text-align: center; margin-bottom: 30px;">
+        <div style="background-color: #f0fdf4; width: 64px; height: 64px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin: 0 auto 20px auto;">
+           <span style="font-size: 32px;">✅</span>
+        </div>
+        <h2 style="margin: 0; font-size: 24px; font-weight: 700; color: #059669;">Payment Successful!</h2>
+      </div>
+
+      <p>Hi ${userName},</p>
+      <p>Your payment for <strong>"${jobTitle}"</strong> has been successfully processed.</p>
+      
+      <div style="background-color: #f9fafb; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Transaction ID</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 600; text-align: right; font-family: monospace;">${transactionId}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Amount Paid</td>
+            <td style="padding: 8px 0; color: #008080; font-size: 18px; font-weight: 700; text-align: right;">₹${totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="font-size: 14px; color: #6b7280;">Your invoice is ready for download. Keep it for your records.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${invoiceUrl || config.FRONTEND_URL}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; margin-right: 10px;">Download Invoice</a>
+        <a href="${config.FRONTEND_URL}/jobs/${data.jobId}" style="background-color: #f3f4f6; color: #374151; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job</a>
+      </div>
+    `, 'SkillBridge - Payment Successful');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Payment Successful: ₹${totalAmount.toFixed(2)} for "${jobTitle}"`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending payment success email: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Refund Email to User
+ */
+const sendRefundEmail = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, jobTitle, refundAmount, reason } = data;
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Refund Processed 💰</h2>
+      <p>Hi ${userName},</p>
+      <p>We have processed a refund for <strong>"${jobTitle}"</strong>.</p>
+      
+      <div style="background-color: #f0fdf4; border-left: 4px solid #10b981; padding: 20px; margin: 25px 0;">
+        <p style="margin: 0; font-size: 14px; color: #166534; font-weight: 600;">Refund Amount</p>
+        <p style="margin: 10px 0 0 0; font-size: 32px; font-weight: 800; color: #059669;">₹${refundAmount.toFixed(2)}</p>
+      </div>
+
+      ${reason ? `
+      <div style="background-color: #f9fafb; border-radius: 8px; padding: 16px; margin: 20px 0;">
+        <p style="margin: 0; font-size: 14px; color: #6b7280;"><strong>Reason:</strong> ${reason}</p>
+      </div>
+      ` : ''}
+
+      <p style="font-size: 14px; color: #6b7280;">The refund will be credited to your original payment method within 5-7 business days.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
+      </div>
+    `, 'SkillBridge - Refund Processed');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Refund Processed: ₹${refundAmount.toFixed(2)} for "${jobTitle}"`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending refund email: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Withdrawal Status Email
+ */
+const sendWithdrawalStatusEmail = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, amount, status, processedAt, notes } = data;
+    const isCompleted = status === 'completed';
+    const statusColor = isCompleted ? '#10b981' : status === 'rejected' ? '#ef4444' : '#f59e0b';
+    const statusText = status === 'completed' ? 'Completed' : status === 'rejected' ? 'Rejected' : 'Pending';
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Withdrawal Request ${statusText}</h2>
+      <p>Hi ${userName},</p>
+      <p>Your withdrawal request has been ${status === 'completed' ? 'successfully processed' : status === 'rejected' ? 'rejected' : 'received and is being processed'}.</p>
+      
+      <div style="background-color: #f9fafb; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Requested Amount</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 18px; font-weight: 700; text-align: right;">₹${amount.toFixed(2)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Status</td>
+            <td style="padding: 8px 0; text-align: right;">
+              <span style="display: inline-block; padding: 4px 12px; background-color: ${statusColor}15; color: ${statusColor}; border-radius: 12px; font-size: 12px; font-weight: 600;">${statusText.toUpperCase()}</span>
+            </td>
+          </tr>
+          ${processedAt ? `
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Processed On</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; text-align: right;">${new Date(processedAt).toLocaleDateString()}</td>
+          </tr>
+          ` : ''}
+        </table>
+      </div>
+
+      ${notes ? `
+      <div style="background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 16px; margin: 20px 0;">
+        <p style="margin: 0; font-size: 14px; color: #991b1b;"><strong>Note:</strong> ${notes}</p>
+      </div>
+      ` : ''}
+
+      ${isCompleted ? `
+      <p style="font-size: 14px; color: #6b7280;">The funds have been transferred to your registered bank account. It may take 1-2 business days to reflect in your account.</p>
+      ` : status === 'rejected' ? `
+      <p style="font-size: 14px; color: #6b7280;">If you have questions about this decision, please contact our support team.</p>
+      ` : `
+      <p style="font-size: 14px; color: #6b7280;">We'll notify you once the withdrawal is processed. Standard processing time is 24-48 hours.</p>
+      `}
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
+      </div>
+    `, `SkillBridge - Withdrawal ${statusText}`);
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Withdrawal ${statusText}: ₹${amount.toFixed(2)}`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending withdrawal status email: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Invoice Email
+ */
+const sendInvoiceEmail = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, jobTitle, invoiceUrl, invoiceNumber, totalAmount } = data;
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Your Invoice is Ready 📄</h2>
+      <p>Hi ${userName},</p>
+      <p>Your invoice for <strong>"${jobTitle}"</strong> is ready for download.</p>
+      
+      <div style="background-color: #f9fafb; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <table width="100%" border="0" cellspacing="0" cellpadding="0">
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Invoice Number</td>
+            <td style="padding: 8px 0; color: #111827; font-size: 14px; font-weight: 600; text-align: right;">${invoiceNumber}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Total Amount</td>
+            <td style="padding: 8px 0; color: #008080; font-size: 18px; font-weight: 700; text-align: right;">₹${totalAmount.toFixed(2)}</td>
+          </tr>
+        </table>
+      </div>
+
+      <p style="font-size: 14px; color: #6b7280;">Download your invoice PDF for your records.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${invoiceUrl}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Download Invoice PDF</a>
+      </div>
+    `, 'SkillBridge - Invoice Ready');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Invoice ${invoiceNumber} - "${jobTitle}"`,
+      html,
+      attachments: invoiceUrl ? [{
+        filename: `invoice-${invoiceNumber}.pdf`,
+        path: invoiceUrl
+      }] : []
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending invoice email: ${error.message}`);
+    return { success: false };
+  }
+};
+
+/**
+ * Send Dispute Resolved Email
+ */
+const sendDisputeResolvedEmail = async (email, data) => {
+  if (!transporter) {
+    const ready = await initializeTransporter();
+    if (!ready) return { success: false };
+  }
+
+  try {
+    const { userName, jobTitle, decision, notes } = data;
+
+    let decisionText = "Decision Pending";
+    let color = "#374151";
+    if (decision === 'release_payment') {
+      decisionText = "Funds Released to Worker";
+      color = "#008080";
+    } else if (decision === 'refund_client') {
+      decisionText = "Funds Refunded to Client";
+      color = "#ef4444";
+    }
+
+    const html = baseEmailTemplate(`
+      <h2 style="margin-top: 0; font-size: 20px; font-weight: 600; color: #111827;">Case Resolution: "${jobTitle}"</h2>
+      <p>Hi ${userName},</p>
+      <p>Our administration team has reviewed the dispute raised for the service <strong>"${jobTitle}"</strong>. A final decision has been made according to our platform policies.</p>
+      
+      <div style="background-color: #f3f4f6; border-radius: 12px; padding: 24px; margin: 25px 0;">
+        <h3 style="margin: 0 0 10px 0; font-size: 14px; text-transform: uppercase; color: #6b7280; letter-spacing: 0.5px;">Final Decision</h3>
+        <p style="margin: 0; font-size: 18px; font-weight: 700; color: ${color};">${decisionText}</p>
+        
+        <h3 style="margin: 20px 0 10px 0; font-size: 14px; text-transform: uppercase; color: #6b7280; letter-spacing: 0.5px;">Admin Remarks</h3>
+        <p style="margin: 0; font-size: 15px; font-style: italic; color: #374151; line-height: 1.5;">"${notes}"</p>
+      </div>
+
+      <p style="font-size: 14px; color: #6b7280;">If you have further questions or require clarification, please visit our Help Center or reply to this email.</p>
+      
+      <div style="margin-top: 30px; text-align: center;">
+        <a href="${config.FRONTEND_URL}/support" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">Contact Support</a>
+      </div>
+    `, 'SkillBridge - Dispute Resolution');
+
+    const mailOptions = {
+      from: `"SkillBridge" <${config.EMAIL_USER}>`,
+      to: email,
+      subject: `Resolution for Dispute: "${jobTitle}"`,
+      html,
+    };
+
+    await transporter.sendMail(mailOptions);
+    return { success: true };
+  } catch (error) {
+    logger.error(`Error sending dispute resolution email: ${error.message}`);
+    return { success: false };
+  }
+};
+
 module.exports = {
   sendOTPEmail,
   sendWelcomeEmail,
   sendVerificationEmail,
   sendQuotationAcceptedEmail,
+  sendPaymentEscrowedUser,
+  sendPaymentEscrowedWorker,
+  sendPaymentReleasedWorker,
+  sendPaymentSuccessEmail,
+  sendRefundEmail,
+  sendWithdrawalStatusEmail,
+  sendInvoiceEmail,
+  sendDisputeResolvedEmail,
   initializeEmailService,
   initializeTransporter
 };

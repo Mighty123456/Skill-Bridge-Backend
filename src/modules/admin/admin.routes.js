@@ -109,6 +109,22 @@ router.delete(
   adminController.removeBadge
 );
 
+// Worker Financials
+router.get(
+  '/workers/:workerId/financials',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getWorkerFinancials
+);
+
+// Tenant Financials
+router.get(
+  '/tenants/:tenantId/financials',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getTenantFinancials
+);
+
 // List all jobs
 router.get(
   '/jobs',
@@ -123,6 +139,62 @@ router.get(
   authenticate,
   authorize(ROLES.ADMIN),
   adminController.listQuotations
+);
+
+// Ledger Verification
+router.get(
+  '/ledger/verify',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.verifyLedger
+);
+
+// Dispute Monitoring
+router.get(
+  '/disputes',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listDisputes
+);
+
+// Warranty Monitoring
+router.get(
+  '/warranties',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listWarrantyClaims
+);
+
+// System Health
+router.get(
+  '/health',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getSystemHealth
+);
+
+// Global Broadcast
+router.post(
+  '/notifications/broadcast',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.broadcastNotification
+);
+
+// Performance Analytics
+router.get(
+  '/analytics/performance',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getPerformanceAnalytics
+);
+
+// Legal & Compliance Audit
+router.get(
+  '/legal/audit',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listLegalAuditLogs
 );
 
 module.exports = router;

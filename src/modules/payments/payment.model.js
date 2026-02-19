@@ -10,7 +10,7 @@ const paymentSchema = new mongoose.Schema(
         job: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Job',
-            required: true,
+            required: false,
         },
         user: {
             type: mongoose.Schema.Types.ObjectId,
@@ -19,7 +19,7 @@ const paymentSchema = new mongoose.Schema(
         },
         worker: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: 'Worker',
+            ref: 'User',
         },
         amount: {
             type: Number,
@@ -31,7 +31,7 @@ const paymentSchema = new mongoose.Schema(
         },
         type: {
             type: String,
-            enum: ['escrow', 'payout', 'commission', 'refund'],
+            enum: ['escrow', 'payout', 'commission', 'refund', 'topup'],
             required: true,
         },
         status: {
@@ -44,6 +44,15 @@ const paymentSchema = new mongoose.Schema(
         },
         gatewayResponse: {
             type: Object,
+        },
+        // Immutable Ledger Hashing
+        previousHash: {
+            type: String,
+            default: '0',
+        },
+        currentHash: {
+            type: String,
+            index: true,
         },
     },
     {

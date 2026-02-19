@@ -1,5 +1,6 @@
 const { verifyToken } = require('../utils/jwt');
 const { errorResponse } = require('../utils/response');
+const logger = require('../../config/logger');
 const User = require('../../modules/users/user.model');
 const Admin = require('../../modules/admin/admin.model');
 
@@ -8,16 +9,21 @@ const Admin = require('../../modules/admin/admin.model');
  */
 const authenticate = async (req, res, next) => {
   try {
-    // Get token from header
+    // Get token from header or query param
     const authHeader = req.headers.authorization;
+    let token = '';
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('Auth Middleware: No token provided or invalid format:', authHeader);
-      return errorResponse(res, 'No token provided. Please login first.', 401);
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
+    } else if (req.query.token) {
+      token = req.query.token;
     }
 
-    const token = authHeader.substring(7); // Remove 'Bearer ' prefix
-    console.log('Auth Middleware: Verifying token...');
+    if (!token) {
+      logger.debug('Auth Middleware: No token provided in header or query');
+      return errorResponse(res, 'No token provided. Please login first.', 401);
+    }
+    logger.debug('Auth Middleware: Verifying token...');
 
     // Verify token
     const decoded = verifyToken(token);

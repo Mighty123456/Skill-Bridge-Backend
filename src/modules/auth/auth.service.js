@@ -36,16 +36,23 @@ const register = async (userData, fileBuffers = {}) => {
     name,
     phone,
     dateOfBirth,
-    dateOfBirth,
     address: address || {},
     status: 'active', // Default status
     devices: userData.deviceId ? [{
       deviceId: userData.deviceId,
       deviceName: userData.deviceName || 'Registration Device',
-      isVerified: true, // First device can be trusted implies registration validates it OR false if we want stricter flow
+      isVerified: true,
       addedAt: new Date(),
       lastLogin: new Date()
-    }] : []
+    }] : [],
+    legal: {
+      termsAccepted: true, // Registration implies acceptance in modern flows
+      termsAcceptedAt: new Date(),
+      privacyAccepted: true,
+      privacyAcceptedAt: new Date(),
+      ipAddress: userData.ipAddress || 'unknown',
+      userAgent: userData.userAgent || 'unknown'
+    }
   });
 
   // 3. Create Role-Specific Profiles
@@ -246,6 +253,12 @@ const login = async (email, password, deviceInfo = {}) => {
     throw new Error('Invalid email or password');
   }
 
+  // 1. Anti-Brute Force: Check if account is locked
+  if (user.lockUntil && user.lockUntil > new Date()) {
+    const minutesLeft = Math.ceil((user.lockUntil - new Date()) / 60000);
+    throw new Error(`Account locked due to too many failed attempts. Try again in ${minutesLeft} minutes.`);
+  }
+
   // Check Account Status (Soft Suspension)
   if (user.status === 'suspended') {
     throw new Error('Your account has been suspended. Please contact support.');
@@ -253,10 +266,7 @@ const login = async (email, password, deviceInfo = {}) => {
   if (user.status === 'under_review') {
     throw new Error('Your account is under review. You cannot login yet.');
   }
-  // Fallback for legacy isActive
-  if (user.isActive === false && user.status === 'active') { // If status says active but isActive is false (legacy mismatch), trust status or legacy? Trust status.
-    // Do nothing, assuming status is source of truth now.
-  }
+  // ... (existing status checks)
   if (!user.isActive && user.status === 'deactivated') {
     throw new Error('Your account is deactivated.');
   }
@@ -266,9 +276,27 @@ const login = async (email, password, deviceInfo = {}) => {
   logger.info('Comparing password');
   const isPasswordValid = await user.comparePassword(password);
   logger.info('Password compared');
+
   if (!isPasswordValid) {
+    // 2. Anti-Brute Force: Increment attempts
+    user.loginAttempts = (user.loginAttempts || 0) + 1;
+
+    // Lock after 5 failed attempts
+    if (user.loginAttempts >= 5) {
+      user.lockUntil = new Date(Date.now() + 15 * 60000); // 15 minutes
+      user.loginAttempts = 0; // Reset counter for next cycle
+      await user.save({ validateBeforeSave: false });
+      throw new Error('Too many failed login attempts. Your account has been locked for 15 minutes.');
+    }
+
+    await user.save({ validateBeforeSave: false });
     throw new Error('Invalid email or password');
   }
+
+  // 3. Success: Reset login attempts
+  user.loginAttempts = 0;
+  user.lockUntil = null;
+  // (Save happens later in the existing flow)
 
   // DEVICE BINDING LOGIC (Only for Users, Admins might skip or use different logic)
   if (isUser && deviceInfo.deviceId) {

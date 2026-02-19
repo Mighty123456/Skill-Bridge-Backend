@@ -7,4 +7,12 @@ const { authorize } = require('../../common/middleware/role.middleware');
 router.get('/stats', protect, authorize('admin'), paymentController.getFinancialStats);
 router.get('/transactions', protect, authorize('admin'), paymentController.getAllTransactions);
 
+// Stripe Checkout
+router.post('/create-checkout-session', protect, paymentController.createCheckoutSession);
+router.post('/create-job-session', protect, paymentController.createJobPaymentSession);
+router.get('/job/:jobId', protect, paymentController.getJobPaymentDetails);
+
+// Stripe Webhook (Stripe needs to call this without JWT)
+router.post('/webhook', express.raw({ type: 'application/json' }), paymentController.handleStripeWebhook);
+
 module.exports = router;

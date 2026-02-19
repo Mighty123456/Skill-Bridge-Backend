@@ -25,4 +25,8 @@ router.patch('/eta/:jobId', protect, workerController.updateEta);
 // Admin / System Routes
 router.post('/check-decay', protect, authorize('admin'), workerController.checkSkillDecay);
 
+
+// Subscription
+router.post('/subscribe', protect, authorize('worker'), workerController.subscribe);
+
 module.exports = router;

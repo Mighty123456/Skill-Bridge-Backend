@@ -30,6 +30,11 @@ const workerSchema = new mongoose.Schema(
       min: 0,
       default: 0
     },
+    totalJobsCompleted: {
+      type: Number,
+      default: 0,
+      index: true
+    },
 
     // Rating
     rating: {
@@ -147,6 +152,22 @@ const workerSchema = new mongoose.Schema(
         changedAt: { type: Date, default: Date.now },
       },
     ],
+
+    // Subscription
+    subscription: {
+      plan: {
+        type: String,
+        enum: ['free', 'gold', 'platinum'],
+        default: 'free'
+      },
+      expiry: Date,
+      autoRenew: { type: Boolean, default: false }
+    },
+
+    // Financial (Stripe Connect)
+    stripeAccountId: { type: String, trim: true },
+    stripeOnboarded: { type: Boolean, default: false },
+
   },
   {
     timestamps: true,

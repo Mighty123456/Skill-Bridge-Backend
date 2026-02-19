@@ -9,7 +9,9 @@
     "vercel-build": "echo 'Build complete'"
   },
   "dependencies": {
+    "@socket.io/redis-adapter": "^8.3.0",
     "bcryptjs": "^3.0.3",
+    "bullmq": "^5.69.3",
     "cloudinary": "^2.8.0",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
@@ -18,12 +20,17 @@
     "express-rate-limit": "^8.2.1",
     "express-validator": "^7.3.1",
     "helmet": "^8.1.0",
+    "ioredis": "^5.9.3",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^8.9.0",
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
+    "node-cron": "^4.2.1",
     "nodemailer": "^7.0.12",
-    "socket.io": "^4.8.3"
+    "puppeteer": "^23.11.1",
+    "redis": "^5.11.0",
+    "socket.io": "^4.8.3",
+    "stripe": "^20.3.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.11"

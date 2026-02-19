@@ -228,7 +228,11 @@ exports.confirmEta = async (req, res) => {
 exports.startJourney = async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await JobService.startJourney(id, req.user._id);
+        let { location } = req.body;
+        if (typeof location === 'string') {
+            try { location = JSON.parse(location); } catch (e) { }
+        }
+        const job = await JobService.startJourney(id, req.user._id, location);
         res.json({ success: true, message: 'Journey Started', data: job });
     } catch (error) {
         logger.error('Start Journey Error:', error);
@@ -282,8 +286,8 @@ exports.startJob = async (req, res) => {
 exports.updateLocation = async (req, res) => {
     try {
         const { id } = req.params;
-        const { lat, lng } = req.body;
-        const job = await JobService.updateLocation(id, req.user._id, lat, lng);
+        const { lat, lng, isMock } = req.body;
+        const job = await JobService.updateLocation(id, req.user._id, lat, lng, isMock);
         res.json({ success: true, message: 'Location updated', data: job });
     } catch (error) {
         // Log at debug/info level to avoid spamming errors for location updates
@@ -321,9 +325,10 @@ exports.approveDiagnosis = async (req, res) => {
 exports.requestMaterial = async (req, res) => {
     try {
         const { id } = req.params;
-        const requestData = req.body; // item_name, cost, reason, bill_proof (url)
-        // If file uploaded logic needed, handle here similar to completion
-        const job = await JobService.requestMaterial(id, req.user._id, requestData);
+        const requestData = req.body;
+        const billProofFile = req.file; // From uploadSingle('bill_proof')
+
+        const job = await JobService.requestMaterial(id, req.user._id, requestData, billProofFile);
         res.json({ success: true, message: 'Material requested', data: job });
     } catch (error) {
         logger.error('Request Material Error:', error);
@@ -347,7 +352,13 @@ exports.respondToMaterial = async (req, res) => {
 exports.submitCompletion = async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await JobService.submitCompletion(id, req.user._id, req.files);
+        const { summary } = req.body;
+
+        // When using uploadFields, req.files is an object keyed by fieldname
+        const completionFiles = req.files['completion_photos'] || [];
+        const signatureFile = req.files['signature'] ? req.files['signature'][0] : null;
+
+        const job = await JobService.submitCompletion(id, req.user._id, completionFiles, summary, signatureFile);
         res.json({ success: true, message: 'Completion proof submitted. Waiting for tenant confirmation.', data: job });
     } catch (error) {
         logger.error('Submit Completion Error:', error);
@@ -401,6 +412,260 @@ exports.resolveDispute = async (req, res) => {
     } catch (error) {
         logger.error('Resolve Dispute Error:', error);
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Warranty
+exports.claimWarranty = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const job = await JobService.claimWarranty(id, req.user._id, reason);
+        res.json({ success: true, message: 'Warranty claim raised', data: job });
+    } catch (error) {
+        logger.error('Claim Warranty Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.resolveWarranty = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await JobService.resolveWarranty(id, req.user._id);
+        res.json({ success: true, message: 'Warranty claim resolved', data: job });
+    } catch (error) {
+        logger.error('Resolve Warranty Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// Invoices & Receipts
+exports.getInvoice = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await Job.findById(id)
+            .populate('user_id', 'name email address')
+            .populate('selected_worker_id', 'name');
+
+        if (!job) return res.status(404).send('Invoice not found');
+
+        const PaymentService = require('../payments/payment.service');
+        const breakdown = await PaymentService.calculateBreakdown(job.diagnosis_report.final_total_cost, job.selected_worker_id._id);
+        const materialCost = (job.diagnosis_report.materials || []).reduce((sum, m) => sum + (m.estimated_cost || 0), 0);
+        const laborCost = job.diagnosis_report.final_labor_cost || (job.diagnosis_report.final_total_cost - materialCost);
+
+        const invoiceDate = new Date().toLocaleDateString('en-IN', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+
+        const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; margin: 0; padding: 40px; background: #fff; }
+                .invoice-box { max-width: 800px; margin: auto; }
+                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #6366f1; padding-bottom: 20px; margin-bottom: 40px; }
+                .logo { font-size: 28px; font-weight: bold; color: #6366f1; }
+                .invoice-details { text-align: right; }
+                .section { margin-bottom: 30px; }
+                .section-title { font-weight: bold; color: #666; font-size: 12px; text-transform: uppercase; margin-bottom: 10px; }
+                .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+                table { width: 100%; line-height: inherit; text-align: left; border-collapse: collapse; }
+                table th { background: #f8fafc; padding: 12px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px; }
+                table td { padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+                .total-row { background: #6366f1 !important; color: white !important; font-weight: bold; }
+                .total-row td { border: none; padding: 15px 12px; font-size: 18px; color: white !important; }
+                .footer { margin-top: 60px; text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+                .badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: bold; }
+                .badge-success { background: #dcfce7; color: #166534; }
+            </style>
+        </head>
+        <body>
+            <div class="invoice-box">
+                <div class="header">
+                    <div>
+                        <div class="logo">SkillBridge</div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Professional Service Marketplace</div>
+                    </div>
+                    <div class="invoice-details">
+                        <h1 style="margin: 0; font-size: 24px;">TAX INVOICE</h1>
+                        <div style="margin-top: 5px; color: #64748b;">#INV-${job._id.toString().slice(-6).toUpperCase()}</div>
+                        <div style="font-size: 14px; margin-top: 5px;">Date: ${invoiceDate}</div>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; margin-bottom: 40px;">
+                    <div style="flex: 1;">
+                        <div class="section-title">Billed To (Tenant)</div>
+                        <div style="font-weight: bold; font-size: 16px;">${job.user_id.name}</div>
+                        <div style="font-size: 14px; color: #475569; margin-top: 4px;">${job.user_id.email || ''}</div>
+                        <div style="font-size: 14px; color: #475569;">${job.location?.address || 'N/A'}</div>
+                    </div>
+                    <div style="flex: 1; text-align: right;">
+                        <div class="section-title">Service Provider (Worker)</div>
+                        <div style="font-weight: bold; font-size: 16px;">${job.selected_worker_id?.name || 'Worker'}</div>
+                        <div style="font-size: 14px; color: #475569; margin-top: 4px;">Verified SkillBridge Partner</div>
+                        <div style="margin-top: 8px;">
+                            <span class="badge badge-success">PAID VIA ESCROW</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Service Description</div>
+                    <div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">${job.job_title}</div>
+                    <div style="color: #475569; font-size: 14px;">Complete professional service delivered.</div>
+                </div>
+
+                <div class="section">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Description</th>
+                                <th style="text-align: right;">Amount</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>
+                                    <strong>Professional Service Fee</strong><br>
+
+                                    <small style="color: #64748b;">Labor and expertise charge</small>
+                                </td>
+                                <td style="text-align: right;">₹${laborCost.toFixed(2)}</td>
+                            </tr>
+                            ${materialCost > 0 ? `
+                            <tr>
+                                <td>
+                                    <strong>Material Expenses</strong><br>
+                                    <small style="color: #64748b;">Parts and materials supplied</small>
+                                </td>
+                                <td style="text-align: right;">₹${materialCost.toFixed(2)}</td>
+                            </tr>
+                            ` : ''}
+
+                            <tr>
+                                <td>
+                                    <strong>Platform Protection Fee</strong><br>
+                                    <small style="color: #64748b;">Secure escrow and support coverage</small>
+                                </td>
+                                <td style="text-align: right;">₹${breakdown.protectionFee.toFixed(2)}</td>
+                            </tr>
+                            <tr class="total-row">
+                                <td style="color: white !important;">Total Amount (Paid)</td>
+                                <td style="text-align: right; color: white !important;">₹${breakdown.totalUserPayable.toFixed(2)}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <div style="margin-top: 40px; padding: 20px; background: #eff6ff; border-radius: 12px; font-size: 13px; color: #1e40af;">
+                    <strong>Note:</strong> This document serves as proof of payment for services rendered. The total amount has been successfully settled from the tenant's wallet through the SkillBridge secure platform.
+                </div>
+
+                <div class="footer">
+                    <p>&copy; ${new Date().getFullYear()} SkillBridge. All rights reserved.</p>
+                    <p>SkillBridge Technologies Pvt Ltd | support@skillbridge.com</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        `;
+
+        // Generate PDF if requested
+        if (req.query.format === 'pdf') {
+            try {
+                const PDFService = require('../../common/services/pdf.service');
+                const pdfBuffer = await PDFService.generatePDF(html);
+
+                res.setHeader('Content-Type', 'application/pdf');
+                res.setHeader('Content-Disposition', `inline; filename="invoice-SB-${job._id.toString().slice(-6).toUpperCase()}.pdf"`);
+                res.send(pdfBuffer);
+            } catch (pdfError) {
+                // Fallback to HTML if PDF generation fails
+                logger.error(`PDF generation failed: ${pdfError.message}`);
+                res.setHeader('Content-Type', 'text/html');
+                res.setHeader('Content-Disposition', `inline; filename="invoice-${job._id}.html"`);
+                res.send(html);
+            }
+        } else {
+            res.setHeader('Content-Type', 'text/html');
+            res.send(html);
+        }
+    } catch (e) {
+        res.status(500).send(e.message);
+    }
+};
+
+exports.getWarrantyCard = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const job = await Job.findById(id).populate('selected_worker_id', 'name');
+
+        if (!job || !job.diagnosis_report.warranty_offered) {
+            return res.status(404).send('Warranty not found or not offered for this job');
+        }
+
+        const expiry = new Date(job.updated_at.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
+
+        const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 50px; }
+                .warranty-card { max-width: 600px; margin: auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 2px solid #10b981; }
+                .top-bar { background: #10b981; padding: 30px; text-align: center; color: white; }
+                .content { padding: 40px; }
+                .info-row { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px dashed #eee; padding-bottom: 10px; }
+                .label { color: #666; font-size: 14px; }
+                .value { font-weight: 600; color: #333; }
+                .status { background: #f0fdf4; color: #166534; padding: 10px; text-align: center; border-radius: 8px; font-weight: bold; margin-top: 20px; }
+            </style>
+        </head>
+        <body>
+            <div class="warranty-card">
+                <div class="top-bar">
+                    <h1 style="margin: 0; font-size: 24px;">🛡️ Warranty Certificate</h1>
+                    <p style="margin: 5px 0 0 0; opacity: 0.9;">Professional Service Guarantee</p>
+                </div>
+                <div class="content">
+                    <div class="info-row">
+                        <span class="label">Job Reference</span>
+                        <span class="value">#${job._id.toString().slice(-8).toUpperCase()}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Service Title</span>
+                        <span class="value">${job.job_title}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Provider</span>
+                        <span class="value">${job.selected_worker_id.name}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Duration</span>
+                        <span class="value">${job.diagnosis_report.warranty_duration_days} Days</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Valid Until</span>
+                        <span class="value" style="color: #ef4444;">${expiry.toLocaleDateString()}</span>
+                    </div>
+                    <div class="status">ACTIVE WARRANTY</div>
+                    <p style="font-size: 12px; color: #999; margin-top: 30px; line-height: 1.4;">
+                        This warranty covers defects related to the specific labor performed. It does not cover new issues or material wear and tear unless specified. Contact through SkillBridge for claims.
+                    </p>
+                </div>
+            </div>
+        </body>
+        </html>
+        `;
+        res.send(html);
+    } catch (e) {
+        res.status(500).send(e.message);
     }
 };
 

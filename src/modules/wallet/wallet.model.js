@@ -5,8 +5,14 @@ const walletSchema = new mongoose.Schema(
         user: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'User',
-            required: true,
+            required: function () { return this.type === 'user'; },
             unique: true,
+            sparse: true // Allow multiple nulls for platform wallets if needed, though usually there is only one
+        },
+        type: {
+            type: String,
+            enum: ['user', 'platform'],
+            default: 'user'
         },
         balance: {
             type: Number,
@@ -18,6 +24,18 @@ const walletSchema = new mongoose.Schema(
             default: 0,
             min: 0,
         },
+        pendingBalance: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
+        pendingPayouts: [
+            {
+                amount: Number,
+                releaseAt: Date,
+                jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' }
+            }
+        ],
         currency: {
             type: String,
             default: 'INR',
