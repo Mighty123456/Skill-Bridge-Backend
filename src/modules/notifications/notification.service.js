@@ -4,18 +4,44 @@ const logger = require('../../config/logger');
 const { getIo } = require('../../socket/socket');
 
 exports.createNotification = async (data) => {
-    // Deduplication logic: If an unread notification of the exact same type and jobId exists, 
-    // remove it so it's replaced by the new one, preventing notification spam.
+    // --- MNC STANDARD: Notification Aggregation & Deduplication ---
+    // If a notification of the same type for the same job already exists and is unread,
+    // we aggregate them (e.g., "You have 3 new quotations for...") instead of spamming.
     if (data.data && data.data.jobId && data.type) {
         try {
-            await Notification.deleteMany({
+            const existingNotification = await Notification.findOne({
                 recipient: data.recipient,
                 type: data.type,
                 'data.jobId': data.data.jobId,
                 read: false
             });
+
+            if (existingNotification) {
+                // If the notification type is something quantitative like quotations, we aggregate
+                if (data.type === 'quotation_received') {
+                    // Extract current count or default to 1
+                    let count = existingNotification.data.count || 1;
+                    count += 1;
+
+                    // Update existing notification with new grouped message
+                    existingNotification.message = `You have received ${count} new quotations for your job.`;
+                    existingNotification.data = { ...existingNotification.data, count };
+                    existingNotification.updatedAt = new Date();
+
+                    await existingNotification.save();
+
+                    // Fire socket event for the updated notification
+                    const io = getIo();
+                    io.to(data.recipient.toString()).emit('notification_updated', existingNotification);
+                    return existingNotification;
+                } else {
+                    // For state-based alerts (e.g., "Job Started", "Review Completion")
+                    // we simply delete the old one and let the new one take its place at the top of the feed (Deduplication)
+                    await Notification.deleteOne({ _id: existingNotification._id });
+                }
+            }
         } catch (e) {
-            logger.error('Error during notification deduplication:', e);
+            logger.error('Error during notification deduplication/aggregation:', e);
         }
     }
 
