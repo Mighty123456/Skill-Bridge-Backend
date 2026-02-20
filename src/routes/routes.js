@@ -30,6 +30,8 @@ router.get('/health', (req, res) => {
     success: true,
     message: 'SkillBridge API is running',
     timestamp: new Date().toISOString(),
+    stripe_configured: !!process.env.STRIPE_SECRET_KEY,
+    stripe_key_length: process.env.STRIPE_SECRET_KEY ? process.env.STRIPE_SECRET_KEY.length : 0
   });
 });
 
