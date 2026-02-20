@@ -4,6 +4,21 @@ const logger = require('../../config/logger');
 const { getIo } = require('../../socket/socket');
 
 exports.createNotification = async (data) => {
+    // Deduplication logic: If an unread notification of the exact same type and jobId exists, 
+    // remove it so it's replaced by the new one, preventing notification spam.
+    if (data.data && data.data.jobId && data.type) {
+        try {
+            await Notification.deleteMany({
+                recipient: data.recipient,
+                type: data.type,
+                'data.jobId': data.data.jobId,
+                read: false
+            });
+        } catch (e) {
+            logger.error('Error during notification deduplication:', e);
+        }
+    }
+
     const notification = await Notification.create(data);
 
     // Attempt real-time delivery via Socket.io
