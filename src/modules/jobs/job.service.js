@@ -1005,9 +1005,6 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
                 penaltyReason = 'Travel compensation fee for worker';
                 break;
             case 'arrived':
-                penaltyAmount = 300; // Time wasted fee
-                penaltyReason = 'Arrival compensation fee for worker';
-                break;
             case 'in_progress':
             case 'diagnosis_mode':
             case 'diagnosed':

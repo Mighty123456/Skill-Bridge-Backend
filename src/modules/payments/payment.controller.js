@@ -121,6 +121,7 @@ exports.createCheckoutSession = async (req, res, next) => {
 exports.createJobPaymentSession = async (req, res, next) => {
     try {
         const { jobId } = req.body;
+        logger.info(`💸 createJobPaymentSession triggered for job: ${jobId}`);
         if (!jobId) return res.status(400).json({ message: 'Job ID is required' });
 
         const session = await PaymentService.createJobCheckoutSession(jobId, req.user._id);
