@@ -88,6 +88,27 @@ exports.getJob = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Job not found' });
         }
 
+        // --- AUTHORIZATION CHECK ---
+        if (req.user && req.user.role !== 'admin') {
+            if (req.user.role === 'user') {
+                // Tenant can only view their own jobs
+                if (job.user_id._id.toString() !== req.user._id.toString()) {
+                    return res.status(403).json({ success: false, message: 'Not authorized to view this job' });
+                }
+            } else if (req.user.role === 'worker') {
+                // Worker can view if job is open OR if they are the assigned worker
+                const isAssignedWorker = job.selected_worker_id && job.selected_worker_id._id.toString() === req.user._id.toString();
+                if (job.status !== 'open' && !isAssignedWorker) {
+                    return res.status(403).json({
+                        success: false,
+                        message: 'Job is no longer available or has been assigned to another worker.',
+                        errorCode: 'JOB_UNAVAILABLE'
+                    });
+                }
+            }
+        }
+        // ---------------------------
+
         // Check if current user (worker) has already submitted a quotation
         let hasSubmittedQuotation = false;
         if (req.user && req.user.role === 'worker') {

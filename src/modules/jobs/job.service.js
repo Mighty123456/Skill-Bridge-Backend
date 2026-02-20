@@ -29,6 +29,8 @@ const appendTimeline = (job, status, actor, note = '', metadata = null) => {
     });
 };
 
+exports.appendTimeline = appendTimeline;
+
 /**
  * Create a new job with validation
  */
@@ -1135,7 +1137,7 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
         } catch (e) {
             throw new Error(`Failed to release payment: ${e.message}`);
         }
-        } else if (decision === 'refund_client') {
+    } else if (decision === 'refund_client') {
         try {
             const refund = await PaymentService.refundPayment(jobId);
             // Refund email notification is already handled in PaymentService.refundPayment

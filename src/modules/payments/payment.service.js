@@ -342,6 +342,7 @@ exports.releasePayment = async (jobId) => {
                     // We still record it in our wallet for ledger consistency, 
                     // but we might want to mark it as withdrawn/processed externally.
                     // For now, increasing balance is fine as the worker can see it as "paid".
+                    const { appendTimeline } = require('../jobs/job.service');
                     appendTimeline(job, 'completed', 'system', `Automated payout via Stripe Connect successful. Transfer ID: ${stripeResult.transferId}`);
                 } else {
                     workerWallet.balance += totalWorkerPayout;
@@ -352,6 +353,7 @@ exports.releasePayment = async (jobId) => {
         }
 
         if (isNewWorker) {
+            const { appendTimeline } = require('../jobs/job.service');
             appendTimeline(job, 'completed', 'system', 'Worker is new (< 5 jobs). Payout scheduled with 72-hour fraud prevention delay.');
         }
 
