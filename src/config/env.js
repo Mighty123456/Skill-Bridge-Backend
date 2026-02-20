@@ -14,6 +14,7 @@ module.exports = {
   FRONTEND_URL: process.env.FRONTEND_URL || 'http://localhost:3000',
   // Backend URLs for different services
   VERCEL_BACKEND_URL: process.env.VERCEL_BACKEND_URL || 'https://skill-bridge-backend-delta.vercel.app',
+  VERCEL_THETA_URL: process.env.VERCEL_THETA_URL || 'https://skill-bridge-backend-theta.vercel.app',
   RENDER_BACKEND_URL: process.env.RENDER_BACKEND_URL || 'https://skill-bridge-backend-1erz.onrender.com',
   // Cloudinary Configuration
   CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME || '',
