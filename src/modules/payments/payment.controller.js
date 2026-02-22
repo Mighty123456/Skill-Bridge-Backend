@@ -106,7 +106,11 @@ exports.createCheckoutSession = async (req, res, next) => {
             return res.status(400).json({ message: 'Minimum add-funds amount is ₹100' });
         }
 
-        const session = await PaymentService.createStripeCheckoutSession(req.user._id, amount);
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const backEndUrl = `${protocol}://${host}/api/payments`;
+
+        const session = await PaymentService.createStripeCheckoutSession(req.user._id, amount, backEndUrl);
         res.status(200).json({
             success: true,
             sessionId: session.id,
@@ -127,7 +131,11 @@ exports.createJobPaymentSession = async (req, res, next) => {
         logger.info(`💸 createJobPaymentSession triggered for job: ${jobId}`);
         if (!jobId) return res.status(400).json({ message: 'Job ID is required' });
 
-        const session = await PaymentService.createJobCheckoutSession(jobId, req.user._id);
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const backEndUrl = `${protocol}://${host}/api/payments`;
+
+        const session = await PaymentService.createJobCheckoutSession(jobId, req.user._id, backEndUrl);
         res.status(200).json({
             success: true,
             sessionId: session.id,
@@ -421,4 +429,78 @@ exports.exportTransactions = async (req, res, next) => {
     } catch (error) {
         next(error);
     }
+};
+
+/**
+ * Handle Stripe Success Redirect
+ * This is called by Stripe when the user successfully completes a payment.
+ * We serve a simple HTML page instead of redirecting to the local frontend,
+ * making it more reliable for mobile apps.
+ */
+exports.stripeSuccess = async (req, res) => {
+    const { jobId, type } = req.query;
+
+    let redirectText = "Payment Successful!";
+    let subText = "Your payment has been processed and secured in escrow.";
+
+    if (type === 'wallet_topup') {
+        redirectText = "Wallet Top-up Successful!";
+        subText = "Funds have been added to your professional wallet.";
+    }
+
+    res.send(`
+        <html>
+            <head>
+                <title>Success</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f7fafc; color: #2d3748; }
+                    .card { background: white; padding: 2.5rem; border-radius: 1rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); text-align: center; max-width: 400px; width: 90%; }
+                    .icon { color: #48bb78; font-size: 4rem; margin-bottom: 1.5rem; }
+                    h1 { margin: 0 0 1rem 0; font-size: 1.5rem; font-weight: 700; color: #1a202c; }
+                    p { margin: 0 0 2rem 0; color: #718096; line-height: 1.5; }
+                    .btn { background-color: #008080; color: white; padding: 0.75rem 1.5rem; border-radius: 0.5rem; text-decoration: none; font-weight: 600; display: inline-block; transition: background-color 0.2s; }
+                    .btn:hover { background-color: #006666; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">✓</div>
+                    <h1>${redirectText}</h1>
+                    <p>${subText}</p>
+                    <a href="skillbridge://payment/success" class="btn">Return to App</a>
+                </div>
+            </body>
+        </html>
+    `);
+};
+
+/**
+ * Handle Stripe Cancel Redirect
+ */
+exports.stripeCancel = async (req, res) => {
+    res.send(`
+        <html>
+            <head>
+                <title>Cancelled</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f7fafc; color: #2d3748; }
+                    .card { background: white; padding: 2.5rem; border-radius: 1rem; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1); text-align: center; max-width: 400px; width: 90%; }
+                    .icon { color: #e53e3e; font-size: 4rem; margin-bottom: 1.5rem; }
+                    h1 { margin: 0 0 1rem 0; font-size: 1.5rem; font-weight: 700; color: #1a202c; }
+                    p { margin: 0 0 2rem 0; color: #718096; line-height: 1.5; }
+                    .btn { background-color: #718096; color: white; padding: 0.75rem 1.5rem; border-radius: 0.5rem; text-decoration: none; font-weight: 600; display: inline-block; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <div class="icon">✕</div>
+                    <h1>Payment Cancelled</h1>
+                    <p>The checkout process was cancelled. No funds were charged.</p>
+                    <a href="skillbridge://payment/cancel" class="btn">Return to App</a>
+                </div>
+            </body>
+        </html>
+    `);
 };

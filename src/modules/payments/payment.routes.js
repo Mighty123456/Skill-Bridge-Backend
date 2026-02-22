@@ -15,6 +15,10 @@ router.post('/settle', protect, authorize('admin'), paymentController.processSet
 router.get('/invoice/:paymentId', protect, paymentController.downloadInvoice);
 router.get('/export', protect, authorize('admin'), paymentController.exportTransactions);
 
+// Checkout Redirects (Mobile friendly)
+router.get('/success', paymentController.stripeSuccess);
+router.get('/cancel', paymentController.stripeCancel);
+
 // Stripe Webhook (Stripe needs to call this without JWT)
 router.post('/webhook', express.raw({ type: 'application/json' }), paymentController.handleStripeWebhook);
 

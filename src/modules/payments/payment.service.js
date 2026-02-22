@@ -645,12 +645,16 @@ exports.getPlatformStats = async () => {
 /**
  * STRIPE: Create Checkout Session for Wallet Top-up
  */
-exports.createStripeCheckoutSession = async (userId, amount) => {
+exports.createStripeCheckoutSession = async (userId, amount, backEndUrl = null) => {
     // 1. Convert amount to cents for Stripe
     const amountInCents = Math.round(amount * 100);
 
     const stripe = getStripe();
     if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
+
+    // Determine Success/Cancel URLs
+    // Preference: 1. Passed backEndUrl (from request), 2. Generic Backend URL from config, 3. Frontend URL fallback
+    const baseReturnUrl = backEndUrl || `${config.RENDER_BACKEND_URL}/api/payments` || `${config.FRONTEND_URL}/wallet`;
 
     // 2. Create Checkout Session
     const session = await stripe.checkout.sessions.create({
@@ -669,8 +673,8 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
             },
         ],
         mode: 'payment',
-        success_url: `${config.FRONTEND_URL}/wallet/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${config.FRONTEND_URL}/wallet/cancel`,
+        success_url: `${baseReturnUrl}/success?type=wallet_topup&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseReturnUrl}/cancel?type=wallet_topup`,
         customer_email: (await mongoose.model('User').findById(userId)).email,
         metadata: {
             userId: userId.toString(),
@@ -685,7 +689,7 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
 /**
  * STRIPE: Create Checkout Session for specific Job (Direct Pay)
  */
-exports.createJobCheckoutSession = async (jobId, userId) => {
+exports.createJobCheckoutSession = async (jobId, userId, backEndUrl = null) => {
     const job = await Job.findById(jobId).populate('selected_worker_id');
     if (!job) throw new Error('Job not found');
 
@@ -694,6 +698,9 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
 
     const stripe = getStripe();
     if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
+
+    // Determine Success/Cancel URLs
+    const baseReturnUrl = backEndUrl || `${config.RENDER_BACKEND_URL}/api/payments` || `${config.FRONTEND_URL}/payment`;
 
     // Create Checkout Session
     const session = await stripe.checkout.sessions.create({
@@ -712,8 +719,8 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
             },
         ],
         mode: 'payment',
-        success_url: `${config.FRONTEND_URL}/payment/success?jobId=${jobId}`,
-        cancel_url: `${config.FRONTEND_URL}/payment/cancel?jobId=${jobId}`,
+        success_url: `${baseReturnUrl}/success?jobId=${jobId}&type=job_payment`,
+        cancel_url: `${baseReturnUrl}/cancel?jobId=${jobId}&type=job_payment`,
         customer_email: (await mongoose.model('User').findById(userId)).email,
         metadata: {
             userId: userId.toString(),
