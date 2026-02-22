@@ -4,8 +4,11 @@ const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const Worker = require('../workers/worker.model');
 const config = require('../../config/env');
-const stripeKey = config.STRIPE_SECRET_KEY;
-const stripe = stripeKey ? require('stripe')(stripeKey) : null;
+const getStripe = () => {
+    const stripeKey = config.STRIPE_SECRET_KEY;
+    if (!stripeKey) return null;
+    return require('stripe')(stripeKey);
+};
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 const NotificationService = require('../notifications/notification.service');
@@ -646,6 +649,7 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
     // 1. Convert amount to cents for Stripe
     const amountInCents = Math.round(amount * 100);
 
+    const stripe = getStripe();
     if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
 
     // 2. Create Checkout Session
@@ -688,6 +692,7 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
     const amount = job.diagnosis_report.final_total_cost;
     const breakdown = await this.calculateBreakdown(amount, job.selected_worker_id);
 
+    const stripe = getStripe();
     if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
 
     // Create Checkout Session
@@ -821,6 +826,7 @@ exports.handleExternalRefund = async (chargeId, amount, session) => {
  * Triggered when a job is finalized and the worker has a connected account.
  */
 exports.processStripeTransfer = async (workerId, amount, jobId) => {
+    const stripe = getStripe();
     if (!stripe) return { success: false, message: 'Stripe not configured' };
 
     try {
