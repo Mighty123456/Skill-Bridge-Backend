@@ -171,10 +171,13 @@ exports.handleStripeWebhook = async (req, res) => {
     session_stripe.startTransaction();
 
     try {
+        logger.info(`📦 Processing Stripe Event: ${event.type}`);
+
         switch (event.type) {
             case 'checkout.session.completed':
             case 'checkout.session.async_payment_succeeded':
                 const session = event.data.object;
+                logger.info(`✅ Stripe Checkout Session completed: ${session.id} for type: ${session.metadata?.type}`);
 
                 // Idempotency check
                 const existingPayment = await Payment.findOne({ transactionId: session.id }).session(session_stripe);
@@ -207,6 +210,7 @@ exports.handleStripeWebhook = async (req, res) => {
                 else if (session.metadata.type === 'job_payment') {
                     const jobId = session.metadata.jobId;
                     const amount = Number(session.metadata.amount);
+                    logger.info(`💸 finalizing job payment for job: ${jobId}, amount: ${amount}`);
                     await JobService.handleJobPaymentSuccess(jobId, amount, 'stripe', session.id, session_stripe);
                 }
                 break;
@@ -503,4 +507,54 @@ exports.stripeCancel = async (req, res) => {
             </body>
         </html>
     `);
+};
+/**
+ * Force Verify Payment Status (App Fallback)
+ */
+exports.verifyJobPayment = async (req, res, next) => {
+    try {
+        const { jobId } = req.params;
+        logger.info(`🔍 verifyJobPayment triggered for job: ${jobId}`);
+
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ message: 'Job not found' });
+
+        if (job.status === 'diagnosed') {
+            return res.json({
+                success: true,
+                status: 'diagnosed',
+                message: 'Payment verified: Job is ready to start.'
+            });
+        }
+
+        // Check if a payment record already exists in our DB (webhook might have finished)
+        const payment = await Payment.findOne({
+            job: jobId,
+            type: 'escrow',
+            status: 'completed'
+        });
+
+        if (payment) {
+            if (job.status !== 'diagnosed') {
+                // Self-correction: Webhook added the payment but status update was missed?
+                logger.info(`🛠️ Self-correcting job status for ${jobId}`);
+                // IMPORTANT: Don't pass 'stripe' gateway here, because the record already exists
+                await JobService.handleJobPaymentSuccess(jobId, payment.amount);
+            }
+            return res.json({
+                success: true,
+                status: 'diagnosed',
+                message: 'Payment verified from transaction records.'
+            });
+        }
+
+        // If still no payment, tell the app to wait or retry
+        res.json({
+            success: false,
+            status: job.status,
+            message: 'Payment processing in progress. Please wait a moment.'
+        });
+    } catch (e) {
+        next(e);
+    }
 };

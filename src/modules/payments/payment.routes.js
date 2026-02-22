@@ -19,7 +19,11 @@ router.get('/export', protect, authorize('admin'), paymentController.exportTrans
 router.get('/success', paymentController.stripeSuccess);
 router.get('/cancel', paymentController.stripeCancel);
 
+// Verify payment status (polling fallback)
+router.get('/verify/:jobId', protect, paymentController.verifyJobPayment);
+
 // Stripe Webhook (Stripe needs to call this without JWT)
-router.post('/webhook', express.raw({ type: 'application/json' }), paymentController.handleStripeWebhook);
+// Note: express.raw is handled in app.js for this path
+router.post('/webhook', paymentController.handleStripeWebhook);
 
 module.exports = router;
