@@ -654,7 +654,7 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
 
     // 2. Create Checkout Session
     const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card', 'upi', 'netbanking'],
+        payment_method_types: ['card'],
         line_items: [
             {
                 price_data: {
@@ -697,7 +697,7 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
 
     // Create Checkout Session
     const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card', 'upi', 'netbanking'],
+        payment_method_types: ['card'],
         line_items: [
             {
                 price_data: {
