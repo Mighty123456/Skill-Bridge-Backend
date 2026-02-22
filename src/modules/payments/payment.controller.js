@@ -529,6 +529,11 @@ exports.verifyJobPayment = async (req, res, next) => {
         const job = await Job.findById(jobId);
         if (!job) return res.status(404).json({ message: 'Job not found' });
 
+        // Security: Only the job owner (tenant) or assigned worker can verify
+        if (job.user_id.toString() !== req.user.id && job.selected_worker_id?.toString() !== req.user.id) {
+            return res.status(403).json({ message: 'Unauthorized to verify this job payment' });
+        }
+
         if (job.status === 'diagnosed') {
             return res.json({
                 success: true,
