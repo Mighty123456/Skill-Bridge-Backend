@@ -363,34 +363,53 @@ exports.processSettlement = async (req, res, next) => {
 };
 
 /**
- * Download Invoice for a payment (Tenant)
+ * Download Invoice for a payment (Tenant / Admin)
  */
 exports.downloadInvoice = async (req, res, next) => {
     try {
         const { paymentId } = req.params;
         const InvoiceService = require('./invoice.service');
 
-        const payment = await Payment.findById(paymentId);
+        // Validate ObjectId to avoid Mongoose cast errors
+        if (!paymentId || !mongoose.Types.ObjectId.isValid(paymentId)) {
+            return res.status(400).json({ message: 'Invalid payment ID' });
+        }
+
+        const payment = await Payment.findById(paymentId).lean();
         if (!payment) return res.status(404).json({ message: 'Payment not found' });
 
         // Security check: Only the involved user or admin can download
-        if (payment.user.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+        const paymentUserId = payment.user?.toString?.() || payment.user;
+        if (paymentUserId !== req.user._id.toString() && req.user.role !== 'admin') {
             return res.status(403).json({ message: 'Unauthorized access to invoice' });
         }
 
-        const job = await Job.findById(payment.job).populate('selected_worker_id', 'name').lean();
         const user = await User.findById(payment.user).lean();
-
-        if (!job || !user) {
-            return res.status(404).json({ message: 'Associated job or user not found' });
+        if (!user) {
+            return res.status(404).json({ message: 'User not found for this payment' });
         }
 
-        const pdfBuffer = await InvoiceService.generateTenantInvoice(payment, job, user);
+        let pdfBuffer;
 
+        if (payment.job) {
+            const job = await Job.findById(payment.job).populate('selected_worker_id', 'name').lean();
+            if (!job) {
+                logger.warn(`Invoice: Job ${payment.job} not found for payment ${paymentId}`);
+                return res.status(404).json({ message: 'Associated job not found' });
+            }
+            pdfBuffer = await InvoiceService.generateTenantInvoice(payment, job, user);
+        } else {
+            // Top-up, payout, or other payment types without a job
+            const desc = payment.type === 'topup' ? 'Wallet Top-up' : payment.type === 'payout' ? 'Service Payout' : payment.type;
+            pdfBuffer = await InvoiceService.generateSimpleInvoice(payment, user, desc);
+        }
+
+        const invSuffix = (payment.transactionId || payment._id?.toString() || 'INV').slice(-8).toUpperCase();
         res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename=SB_Invoice_${payment.transactionId.slice(-8).toUpperCase()}.pdf`);
+        res.setHeader('Content-Disposition', `attachment; filename=SB_Invoice_${invSuffix}.pdf`);
         res.status(200).send(pdfBuffer);
     } catch (error) {
+        logger.error(`Invoice download error: ${error.message}`);
         next(error);
     }
 };

@@ -11,6 +11,7 @@ const Wallet = require('../wallet/wallet.model'); // Added
 const Notification = require('../notifications/notification.model');
 const Chat = require('../chat/chat.model');
 const Message = require('../chat/message.model');
+const { decryptChatMessage } = require('../../common/utils/chat-decrypt');
 const { ROLES } = require('../../common/constants/roles');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const authService = require('../auth/auth.service');
@@ -533,11 +534,20 @@ const listJobs = async (req, res) => {
       status: job.status,
       selectedWorker: job.selected_worker_id?.name || null,
       selectedWorkerEmail: job.selected_worker_id?.email || null,
-      workerLocation: job.journey?.worker_location || null, // live worker GPS
+      workerLocation: job.journey?.worker_location || null,
       startedAt: job.started_at || job.journey?.started_at || null,
       completedAt: job.completed_at || null,
       createdAt: job.created_at,
       updatedAt: job.updated_at,
+      // Enhanced details
+      description: job.job_description || 'No description provided',
+      issuePhotos: job.issue_photos || [],
+      diagnosisReport: job.diagnosis_report || null,
+      materialRequests: job.material_requests || [],
+      completionPhotos: job.completion_photos || [],
+      workSummary: job.work_summary || '',
+      signature: job.digital_signature || null,
+      timeline: job.timeline || []
     }));
 
     return successResponse(res, 'Jobs fetched successfully', { jobs: formattedJobs });
@@ -1004,9 +1014,15 @@ const listAllChats = async (req, res) => {
       .populate('participants', 'name email role profileImage chatStrikes chatMutedUntil')
       .populate('job', 'job_title status user_id selected_worker_id')
       .sort({ lastMessageTime: -1 })
-      .limit(100);
+      .limit(100)
+      .lean();
 
-    return successResponse(res, 'All chats fetched', { chats });
+    const chatsDecrypted = chats.map((c) => ({
+      ...c,
+      lastMessage: c.lastMessage ? decryptChatMessage(c.lastMessage) : c.lastMessage
+    }));
+
+    return successResponse(res, 'All chats fetched', { chats: chatsDecrypted });
   } catch (error) {
     logger.error(`Admin listAllChats error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch chats', 500);
@@ -1019,8 +1035,12 @@ const listAllChats = async (req, res) => {
 const getChatMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
-    const messages = await Message.find({ chatId }).sort({ createdAt: 1 });
-    return successResponse(res, 'Messages fetched', { messages });
+    const messages = await Message.find({ chatId }).sort({ createdAt: 1 }).lean();
+    const messagesDecrypted = messages.map((m) => ({
+      ...m,
+      text: m.text ? decryptChatMessage(m.text) : m.text
+    }));
+    return successResponse(res, 'Messages fetched', { messages: messagesDecrypted });
   } catch (error) {
     logger.error(`Admin getChatMessages error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch messages', 500);

@@ -1,5 +1,5 @@
 const puppeteer = require('puppeteer');
-const logger = require('../config/logger');
+const logger = require('../../config/logger');
 
 /**
  * Generate PDF from HTML

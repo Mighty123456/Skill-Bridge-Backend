@@ -3,9 +3,78 @@ const logger = require('../../config/logger');
 
 class InvoiceService {
     /**
-     * Generate Invoice for Tenant
+     * Generate Invoice for Wallet Top-up or Payout (no job)
+     */
+    async generateSimpleInvoice(payment, user, description) {
+        const desc = description || (payment.type === 'topup' ? 'Wallet Top-up' : payment.type === 'payout' ? 'Service Payout' : payment.type);
+        const invId = (payment.transactionId || payment._id?.toString() || 'N/A').slice(-8).toUpperCase();
+        const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; margin: 0; padding: 40px; line-height: 1.6; }
+          .header { border-bottom: 3px solid #008080; padding-bottom: 20px; margin-bottom: 40px; }
+          .logo { color: #008080; font-size: 32px; font-weight: 800; }
+          .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; background: #f0fdf4; color: #166534; font-size: 12px; font-weight: 700; margin-top: 10px; }
+          .meta-section { margin-bottom: 40px; }
+          .meta-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; }
+          .table { width: 100%; border-collapse: collapse; margin-bottom: 40px; }
+          .table th { background: #f8fafc; text-align: left; padding: 16px; border-bottom: 2px solid #e2e8f0; font-size: 13px; font-weight: 700; color: #475569; }
+          .table td { padding: 16px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+          .summary-row { padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+          .grand-total { border-top: 2px solid #008080; margin-top: 10px; padding-top: 15px; }
+          .footer { margin-top: 80px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="logo">SkillBridge</div>
+          <div class="badge">PAID IN FULL</div>
+          <div style="text-align: right; margin-top: -40px;">
+            <h1 style="font-size: 24px; font-weight: 700; color: #64748b; margin: 0;">TAX INVOICE</h1>
+            <p style="margin: 5px 0; font-size: 14px;"><strong>INV-${invId}</strong></p>
+            <p style="margin: 5px 0; font-size: 12px; color: #64748b;">Issued on: ${new Date(payment.createdAt || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          </div>
+        </div>
+        <div class="meta-section">
+          <div class="meta-title">Billed To</div>
+          <div style="font-weight: 700; font-size: 16px;">${user?.name || 'Customer'}</div>
+          <div style="font-size: 13px; color: #64748b; margin-top: 4px;">${user?.email || ''}</div>
+        </div>
+        <table class="table">
+          <thead><tr><th style="width:70%;">Description</th><th style="text-align:right;width:30%;">Amount</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><div style="font-weight: 700;">${desc}</div></td>
+              <td style="text-align: right; font-weight: 700;">₹${Number(payment.amount || 0).toLocaleString('en-IN')}</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="grand-total" style="text-align: right;">
+          <span style="font-size: 18px; font-weight: 800; color: #008080;">Total: ₹${Number(payment.amount || 0).toLocaleString('en-IN')}</span>
+        </div>
+        <div class="footer">
+          <p><strong>This is a computer generated document.</strong></p>
+          <p>SkillBridge Marketplace | support@skillbridge.club</p>
+        </div>
+      </body>
+      </html>
+    `;
+        return await PDFService.generatePDF(html);
+    }
+
+    /**
+     * Generate Invoice for Tenant (Job/Escrow payment)
      */
     async generateTenantInvoice(payment, job, user) {
+        const jobId = job?._id ? job._id.toString().slice(-6).toUpperCase() : 'N/A';
+        const jobTitle = job?.job_title || 'Service';
+        const workerName = job?.selected_worker_id?.name || 'SkillBridge Verified Partner';
+        const locationText = job?.location?.address_text || job?.location?.address || 'On-site Service';
+        const invId = (payment.transactionId || 'N/A').slice(-8).toUpperCase();
+        const amount = Number(payment.amount || 0);
+
         const html = `
       <!DOCTYPE html>
       <html>
@@ -49,25 +118,25 @@ class InvoiceService {
           </div>
           <div class="header-right">
             <h1 class="invoice-label">TAX INVOICE</h1>
-            <p style="margin: 5px 0; font-size: 14px;"><strong>INV-${payment.transactionId.slice(-8).toUpperCase()}</strong></p>
-            <p style="margin: 5px 0; font-size: 12px; color: #64748b;">Issued on: ${new Date(payment.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+            <p style="margin: 5px 0; font-size: 14px;"><strong>INV-${invId}</strong></p>
+            <p style="margin: 5px 0; font-size: 12px; color: #64748b;">Issued on: ${new Date(payment.createdAt || Date.now()).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
           </div>
         </div>
 
         <div class="meta-section">
           <div class="meta-box">
             <div class="meta-title">Billed To</div>
-            <div style="font-weight: 700; font-size: 16px;">${user.name}</div>
+            <div style="font-weight: 700; font-size: 16px;">${user?.name || 'Customer'}</div>
             <div style="font-size: 13px; color: #64748b; margin-top: 4px;">
-              ${user.email}<br>
-              ${user.phone || ''}
+              ${user?.email || ''}<br>
+              ${user?.phone || ''}
             </div>
           </div>
           <div class="meta-box">
             <div class="meta-title">Service Provider</div>
-            <div style="font-weight: 700; font-size: 14px;">${job.selected_worker_id?.name || 'SkillBridge Verified Partner'}</div>
+            <div style="font-weight: 700; font-size: 14px;">${workerName}</div>
             <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
-              Service Location: ${job.location?.address || 'On-site Service'}
+              Service Location: ${locationText}
             </div>
           </div>
         </div>
@@ -82,12 +151,12 @@ class InvoiceService {
           <tbody>
             <tr>
               <td>
-                <div style="font-weight: 700;">Job ID: ${job._id.toString().slice(-6).toUpperCase()} - ${job.job_title}</div>
+                <div style="font-weight: 700;">Job ID: ${jobId} - ${jobTitle}</div>
                 <div style="font-size: 12px; color: #64748b; margin-top: 5px;">
                    Includes platform protection, worker fulfillment, and escrow security for the job duration.
                 </div>
               </td>
-              <td style="text-align: right; font-weight: 700;">₹${payment.amount.toLocaleString('en-IN')}</td>
+              <td style="text-align: right; font-weight: 700;">₹${amount.toLocaleString('en-IN')}</td>
             </tr>
           </tbody>
         </table>
@@ -97,7 +166,7 @@ class InvoiceService {
           <div class="summary-content">
             <div class="summary-row">
               <div class="summary-label">Subtotal</div>
-              <div class="summary-value">₹${payment.amount.toLocaleString('en-IN')}</div>
+              <div class="summary-value">₹${amount.toLocaleString('en-IN')}</div>
             </div>
             <div class="summary-row">
               <div class="summary-label">Tax (Inclusive)</div>
@@ -105,7 +174,7 @@ class InvoiceService {
             </div>
             <div class="summary-row grand-total">
                 <div class="summary-label total-label">Total Amount</div>
-                <div class="summary-value total-value">₹${payment.amount.toLocaleString('en-IN')}</div>
+                <div class="summary-value total-value">₹${amount.toLocaleString('en-IN')}</div>
             </div>
           </div>
         </div>
