@@ -5,11 +5,14 @@ const path = require('path');
 const logFile = path.join(__dirname, '../../debug.log');
 
 const writeLog = (msg) => {
+  // Don't try to write to files in production/serverless environments (like Vercel)
+  if (config.NODE_ENV === 'production') return;
+
   try {
     fs.appendFileSync(logFile, msg + '\n');
   } catch (err) {
     if (config.NODE_ENV !== 'test') {
-      console.error(`Failed to write to log file: ${err.message} `);
+      console.error(`Failed to write to log file: ${err.message}`);
     }
   }
 };
