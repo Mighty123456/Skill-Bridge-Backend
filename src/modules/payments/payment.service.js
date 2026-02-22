@@ -9,6 +9,7 @@ const stripe = stripeKey ? require('stripe')(stripeKey) : null;
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 const NotificationService = require('../notifications/notification.service');
+const logger = require('../../config/logger');
 
 // Constants
 const PROTECTION_FEE = 29;
@@ -410,6 +411,9 @@ exports.releasePayment = async (jobId) => {
             data: { jobId, type: 'release' }
         });
 
+        job.payment_released = true;
+        await job.save({ session });
+
         await session.commitTransaction();
         return payout;
     } catch (error) {
@@ -579,7 +583,7 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
         job.status = 'resolved';
         job.timeline.push({
             status: 'resolved',
-            description: `Settlement processed by admin. Worker paid ₹${workerAmount}, Tenant refunded ₹${tenantAmount}.`,
+            note: `Settlement processed by admin. Worker paid ₹${workerAmount}, Tenant refunded ₹${tenantAmount}.`,
             timestamp: new Date()
         });
         await job.save({ session });
@@ -646,7 +650,7 @@ exports.createStripeCheckoutSession = async (userId, amount) => {
 
     // 2. Create Checkout Session
     const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
+        payment_method_types: ['card', 'upi', 'netbanking'],
         line_items: [
             {
                 price_data: {
@@ -688,7 +692,7 @@ exports.createJobCheckoutSession = async (jobId, userId) => {
 
     // Create Checkout Session
     const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
+        payment_method_types: ['card', 'upi', 'netbanking'],
         line_items: [
             {
                 price_data: {

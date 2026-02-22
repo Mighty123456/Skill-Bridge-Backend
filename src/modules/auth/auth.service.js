@@ -10,6 +10,8 @@ const { uploadProfileImage: uploadImageToCloudinary, deleteImage, extractPublicI
 const config = require('../../config/env');
 const logger = require('../../config/logger');
 const { ROLES } = require('../../common/constants/roles');
+const Wallet = require('../wallet/wallet.model');
+const WalletService = require('../wallet/wallet.service');
 
 /**
  * Register a new user
@@ -660,6 +662,13 @@ const getProfile = async (userId) => {
       userObj.governmentId = workerObj.governmentId;
       userObj.selfie = workerObj.selfie;
       userObj.profession = workerObj.skills?.[0] || 'Service Provider'; // Primary skill as profession
+
+      // Fetch Wallet Data
+      const wallet = await WalletService.getWallet(userId);
+      if (wallet) {
+        userObj.wallet_balance = wallet.balance || 0;
+        userObj.pending_balance = wallet.pendingBalance || 0;
+      }
     }
   } else if (user.role === ROLES.CONTRACTOR) {
     const contractorData = await Contractor.findOne({ user: userId });

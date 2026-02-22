@@ -1,3 +1,4 @@
+const config = require('./config/env');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -7,7 +8,6 @@ const rateLimit = require('express-rate-limit');
 const routes = require('./routes/routes');
 const { errorHandler, notFound } = require('./common/middleware/error.middleware');
 const logger = require('./config/logger');
-const config = require('./config/env');
 
 const app = express();
 
