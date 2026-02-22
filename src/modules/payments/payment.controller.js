@@ -442,7 +442,7 @@ exports.exportTransactions = async (req, res, next) => {
  * making it more reliable for mobile apps.
  */
 exports.stripeSuccess = async (req, res) => {
-    const { jobId, type } = req.query;
+    const { jobId, type, session_id } = req.query;
 
     let redirectText = "Payment Successful!";
     let subText = "Your payment has been processed and secured in escrow.";
@@ -451,6 +451,9 @@ exports.stripeSuccess = async (req, res) => {
         redirectText = "Wallet Top-up Successful!";
         subText = "Funds have been added to your professional wallet.";
     }
+
+    // Append session info to deep link
+    const deepLink = `skillbridge://payment/success?session_id=${session_id || ''}&jobId=${jobId || ''}&type=${type || ''}`;
 
     res.send(`
         <html>
@@ -472,7 +475,13 @@ exports.stripeSuccess = async (req, res) => {
                     <div class="icon">✓</div>
                     <h1>${redirectText}</h1>
                     <p>${subText}</p>
-                    <a href="skillbridge://payment/success" class="btn">Return to App</a>
+                    <a href="${deepLink}" class="btn">Return to App</a>
+                    <script>
+                        // Auto-redirect attempt after 2 seconds
+                        setTimeout(function() {
+                            window.location.href = "${deepLink}";
+                        }, 2000);
+                    </script>
                 </div>
             </body>
         </html>
@@ -514,7 +523,8 @@ exports.stripeCancel = async (req, res) => {
 exports.verifyJobPayment = async (req, res, next) => {
     try {
         const { jobId } = req.params;
-        logger.info(`🔍 verifyJobPayment triggered for job: ${jobId}`);
+        const { session_id } = req.query;
+        logger.info(`🔍 verifyJobPayment triggered for job: ${jobId}, Session: ${session_id || 'NONE'}`);
 
         const job = await Job.findById(jobId);
         if (!job) return res.status(404).json({ message: 'Job not found' });
@@ -527,7 +537,7 @@ exports.verifyJobPayment = async (req, res, next) => {
             });
         }
 
-        // Check if a payment record already exists in our DB (webhook might have finished)
+        // 1. Check if a payment record already exists in our DB
         const payment = await Payment.findOne({
             job: jobId,
             type: 'escrow',
@@ -536,9 +546,7 @@ exports.verifyJobPayment = async (req, res, next) => {
 
         if (payment) {
             if (job.status !== 'diagnosed') {
-                // Self-correction: Webhook added the payment but status update was missed?
                 logger.info(`🛠️ Self-correcting job status for ${jobId}`);
-                // IMPORTANT: Don't pass 'stripe' gateway here, because the record already exists
                 await JobService.handleJobPaymentSuccess(jobId, payment.amount);
             }
             return res.json({
@@ -548,13 +556,50 @@ exports.verifyJobPayment = async (req, res, next) => {
             });
         }
 
-        // If still no payment, tell the app to wait or retry
+        // 2. CRITICAL FALLBACK: Check Stripe API directly
+        const stripe = getStripe();
+        if (stripe) {
+            logger.info(`� No record found in DB. Querying Stripe API directly for jobId: ${jobId}`);
+
+            let sessions = [];
+            if (session_id && session_id !== 'null' && session_id !== 'undefined') {
+                try {
+                    const session = await stripe.checkout.sessions.retrieve(session_id);
+                    if (session) sessions = [session];
+                } catch (err) {
+                    logger.warn(`Failed to retrieve session ${session_id}: ${err.message}`);
+                }
+            }
+
+            if (sessions.length === 0) {
+                // List recent sessions and search metadata locally
+                const result = await stripe.checkout.sessions.list({ limit: 15 });
+                sessions = result.data.filter(s => s.metadata && s.metadata.jobId === jobId);
+            }
+
+            for (const s of sessions) {
+                if (s.payment_status === 'paid') {
+                    logger.info(`💎 Found PAID Stripe session ${s.id} for job ${jobId}. Manually finalizing...`);
+                    const amount = Number(s.metadata.amount);
+                    await JobService.handleJobPaymentSuccess(jobId, amount, 'stripe', s.id);
+
+                    return res.json({
+                        success: true,
+                        status: 'diagnosed',
+                        message: 'Payment verified directly via Stripe API.'
+                    });
+                }
+            }
+        }
+
+        // If still no payment found anywhere
         res.json({
             success: false,
             status: job.status,
-            message: 'Payment processing in progress. Please wait a moment.'
+            message: 'Payment processing in progress. If you already paid, please wait 30s.'
         });
     } catch (e) {
+        logger.error(`❌ verifyJobPayment Error: ${e.message}`);
         next(e);
     }
 };

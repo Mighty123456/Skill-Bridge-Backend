@@ -719,7 +719,7 @@ exports.createJobCheckoutSession = async (jobId, userId, backEndUrl = null) => {
             },
         ],
         mode: 'payment',
-        success_url: `${baseReturnUrl}/success?jobId=${jobId}&type=job_payment`,
+        success_url: `${baseReturnUrl}/success?jobId=${jobId}&type=job_payment&session_id={CHECKOUT_SESSION_ID}`,
         cancel_url: `${baseReturnUrl}/cancel?jobId=${jobId}&type=job_payment`,
         customer_email: (await mongoose.model('User').findById(userId)).email,
         metadata: {
