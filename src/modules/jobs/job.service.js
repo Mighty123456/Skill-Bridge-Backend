@@ -841,22 +841,20 @@ exports.finalizeJob = async (jobId) => {
         throw new Error('Cannot finalize: Dispute is active');
     }
 
-    // Release Payment
+    // Release Payment (This function handles its own session and saving of job.payment_released)
     try {
         await PaymentService.releasePayment(jobId);
-        job.payment_released = true;
-        appendTimeline(job, 'completed', 'system', 'Cooling period ended. Payment released to worker.');
     } catch (err) {
         logger.error(`Failed to release payment for job ${jobId}`, err);
-        // Do not fail the job finalization completely, but flag it? 
-        // Or throw to retry later?
-        // Throwing allows retry by scheduler.
         throw new Error(`Payment Release Failed: ${err.message}`);
     }
 
-    job.status = 'completed';
-
-    await job.save();
+    // Use findByIdAndUpdate to set status without risking overwriting changes made by releasePayment
+    const finalizedJob = await Job.findByIdAndUpdate(
+        jobId,
+        { status: 'completed' },
+        { new: true }
+    );
 
     // Update Worker Stats (Passport) - Moved from confirmCompletion
     try {
