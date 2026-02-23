@@ -46,7 +46,7 @@ exports.checkAndReleasePending = async (userId) => {
         await NotificationService.createNotification({
             recipient: userId,
             title: 'Funds Available!',
-            message: `₹${releasedAmount.toStringAsFixed(2)} has been released and is now available in your balance.`,
+            message: `₹${releasedAmount.toFixed(2)} has been released and is now available in your balance.`,
             type: 'payment',
             data: { type: 'payout_released' }
         });
@@ -69,7 +69,7 @@ exports.creditWallet = async (userId, amount, session = null) => {
     await NotificationService.createNotification({
         recipient: userId,
         title: 'Wallet Topped Up!',
-        message: `₹${amount.toStringAsFixed(2)} has been added to your wallet.`,
+        message: `₹${amount.toFixed(2)} has been added to your wallet.`,
         type: 'payment',
         data: { type: 'topup_success', amount }
     }).catch(err => logger.error(`Failed to send topup notification: ${err.message}`));
@@ -188,7 +188,7 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetail
         await NotificationService.createNotification({
             recipient: userId,
             title: 'Withdrawal Requested',
-            message: `Your request for ₹${amount.toStringAsFixed(2)} has been received.`,
+            message: `Your request for ₹${amount.toFixed(2)} has been received.`,
             type: 'payment',
             data: { withdrawalId: withdrawal._id, status: 'pending' }
         });
@@ -264,8 +264,8 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
             recipient: withdrawal.user,
             title: status === 'completed' ? 'Withdrawal Successful' : 'Withdrawal Rejected',
             message: status === 'completed'
-                ? `Your withdrawal of ₹${withdrawal.amount.toStringAsFixed(2)} has been processed.`
-                : `Your withdrawal of ₹${withdrawal.amount.toStringAsFixed(2)} was rejected. ${notes || ''}`,
+                ? `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} has been processed.`
+                : `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} was rejected. ${notes || ''}`,
             type: 'payment',
             data: { withdrawalId: withdrawal._id, status: status }
         });

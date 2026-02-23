@@ -139,7 +139,7 @@ exports.createEscrow = async (jobId, userId, jobAmount) => {
         await NotificationService.createNotification({
             recipient: userId,
             title: 'Payment Secured',
-            message: `₹${totalAmount.toStringAsFixed(2)} has been secured in escrow for job: ${job ? job.job_title : jobId}`,
+            message: `₹${totalAmount.toFixed(2)} has been secured in escrow for job: ${job ? job.job_title : jobId}`,
             type: 'payment',
             data: { jobId, paymentId: payment._id }
         });
@@ -186,7 +186,7 @@ exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatew
     await NotificationService.createNotification({
         recipient: userId,
         title: 'Payment Secured',
-        message: `₹${totalAmount.toStringAsFixed(2)} secured via ${gateway} for job: ${job.job_title}`,
+        message: `₹${totalAmount.toFixed(2)} secured via ${gateway} for job: ${job.job_title}`,
         type: 'payment',
         data: { jobId, paymentId: payment._id }
     });
@@ -399,8 +399,8 @@ exports.releasePayment = async (jobId) => {
             recipient: job.selected_worker_id,
             title: isNewWorker ? 'Earnings Pending' : 'Payment Received!',
             message: isNewWorker
-                ? `Earnings of ₹${totalWorkerPayout.toStringAsFixed(2)} from job "${job.job_title}" are pending (72h cooldown).`
-                : `₹${totalWorkerPayout.toStringAsFixed(2)} has been added to your wallet for job "${job.job_title}".`,
+                ? `Earnings of ₹${totalWorkerPayout.toFixed(2)} from job "${job.job_title}" are pending (72h cooldown).`
+                : `₹${totalWorkerPayout.toFixed(2)} has been added to your wallet for job "${job.job_title}".`,
             type: 'payment',
             data: { jobId, type: 'payout' }
         });
@@ -488,7 +488,7 @@ exports.refundPayment = async (jobId) => {
         await NotificationService.createNotification({
             recipient: escrowPayments[0].user,
             title: 'Refund Processed',
-            message: `A refund of ₹${totalRefund.toStringAsFixed(2)} has been credited back to your wallet.`,
+            message: `A refund of ₹${totalRefund.toFixed(2)} has been credited back to your wallet.`,
             type: 'payment',
             data: { jobId, type: 'refund' }
         });

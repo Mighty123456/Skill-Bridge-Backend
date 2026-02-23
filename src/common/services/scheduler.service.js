@@ -9,8 +9,8 @@ const logger = require('../../config/logger');
 const initializeScheduler = () => {
     logger.info('⏰ Scheduler Service Initialized');
 
-    // 1. Every hour: Finalize jobs past cooling window
-    cron.schedule('0 * * * *', async () => {
+    // 1. Every 10 minutes: Finalize jobs past cooling window
+    cron.schedule('*/10 * * * *', async () => {
         logger.info('🔍 Running Task: Auto-Finalizing Jobs...');
         try {
             const jobsToFinalize = await Job.find({

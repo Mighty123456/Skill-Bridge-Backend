@@ -128,22 +128,33 @@ class HelpCenterService {
    */
   async getTickets(userId, filters = {}) {
     try {
+      const { status, priority, page = 1, limit = 20 } = filters;
       const query = { userId };
 
-      if (filters.status) {
-        query.status = filters.status;
-      }
-      if (filters.priority) {
-        query.priority = filters.priority;
-      }
+      if (status) query.status = status;
+      if (priority) query.priority = priority;
 
-      const tickets = await SupportTicket.find(query)
-        .sort({ createdAt: -1 })
-        .populate('jobId', 'job_title status')
-        .populate('resolvedBy', 'name email')
-        .lean();
+      const skip = (parseInt(page) - 1) * parseInt(limit);
 
-      return tickets;
+      const [tickets, total] = await Promise.all([
+        SupportTicket.find(query)
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(parseInt(limit))
+          .populate('jobId', 'job_title status')
+          .populate('resolvedBy', 'name email')
+          .lean(),
+        SupportTicket.countDocuments(query)
+      ]);
+
+      return {
+        tickets,
+        pagination: {
+          total,
+          page: parseInt(page),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      };
     } catch (error) {
       logger.error(`Error fetching tickets: ${error.message}`);
       throw error;
@@ -255,45 +266,45 @@ class HelpCenterService {
    */
   async getArticles(filters = {}) {
     try {
+      const { category, role, search, featured, page = 1, limit = 20 } = filters;
       const query = {};
 
-      if (filters.category) {
-        query.category = filters.category;
+      if (category) query.category = category;
+
+      if (role) {
+        query.$or = [{ role: 'all' }, { role }];
       }
 
-      if (filters.role) {
-        query.$or = [
-          { role: 'all' },
-          { role: filters.role }
-        ];
+      if (featured !== undefined) {
+        query.isFeatured = (featured === true || featured === 'true');
       }
 
-      if (filters.featured !== undefined) {
-        query.isFeatured = filters.featured === true || filters.featured === 'true';
+      if (search) {
+        query.$text = { $search: search };
       }
 
-      if (filters.search) {
-        query.$text = { $search: filters.search };
-      }
+      const skip = (parseInt(page) - 1) * parseInt(limit);
+      let articlesQuery = KnowledgeBaseArticle.find(query);
 
-      let articles = KnowledgeBaseArticle.find(query);
-
-      if (filters.search) {
-        articles = articles.sort({ score: { $meta: 'textScore' } });
+      if (search) {
+        articlesQuery = articlesQuery.sort({ score: { $meta: 'textScore' } });
       } else {
-        articles = articles.sort({ isFeatured: -1, createdAt: -1 });
+        articlesQuery = articlesQuery.sort({ isFeatured: -1, createdAt: -1 });
       }
 
-      const results = await articles.lean();
+      const [articles, total] = await Promise.all([
+        articlesQuery.skip(skip).limit(parseInt(limit)).lean(),
+        KnowledgeBaseArticle.countDocuments(query)
+      ]);
 
-      // Increment view count if article is accessed individually
-      if (filters.articleId && results.length > 0) {
-        await KnowledgeBaseArticle.findByIdAndUpdate(filters.articleId, {
-          $inc: { viewCount: 1 }
-        });
-      }
-
-      return results;
+      return {
+        articles,
+        pagination: {
+          total,
+          page: parseInt(page),
+          pages: Math.ceil(total / parseInt(limit))
+        }
+      };
     } catch (error) {
       logger.error(`Error fetching articles: ${error.message}`);
       throw error;
