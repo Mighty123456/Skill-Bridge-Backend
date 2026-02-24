@@ -115,8 +115,8 @@ router.use('/notifications', require('../modules/notifications/notification.rout
 router.use('/quotations', require('../modules/quotations/quotation.routes'));
 router.use('/chats', require('../modules/chat/chat.routes'));
 
-// Add other route modules here
-// router.use('/users', userRoutes);
+// User routes (FCM token management, profile, etc.)
+router.use('/users', require('../modules/users/user.routes'));
 router.use('/workers', require('../modules/workers/worker.routes'));
 router.use('/payments', require('../modules/payments/payment.routes'));
 router.use('/wallet', require('../modules/wallet/wallet.routes'));

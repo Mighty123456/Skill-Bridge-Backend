@@ -2,7 +2,8 @@ const Job = require('./job.model');
 const User = require('../users/user.model');
 const Worker = require('../workers/worker.model');
 const NotificationService = require('../notifications/notification.service');
-const cloudinaryService = require('../../common/services/cloudinary.service'); // For file uploads if needed logic here
+const notifyHelper = require('../../common/notification.helper');
+const cloudinaryService = require('../../common/services/cloudinary.service');
 const { calculateDistance } = require('../../common/utils/geo');
 const logger = require('../../config/logger');
 const PaymentService = require('../payments/payment.service');
@@ -87,7 +88,6 @@ exports.createJob = async (jobData, user) => {
 };
 
 exports.findAndNotifyNearbyWorkers = async (job) => {
-    // ... (Existing Logic)
     const matchedWorkers = await Worker.find({
         skills: { $in: [job.skill_required] },
         verificationStatus: 'verified'
@@ -104,9 +104,10 @@ exports.findAndNotifyNearbyWorkers = async (job) => {
                 $maxDistance: 10000
             }
         }
-    }).select('_id fcmToken');
+    }).select('_id name fcmTokens');
 
-    await NotificationService.sendThrottledJobAlerts(nearbyUsers, job);
+    // Uses unified helper: fires FCM multicast + throttled in-app notifications
+    await notifyHelper.onNewJobPosted(nearbyUsers, job);
 };
 
 exports.getWorkerFeed = async (userId, filters = {}) => {
@@ -228,13 +229,15 @@ exports.confirmEta = async (jobId, workerId, etaTime) => {
     appendTimeline(job, 'eta_confirmed', 'worker', `ETA confirmed for ${new Date(etaTime).toLocaleTimeString()}`);
     await job.save();
 
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Worker ETA Confirmed',
-        message: `Worker will arrive at ${new Date(etaTime).toLocaleTimeString()}`,
-        type: 'info',
-        data: { jobId: job._id }
-    });
+    // Notify Tenant (Multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onEtaConfirmed(tenant, job, etaTime);
+        }
+    } catch (e) {
+        logger.error(`confirmEta notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -263,13 +266,16 @@ exports.startJourney = async (jobId, workerId, location) => {
     appendTimeline(job, 'on_the_way', 'worker', 'Worker started journey');
     await job.save();
 
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Worker is On The Way',
-        message: 'Worker has started their journey to your location.',
-        type: 'info',
-        data: { jobId: job._id }
-    });
+    // FCM Push + In-App: notify tenant via helper
+    try {
+        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+        const workerUser = await User.findById(workerId).select('name');
+        if (tenant) {
+            await notifyHelper.onJobStarted(tenant, job, workerUser?.name || 'Your worker');
+        }
+    } catch (e) {
+        logger.error(`startJourney notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -377,17 +383,17 @@ exports.arrive = async (jobId, workerId, location) => {
             worker.reliabilityStats.punctuality = (worker.reliabilityStats.punctuality || 0) + 1;
             logger.info(`Worker ${workerId} received punctuality bonus. New Score: ${worker.reliabilityScore}`);
         }
-        await worker.save();
     }
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Worker Arrived',
-        message: 'Worker has arrived. Please share the OTP to start the job.',
-        type: 'action_required',
-        data: { jobId: job._id }
-    });
+    // Notify User (Multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onWorkerArrived(tenant, job);
+        }
+    } catch (e) {
+        logger.error(`arrive notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -414,13 +420,15 @@ exports.reportDelay = async (jobId, workerId, reason, delayMinutes) => {
     appendTimeline(job, 'on_the_way', 'worker', `reported delay: ${reason}. Extra ${delayMinutes} mins.`);
     await job.save();
 
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Worker Delayed',
-        message: `Worker reported a delay: ${reason}.`,
-        type: 'alert',
-        data: { jobId: job._id }
-    });
+    // Notify User (Multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onWorkerDelayed(tenant, job, reason);
+        }
+    } catch (e) {
+        logger.error(`reportDelay notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -509,14 +517,15 @@ exports.startJob = async (jobId, workerId, otp) => {
 
     await job.save();
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Job Started',
-        message: 'Worker has started the job.',
-        type: 'job_started',
-        data: { jobId: job._id }
-    });
+    // Notify User: Job started (FCM push)
+    try {
+        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+        if (tenant) {
+            await notifyHelper.onJobStarted(tenant, job, 'Your worker');
+        }
+    } catch (e) {
+        logger.error(`startJob notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -561,14 +570,15 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
 
     await job.save();
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Diagnosis Report Ready',
-        message: 'Worker has submitted final estimation. Please review to start job.',
-        type: 'action_required',
-        data: { jobId: job._id }
-    });
+    // FCM Push + In-App: notify tenant diagnosis is ready for review
+    try {
+        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+        if (tenant) {
+            await notifyHelper.onDiagnosisReady(tenant, job, diagnosisData.final_total_cost);
+        }
+    } catch (e) {
+        logger.error(`submitDiagnosis notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -595,13 +605,12 @@ exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayI
     appendTimeline(job, 'diagnosed', 'user', 'Diagnosis approved. Funds secured in platform escrow.');
 
     // Notify Worker (Async - don't need session)
-    NotificationService.createNotification({
-        recipient: job.selected_worker_id._id,
-        title: 'Diagnosis Approved & Paid',
-        message: 'Client approved estimate and funds are secured. Enter OTP to start.',
-        type: 'info',
-        data: { jobId: job._id }
-    }).catch(e => logger.error(`Notification failed for job ${jobId}: ${e.message}`));
+    notifyHelper.onJobStatusUpdate(
+        job.selected_worker_id._id,
+        'Diagnosis Approved & Paid',
+        'Client approved estimate and funds are secured. Enter OTP to start.',
+        { jobId: job._id, type: 'info' }
+    ).catch(e => logger.error(`Notification failed for job ${jobId}: ${e.message}`));
 
     // Send Professional Emails (Async - don't need session)
     try {
@@ -693,14 +702,15 @@ exports.requestMaterial = async (jobId, workerId, requestData, billProofFile) =>
 
     await job.save();
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Additional Material Requested',
-        message: `Worker needs approval for ${requestData.item_name} (${requestData.cost})`,
-        type: 'action_required',
-        data: { jobId: job._id }
-    });
+    // Notify User (Multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onMaterialRequested(tenant, job, requestData.item_name, requestData.cost);
+        }
+    } catch (e) {
+        logger.error(`requestMaterial notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -777,13 +787,15 @@ exports.submitCompletion = async (jobId, workerId, files, summary, signatureFile
     appendTimeline(job, 'reviewing', 'worker', 'Completion proof & digital signature submitted');
     await job.save();
 
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Review Completion',
-        message: 'Worker has submitted completion proof. Please review.',
-        type: 'completion_review',
-        data: { jobId: job._id }
-    });
+    // FCM Push + In-App: notify tenant to release payment
+    try {
+        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+        if (tenant) {
+            await notifyHelper.onJobCompleted(tenant, job);
+        }
+    } catch (e) {
+        logger.error(`submitCompletion notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -809,13 +821,12 @@ exports.confirmCompletion = async (jobId, userId) => {
     await job.save();
 
     // Notify Worker
-    await NotificationService.createNotification({
-        recipient: job.selected_worker_id,
-        title: 'Work Accepted',
-        message: 'Client accepted work. Payment triggers in 24 hours if no disputes.',
-        type: 'info',
-        data: { jobId: job._id }
-    });
+    await notifyHelper.onJobStatusUpdate(
+        job.selected_worker_id,
+        'Work Accepted',
+        'Client accepted work. Payment triggers in 24 hours if no disputes.',
+        { jobId: job._id, type: 'info' }
+    );
 
     return job;
 };
@@ -877,13 +888,12 @@ exports.finalizeJob = async (jobId) => {
     }
 
     // Notify Both
-    await NotificationService.createNotification({
-        recipient: job.selected_worker_id._id,
-        title: 'Payment Released',
-        message: 'Job finalized successfully. Payment has been credited.',
-        type: 'payment_received',
-        data: { jobId: job._id }
-    });
+    await notifyHelper.onJobStatusUpdate(
+        job.selected_worker_id._id,
+        'Payment Released',
+        'Job finalized successfully. Payment has been credited.',
+        { jobId: job._id, type: 'payment_received' }
+    );
 
     // Send Professional Email to Worker
     try {
@@ -1049,16 +1059,14 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
 
     await job.save();
 
-    // Notify Counterparty
-    const recipientId = userRole === 'user' ? job.selected_worker_id : job.user_id;
-    if (recipientId) {
-        await NotificationService.createNotification({
-            recipient: recipientId,
-            title: 'Job Cancelled',
-            message: `The job has been cancelled by the ${userRole}. Reason: ${reason}`,
-            type: 'alert',
-            data: { jobId: job._id }
-        });
+    // Notify Counterparty (Multi-channel)
+    try {
+        const recipientId = userRole === 'user' ? job.selected_worker_id : job.user_id;
+        if (recipientId) {
+            await notifyHelper.onJobCancelled(recipientId, job, userRole, reason);
+        }
+    } catch (e) {
+        logger.error(`cancelJob notify failed: ${e.message}`);
     }
 
     return job;
@@ -1096,15 +1104,17 @@ exports.raiseDispute = async (jobId, userId, reason) => {
         logger.error('Failed to update worker dispute stats', e);
     }
 
-    // Notify Admin & Worker
-    // await NotificationService.notifyAdmin(...) 
-    await NotificationService.createNotification({
-        recipient: job.selected_worker_id,
-        title: 'Dispute Raised',
-        message: 'Client has raised a dispute. Payment is on hold until resolved.',
-        type: 'alert',
-        data: { jobId: job._id }
-    });
+    await job.save();
+
+    // Notify Worker (Multi-channel)
+    try {
+        const worker = await User.findById(job.selected_worker_id);
+        if (worker) {
+            await notifyHelper.onDisputeRaised(worker, job, reason);
+        }
+    } catch (e) {
+        logger.error(`raiseDispute notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -1150,16 +1160,20 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
 
     await job.save();
 
-    // Notify Push
-    const recipients = [job.user_id._id, job.selected_worker_id._id];
-    for (const rid of recipients) {
-        await NotificationService.createNotification({
-            recipient: rid,
-            title: notificationTitle,
-            message: `Admin has resolved the dispute. Decision: ${decision}. Note: ${notes}`,
-            type: 'info',
-            data: { jobId: job._id }
-        });
+    // Notify Counterparties (Multi-channel) via Helper
+    try {
+        const tenantAmount = decision === 'refund_client' ? job.diagnosis_report.final_total_cost : 0;
+        const workerAmount = decision === 'release_payment' ? job.diagnosis_report.final_total_cost : 0;
+
+        await notifyHelper.onSettlementProcessed(
+            job.user_id,
+            job.selected_worker_id,
+            job,
+            tenantAmount,
+            workerAmount
+        );
+    } catch (e) {
+        logger.error(`resolveDispute notify failed: ${e.message}`);
     }
 
     // Professional Emails (Async)
@@ -1221,14 +1235,15 @@ exports.claimWarranty = async (jobId, userId, reason) => {
 
     await job.save();
 
-    // Notify Worker
-    await NotificationService.createNotification({
-        recipient: job.selected_worker_id,
-        title: 'Warranty Claim Raised',
-        message: `Client reported an issue: ${reason}. Please contact them.`,
-        type: 'alert',
-        data: { jobId: job._id }
-    });
+    // Notify Worker (Multi-channel)
+    try {
+        const worker = await User.findById(job.selected_worker_id);
+        if (worker) {
+            await notifyHelper.onWarrantyClaimed(worker, job, reason);
+        }
+    } catch (e) {
+        logger.error(`claimWarranty notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -1252,14 +1267,15 @@ exports.resolveWarranty = async (jobId, workerId) => {
     appendTimeline(job, 'completed', 'worker', 'Warranty claim resolved.');
     await job.save();
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: job.user_id,
-        title: 'Warranty Resolved',
-        message: 'Worker has marked the warranty issue as resolved.',
-        type: 'info',
-        data: { jobId: job._id }
-    });
+    // Notify User (Multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onWarrantyResolved(tenant, job);
+        }
+    } catch (e) {
+        logger.error(`resolveWarranty notify failed: ${e.message}`);
+    }
 
     return job;
 };

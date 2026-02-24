@@ -2,7 +2,9 @@ const { SupportTicket, KnowledgeBaseArticle, HelpCategory } = require('./help-ce
 const Job = require('../jobs/job.model');
 const Chat = require('../chat/chat.model');
 const Payment = require('../payments/payment.model');
+const User = require('../users/user.model');
 const NotificationService = require('../notifications/notification.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 class HelpCenterService {
@@ -107,14 +109,15 @@ class HelpCenterService {
         await this.notifySupportTeam(ticket);
       }
 
-      // Notify user
-      await NotificationService.createNotification({
-        recipient: userId,
-        title: 'Support Ticket Created',
-        message: `Your ticket "${ticket.title}" has been created successfully`,
-        type: 'ticket_created',
-        data: { ticketId: ticket._id }
-      });
+      // Notify user (Multi-Channel)
+      try {
+        const user = await User.findById(userId);
+        if (user) {
+          await notifyHelper.onTicketUpdated(user, ticket._id, `Your support ticket "${ticket.title}" has been created.`);
+        }
+      } catch (notifyErr) {
+        logger.error(`Ticket creation notification failed: ${notifyErr.message}`);
+      }
 
       return ticket;
     } catch (error) {
@@ -216,14 +219,15 @@ class HelpCenterService {
 
       await ticket.save();
 
-      // Notify support team
-      await NotificationService.createNotification({
-        recipient: ticket.userId,
-        title: 'Ticket Update',
-        message: `New update added to ticket "${ticket.title}"`,
-        type: 'ticket_update',
-        data: { ticketId: ticket._id }
-      });
+      // Notify user/support (Multi-Channel)
+      try {
+        const user = await User.findById(ticket.userId);
+        if (user) {
+          await notifyHelper.onTicketUpdated(user, ticket._id, `New update added to ticket "${ticket.title}"`);
+        }
+      } catch (notifyErr) {
+        logger.error(`Ticket update notification failed: ${notifyErr.message}`);
+      }
 
       return ticket;
     } catch (error) {
@@ -480,14 +484,15 @@ class HelpCenterService {
 
       await ticket.save();
 
-      // Notify user
-      await NotificationService.createNotification({
-        recipient: ticket.userId,
-        title: 'Ticket Status Updated',
-        message: `Your ticket "${ticket.title}" status has been updated to ${status}`,
-        type: 'ticket_status_update',
-        data: { ticketId: ticket._id, status }
-      });
+      // Notify user (Multi-Channel)
+      try {
+        const user = await User.findById(ticket.userId);
+        if (user) {
+          await notifyHelper.onTicketUpdated(user, ticket._id, `Your ticket status has been updated to ${status}`);
+        }
+      } catch (notifyErr) {
+        logger.error(`Ticket status notification failed: ${notifyErr.message}`);
+      }
 
       return ticket;
     } catch (error) {
@@ -521,14 +526,15 @@ class HelpCenterService {
 
       await ticket.save();
 
-      // Notify user
-      await NotificationService.createNotification({
-        recipient: ticket.userId,
-        title: 'New Support Message',
-        message: `Support team has replied to your ticket: "${ticket.title}"`,
-        type: 'ticket_reply',
-        data: { ticketId: ticket._id }
-      });
+      // Notify user (Multi-Channel)
+      try {
+        const user = await User.findById(ticket.userId);
+        if (user) {
+          await notifyHelper.onTicketUpdated(user, ticket._id, `Support team has replied to your ticket: "${ticket.title}"`);
+        }
+      } catch (notifyErr) {
+        logger.error(`Ticket reply notification failed: ${notifyErr.message}`);
+      }
 
       return ticket;
     } catch (error) {

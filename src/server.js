@@ -3,6 +3,7 @@ const connectDB = require('./config/db');
 const config = require('./config/env');
 const logger = require('./config/logger');
 const { initializeEmailService } = require('./common/services/email.service');
+const { initializeFCM } = require('./common/services/fcm.service');
 
 const http = require('http');
 const { initializeSocket } = require('./socket/socket');
@@ -18,6 +19,10 @@ const startServer = async () => {
     // Initialize email service on startup
     logger.info('📧 Initializing email service...');
     await initializeEmailService();
+
+    // Initialize Firebase Cloud Messaging (FCM) for push notifications
+    logger.info('🔔 Initializing FCM push notification service...');
+    initializeFCM();
 
     // Start server only after DB is connected
     const PORT = config.PORT;

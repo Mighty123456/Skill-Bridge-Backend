@@ -3,6 +3,7 @@ const Wallet = require('../wallet/wallet.model'); // Direct model access or serv
 const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const Worker = require('../workers/worker.model');
+const User = require('../users/user.model');
 const config = require('../../config/env');
 const getStripe = () => {
     const stripeKey = config.STRIPE_SECRET_KEY;
@@ -11,7 +12,8 @@ const getStripe = () => {
 };
 const mongoose = require('mongoose');
 const crypto = require('crypto');
-const NotificationService = require('../notifications/notification.service');
+
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 // Constants
@@ -135,14 +137,20 @@ exports.createEscrow = async (jobId, userId, jobAmount) => {
         await signPayment(payment, session);
         await payment.save({ session });
 
-        // Send Notification to User
-        await NotificationService.createNotification({
-            recipient: userId,
-            title: 'Payment Secured',
-            message: `₹${totalAmount.toFixed(2)} has been secured in escrow for job: ${job ? job.job_title : jobId}`,
-            type: 'payment',
-            data: { jobId, paymentId: payment._id }
-        });
+        // Send Multi-Channel Notification
+        try {
+            const tenant = await User.findById(userId).session(session);
+            const worker = await User.findById(job.selected_worker_id).session(session);
+            if (tenant && worker) {
+                await notifyHelper.onPaymentEscrowed(tenant, worker, job, {
+                    totalAmount,
+                    jobAmount: jobAmount,
+                    protectionFee: breakdown.protectionFee
+                });
+            }
+        } catch (notifyErr) {
+            logger.error(`Escrow notification failed: ${notifyErr.message}`);
+        }
 
         await session.commitTransaction();
         return payment;
@@ -182,14 +190,20 @@ exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatew
     await signPayment(payment, session);
     await payment.save({ session });
 
-    // Notify User
-    await NotificationService.createNotification({
-        recipient: userId,
-        title: 'Payment Secured',
-        message: `₹${totalAmount.toFixed(2)} secured via ${gateway} for job: ${job.job_title}`,
-        type: 'payment',
-        data: { jobId, paymentId: payment._id }
-    });
+    // Send Multi-Channel Notification
+    try {
+        const tenant = await User.findById(userId).session(session);
+        const worker = await User.findById(job.selected_worker_id).session(session);
+        if (tenant && worker) {
+            await notifyHelper.onPaymentEscrowed(tenant, worker, job, {
+                totalAmount,
+                jobAmount: totalAmount - breakdown.protectionFee,
+                protectionFee: breakdown.protectionFee
+            });
+        }
+    } catch (notifyErr) {
+        logger.error(`External escrow notification failed: ${notifyErr.message}`);
+    }
 
     return payment;
 };
@@ -394,25 +408,30 @@ exports.releasePayment = async (jobId) => {
             await commissionRecord.save({ session });
         }
 
-        // Notify Worker
-        await NotificationService.createNotification({
-            recipient: job.selected_worker_id,
-            title: isNewWorker ? 'Earnings Pending' : 'Payment Received!',
-            message: isNewWorker
-                ? `Earnings of ₹${totalWorkerPayout.toFixed(2)} from job "${job.job_title}" are pending (72h cooldown).`
-                : `₹${totalWorkerPayout.toFixed(2)} has been added to your wallet for job "${job.job_title}".`,
-            type: 'payment',
-            data: { jobId, type: 'payout' }
-        });
-
-        // Notify User
-        await NotificationService.createNotification({
-            recipient: job.user_id,
-            title: 'Job Finalized',
-            message: `Payment has been released to the worker for job "${job.job_title}".`,
-            type: 'payment',
-            data: { jobId, type: 'release' }
-        });
+        // Send Multi-Channel Notifications
+        try {
+            const tenant = await User.findById(job.user_id).session(session);
+            const workerUser = await User.findById(job.selected_worker_id).session(session);
+            if (workerUser) {
+                await notifyHelper.onPaymentReleased(workerUser, job, {
+                    netPayout: totalWorkerPayout
+                });
+            }
+            if (tenant) {
+                // Custom push for tenant notifying completion
+                const tTitle = 'Job Finalized';
+                const tBody = `Payment has been released to the worker for job "${job.job_title}".`;
+                // Simple DB notification for tenant
+                await notifyHelper.onJobStatusUpdate(
+                    job.user_id,
+                    tTitle,
+                    tBody,
+                    { jobId, type: 'release' }
+                );
+            }
+        } catch (notifyErr) {
+            logger.error(`Release notification failed: ${notifyErr.message}`);
+        }
 
         job.payment_released = true;
         await job.save({ session });
@@ -484,14 +503,15 @@ exports.refundPayment = async (jobId) => {
             }).catch(err => logger.error(`Failed to send refund email: ${err.message}`));
         }
 
-        // Notify User
-        await NotificationService.createNotification({
-            recipient: escrowPayments[0].user,
-            title: 'Refund Processed',
-            message: `A refund of ₹${totalRefund.toFixed(2)} has been credited back to your wallet.`,
-            type: 'payment',
-            data: { jobId, type: 'refund' }
-        });
+        // Send Multi-Channel Notification
+        try {
+            const tenant = await User.findById(escrowPayments[0].user).session(session);
+            if (tenant) {
+                await notifyHelper.onRefundProcessed(tenant, job, totalRefund);
+            }
+        } catch (notifyErr) {
+            logger.error(`Refund notification failed: ${notifyErr.message}`);
+        }
 
         await session.commitTransaction();
         return refund;
@@ -591,25 +611,20 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
         });
         await job.save({ session });
 
-        // 6. Notifications
-        await NotificationService.createNotification({
-            recipient: job.user_id,
-            title: 'Dispute Resolved',
-            message: `The dispute for "${job.job_title}" has been resolved. You have been refunded ₹${tenantAmount.toFixed(2)}.`,
-            type: 'payment',
-            data: { jobId, type: 'settlement' }
-        });
-
-        await NotificationService.createNotification({
-            recipient: job.selected_worker_id,
-            title: 'Dispute Resolved',
-            message: `The dispute for "${job.job_title}" has been resolved. You have been paid ₹${workerAmount.toFixed(2)}.`,
-            type: 'payment',
-            data: { jobId, type: 'settlement' }
-        });
+        // 6. Multi-Channel Notifications (FCM, In-App)
+        try {
+            const tenant = await User.findById(job.user_id).session(session);
+            const workerUser = await User.findById(job.selected_worker_id).session(session);
+            if (tenant && workerUser) {
+                await notifyHelper.onSettlementProcessed(tenant, workerUser, job, tenantAmount, workerAmount);
+            }
+        } catch (notifyErr) {
+            logger.error(`Settlement notification failed: ${notifyErr.message}`);
+        }
 
         await session.commitTransaction();
-        return { workerAmount, tenantAmount };
+        return { success: true, workerAmount, tenantAmount };
+
     } catch (error) {
         await session.abortTransaction();
         throw error;
@@ -778,7 +793,7 @@ exports.verifyLedger = async () => {
  * Handle Refund initiated from External Gateway (Stripe Dashboard)
  */
 exports.handleExternalRefund = async (chargeId, amount, session) => {
-    const NotificationService = require('../notifications/notification.service');
+    const notifyHelper = require('../../common/notification.helper');
     const Wallet = require('../wallet/wallet.model');
 
     // Find the original payment record
@@ -809,13 +824,12 @@ exports.handleExternalRefund = async (chargeId, amount, session) => {
             wallet.balance = Math.max(0, wallet.balance - amount);
             await wallet.save({ session });
 
-            await NotificationService.createNotification({
-                recipient: originalPayment.user,
-                title: 'Payment Refunded',
-                message: `₹${amount.toFixed(2)} has been refunded to your original payment method and deducted from your wallet.`,
-                type: 'payment',
-                data: { type: 'external_refund' }
-            });
+            await notifyHelper.onWalletTransaction(
+                originalPayment.user,
+                'Payment Refunded',
+                `₹${amount.toFixed(2)} has been refunded to your original payment method and deducted from your wallet.`,
+                { type: 'external_refund' }
+            );
         }
     } else if (originalPayment.type === 'escrow') {
         const wallet = await Wallet.findOne({ user: originalPayment.user }).session(session);

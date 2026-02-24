@@ -1,9 +1,10 @@
 const Quotation = require('./quotation.model');
 const Job = require('../jobs/job.model');
 const Worker = require('../workers/worker.model');
-const Notification = require('../notifications/notification.model');
+const User = require('../users/user.model');
 const cloudinaryService = require('../../common/services/cloudinary.service');
 const emailService = require('../../common/services/email.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 // Constraints / Business Logic Constants
@@ -148,14 +149,18 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
 
     await quotation.save();
 
-    // 8. Notify Tenant
-    await Notification.create({
-        recipient: job.user_id,
-        title: 'New Quotation Received',
-        message: `You have received a new quotation for your job: ${job.job_title}`,
-        type: 'quotation_received',
-        data: { jobId: job._id, quotationId: quotation._id }
-    });
+    // 8. Notify Tenant via FCM + In-App (multi-channel)
+    try {
+        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+        if (tenant) {
+            await notifyHelper.onQuotationReceived(tenant, job, {
+                workerName: user.name,
+                amount: total_cost,
+            });
+        }
+    } catch (notifyErr) {
+        logger.error(`Failed to send quotation notification: ${notifyErr.message}`);
+    }
 
     return { quotation, warning };
 };
@@ -245,33 +250,25 @@ exports.acceptQuotation = async (quotationId, userId) => {
         { $set: { status: 'rejected' } }
     );
 
-    // Notification Logic
-    // ... Notify Worker In-App
-    await Notification.create({
-        recipient: quotation.worker_id._id,
-        title: 'Quotation Accepted!',
-        message: `Your quotation for ${job.job_title} has been accepted. You can now start the work.`,
-        type: 'quotation_accepted',
-        data: { jobId: job._id }
-    });
+    // Notification Logic — Multi-channel (FCM + In-App + Email)
+    try {
+        // Notify Worker: FCM push + in-app + email (all in one call)
+        const worker = await User.findById(quotation.worker_id._id).select('name email fcmTokens');
+        if (worker) {
+            await notifyHelper.onQuotationAccepted(worker, job, quotation.total_cost);
+        }
 
-    // ... Notify Tenant
-    await Notification.create({
-        recipient: job.user_id,
-        title: 'Share OTP with Worker',
-        message: `You have hired ${quotation.worker_id.name}. Otp: ${otp}`,
-        type: 'system',
-        data: { jobId: job._id, otp }
-    });
-
-    // ... Email
-    if (quotation.worker_id.email) {
-        await emailService.sendQuotationAcceptedEmail(
-            quotation.worker_id.email,
-            quotation.worker_id.name,
-            job.job_title,
-            quotation.total_cost
-        );
+        // Notify Tenant: OTP reminder (in-app only — OTP is sensitive, no push)
+        const { createNotification } = require('../notifications/notification.service');
+        await createNotification({
+            recipient: job.user_id,
+            title: 'Share OTP with Worker',
+            message: `You hired ${quotation.worker_id.name}. Share this OTP to start: ${otp}`,
+            type: 'system',
+            data: { jobId: job._id, otp },
+        });
+    } catch (notifyErr) {
+        logger.error(`Failed to send acceptance notifications: ${notifyErr.message}`);
     }
 
     return job;

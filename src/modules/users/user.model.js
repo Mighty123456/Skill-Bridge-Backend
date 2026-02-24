@@ -141,7 +141,12 @@ const userSchema = new mongoose.Schema(
       privacyVersion: { type: String, default: '1.0' },
       ipAddress: { type: String }, // For audit trail
       userAgent: { type: String }
-    }
+    },
+    // FCM Push Notification Tokens (one per device, a user can have multiple devices)
+    fcmTokens: {
+      type: [String],
+      default: [],
+    },
   },
   {
     timestamps: true, // Adds createdAt and updatedAt

@@ -1,6 +1,9 @@
 const Chat = require('./chat.model');
 const Message = require('./message.model');
 const { successResponse, errorResponse } = require('../../common/utils/response');
+const notifyHelper = require('../../common/notification.helper');
+const User = require('../users/user.model');
+const logger = require('../../config/logger');
 
 const { BASE_ABUSIVE_WORDS, CONTACT_PATTERNS } = require('../../common/constants/moderation');
 
@@ -135,7 +138,6 @@ exports.sendMessage = async (req, res) => {
             // const validExtensions = /\.(jpg|jpeg|png|pdf|mp4|mov)$/i;
         }
 
-        const User = require('../users/user.model');
         const currentUser = await User.findById(senderId);
 
         // --- ROBUST MODERATION CHECKS (Constraint 1, 2, 6, 11) ---
@@ -176,7 +178,7 @@ exports.sendMessage = async (req, res) => {
                 currentUser.chatMutedUntil = new Date(Date.now() + 15 * 60000); // 15 mins mute
                 currentUser.chatStrikes = 0; // Reset cycle
                 warningMessage = 'Violation 3/3. You have been muted for 15 minutes due to repeated abusive language.';
-                
+
                 // Trigger fraud detection
                 try {
                     const fraudDetectionService = require('../fraud/fraud-detection.service');
@@ -300,7 +302,7 @@ exports.sendMessage = async (req, res) => {
                 } catch (err) {
                     logger.error(`Failed to create fraud alert for contact sharing: ${err.message}`);
                 }
-                
+
                 // We block the message entirely to prevent circumvention.
                 return errorResponse(res, 'Sharing contact details (phone, email, links, UPI) is strictly prohibited. Keep all communication on SkillBridge for your safety and protection.', 400);
             }
@@ -396,6 +398,26 @@ exports.sendMessage = async (req, res) => {
             }
         } catch (err) {
             console.error('Socket emit error:', err);
+        }
+
+        // 8. Trigger FCM Push Notification for Background Delivery
+        try {
+            if (recipientId) {
+                const messagePreview = text || (media && media.length > 0 ? (media[0].fileType === 'image' ? 'Sent an image' : 'Sent a file') : 'New message');
+                // We don't await this to keep chat response fast
+                notifyHelper.onNewChatMessage(
+                    recipientId,
+                    currentUser.name,
+                    messagePreview,
+                    chatId,
+                    senderId,
+                    chat.job
+                ).catch(err => {
+                    logger.error(`FCM Chat Push failed: ${err.message}`);
+                });
+            }
+        } catch (pushErr) {
+            logger.error(`Push notify logic error: ${pushErr.message}`);
         }
 
         return successResponse(res, 'Message sent', message, 201);

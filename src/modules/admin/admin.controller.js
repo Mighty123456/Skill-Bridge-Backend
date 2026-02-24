@@ -17,6 +17,7 @@ const { successResponse, errorResponse } = require('../../common/utils/response'
 const authService = require('../auth/auth.service');
 const emailService = require('../../common/services/email.service');
 const paymentService = require('../payments/payment.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 
@@ -164,14 +165,9 @@ const updateProfessionalStatus = async (req, res) => {
       }`,
     );
 
-    // Send email notification
+    // Send Multi-Channel Notification (Push, In-App, Email)
     if (status === 'verified' || status === 'rejected') {
-      emailService.sendVerificationEmail(
-        professional.user.email,
-        professional.user.name,
-        status,
-        reason
-      ).catch(err => logger.error(`Failed to send verification email: ${err.message}`));
+      await notifyHelper.onVerificationUpdate(professional.user, status, reason);
     }
 
     return successResponse(res, 'Status updated successfully', { status });
@@ -852,19 +848,10 @@ const broadcastNotification = async (req, res) => {
       filter.role = targetRole;
     }
 
-    // Find all target users
-    const users = await User.find(filter).select('_id');
+    const users = await User.find(filter).select('_id name fcmTokens');
 
-    // Create notifications in bulk
-    const notifications = users.map(u => ({
-      recipient: u._id,
-      title,
-      message,
-      type,
-      data: { broadcast: true }
-    }));
-
-    await Notification.insertMany(notifications);
+    // Send Multi-Channel Broadcast
+    await notifyHelper.onBroadcast(users, title, message, type);
 
     logger.info(`Admin ${req.userId} broadcasted notification to ${users.length} users (Role: ${targetRole || 'all'})`);
 
