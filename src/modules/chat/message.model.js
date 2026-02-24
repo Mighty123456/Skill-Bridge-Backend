@@ -39,7 +39,11 @@ const messageSchema = new mongoose.Schema({
     deliveredTo: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User'
-    }]
+    }],
+    isEncrypted: {
+        type: Boolean,
+        default: false
+    }
 }, {
     timestamps: true
 });

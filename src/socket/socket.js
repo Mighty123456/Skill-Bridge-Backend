@@ -5,6 +5,7 @@ const logger = require('../config/logger');
 const Chat = require('../modules/chat/chat.model');
 const Message = require('../modules/chat/message.model');
 const Job = require('../modules/jobs/job.model');
+const chatService = require('../modules/chat/chat.service');
 
 let io;
 
@@ -165,33 +166,29 @@ const initializeSocket = (server) => {
         // Handle new message
         socket.on('send_message', async (data) => {
             try {
-                const { chatId, text, recipientId, encrypted } = data;
+                const { chatId, text, recipientId, encrypted, media } = data;
+
+                const { message, systemMessage } = await chatService.processAndSendMessage({
+                    chatId,
+                    senderId: userId,
+                    text,
+                    media,
+                    isEncrypted: encrypted || false
+                });
+
                 const chatIdStr = chatId.toString();
 
-                // 1. Save to DB
-                const isRecipientConnected = connectedUsers.has(recipientId.toString());
+                // Emit to Room (Sender + Recipient)
+                io.to(chatIdStr).emit('receive_message', message.toObject());
 
-                const newMessage = await Message.create({
-                    chatId: chatIdStr,
-                    senderId: userId,
-                    text: text,
-                    isEncrypted: encrypted || false,
-                    deliveredTo: isRecipientConnected ? [recipientId] : []
-                });
-
-                // 2. Update Chat
-                await Chat.findByIdAndUpdate(chatIdStr, {
-                    lastMessage: text,
-                    lastMessageTime: Date.now(),
-                    $inc: { [`unreadCounts.${recipientId}`]: 1 }
-                });
-
-                // 3. Emit to Room
-                io.to(chatIdStr).emit('receive_message', newMessage);
+                // Inject System Warning if triggered
+                if (systemMessage) {
+                    io.to(chatIdStr).emit('receive_message', systemMessage.toObject());
+                }
 
             } catch (e) {
                 logger.error(`Socket message error: ${e.message}`);
-                socket.emit('error', 'Failed to send message');
+                socket.emit('error', e.message || 'Failed to send message');
             }
         });
 
