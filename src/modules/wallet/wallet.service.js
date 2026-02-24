@@ -43,14 +43,15 @@ exports.checkAndReleasePending = async (userId) => {
         wallet.pendingBalance = Math.max(0, wallet.pendingBalance - releasedAmount);
         wallet.pendingPayouts = remainingPayouts;
         await wallet.save();
-        // Send Notification
-        await notifyHelper.onWalletTransaction(
+        // Send Notification (Non-blocking)
+        notifyHelper.onWalletTransaction(
             userId,
             'Funds Available!',
             `₹${releasedAmount.toFixed(2)} has been released and is now available in your balance.`,
             { type: 'payout_released' }
-        );
-        // logger.info(`Released ₹${releasedAmount} pending funds for user ${userId}`);
+        ).catch(err => logger.error(`Failed to send payout release notification: ${err.message}`));
+
+        logger.info(`Released ₹${releasedAmount} pending funds for user ${userId}`);
     }
 };
 
