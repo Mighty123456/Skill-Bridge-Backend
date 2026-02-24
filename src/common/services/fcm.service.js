@@ -62,6 +62,11 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
         Object.entries(data).map(([k, v]) => [k, String(v)])
     );
 
+    // CRITICAL: Always include click_action for Flutter handlers to wake up
+    if (!stringifiedData.click_action) {
+        stringifiedData.click_action = 'FLUTTER_NOTIFICATION_CLICK';
+    }
+
     const message = {
         notification: {
             title: notification.title,
@@ -73,6 +78,7 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
             notification: {
                 sound: 'default',
                 channelId: 'skillbridge_main_channel',
+                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
                 // collapseKey causes a new notification to REPLACE the previous one with the same key
                 ...(collapseKey && { tag: collapseKey }),
             },
@@ -82,9 +88,14 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
                 aps: {
                     sound: 'default',
                     badge: 1,
+                    mutableContent: true,
+                    contentAvailable: true,
                     ...(collapseKey && { 'thread-id': collapseKey }),
                 },
             },
+            headers: {
+                'apns-priority': '10', // High priority for APNS
+            }
         },
         tokens: tokenArray,
     };
