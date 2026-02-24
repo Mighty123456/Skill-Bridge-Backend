@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../../common/middleware/auth.middleware');
+const { authenticate: protect } = require('../../common/middleware/auth.middleware');
 const User = require('./user.model');
 const logger = require('../../config/logger');
 
