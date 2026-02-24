@@ -26,10 +26,21 @@ const logger = require('../config/logger');
 // ─────────────────────────────────────────────────────────────────────────────
 const _sendPushToUser = async (userId, title, body, data = {}, collapseKey = null) => {
     try {
-        const user = await User.findById(userId).select('fcmTokens');
+        const user = await User.findById(userId).select('fcmTokens role');
         if (!user || !user.fcmTokens || user.fcmTokens.length === 0) return;
 
-        const result = await sendPushNotification(user.fcmTokens, { title, body }, data, collapseKey);
+        // Auto-inject role if missing in data (helps Flutter deep-linking)
+        if (!data.recipientRole) {
+            data.recipientRole = user.role;
+        }
+
+        // Ensure all data fields are strings (FCM requirement)
+        const stringifiedData = {};
+        for (const [key, value] of Object.entries(data)) {
+            stringifiedData[key] = String(value);
+        }
+
+        const result = await sendPushNotification(user.fcmTokens, { title, body }, stringifiedData, collapseKey);
 
         // Auto-clean stale/invalid tokens from the user's record
         if (result.invalidTokens && result.invalidTokens.length > 0) {
