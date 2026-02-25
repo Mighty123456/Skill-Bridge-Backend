@@ -163,12 +163,11 @@ const initializeSocket = (server) => {
             }
         });
 
-        // Handle new message
         socket.on('send_message', async (data) => {
             try {
                 const { chatId, text, recipientId, encrypted, media } = data;
 
-                const { message, systemMessage } = await chatService.processAndSendMessage({
+                let { message, systemMessage } = await chatService.processAndSendMessage({
                     chatId,
                     senderId: userId,
                     text,
@@ -177,6 +176,20 @@ const initializeSocket = (server) => {
                 });
 
                 const chatIdStr = chatId.toString();
+
+                // ✅ Auto-Deliver if recipient is currently online in sockets
+                if (recipientId && connectedUsers.has(recipientId.toString())) {
+                    if (!message.deliveredTo.includes(recipientId)) {
+                        message.deliveredTo.push(recipientId);
+                        await message.save();
+
+                        // Fire messages_delivered back to sender immediately
+                        io.to(chatIdStr).emit('messages_delivered', {
+                            chatId: chatIdStr,
+                            deliveredTo: recipientId
+                        });
+                    }
+                }
 
                 // Emit to Room (Sender + Recipient)
                 io.to(chatIdStr).emit('receive_message', message.toObject());

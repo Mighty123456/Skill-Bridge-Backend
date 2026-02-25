@@ -22,6 +22,12 @@ exports.initiateChat = async (req, res) => {
         });
 
         if (chat) {
+            // Un-delete if the user had previously deleted it
+            if (chat.deletedBy && chat.deletedBy.map(id => id.toString()).includes(senderId)) {
+                chat.deletedBy = chat.deletedBy.filter(id => id.toString() !== senderId);
+                await chat.save();
+            }
+
             chat = await Chat.findById(chat._id)
                 .populate('participants', 'name profileImage role')
                 .populate('job', 'job_title status');
@@ -60,7 +66,10 @@ exports.initiateChat = async (req, res) => {
 exports.getUserChats = async (req, res) => {
     try {
         const userId = req.user.id;
-        const chats = await Chat.find({ participants: userId })
+        const chats = await Chat.find({
+            participants: userId,
+            deletedBy: { $ne: userId }
+        })
             .populate('participants', 'name profileImage role')
             .populate('job', 'job_title status')
             .sort({ lastMessageTime: -1 });
@@ -178,3 +187,33 @@ exports.getMessages = async (req, res) => {
         return errorResponse(res, 'Server error', 500);
     }
 }
+
+// Delete Chat (Clear from user's list)
+exports.deleteChat = async (req, res) => {
+    try {
+        const { chatId } = req.params;
+        const userId = req.user.id;
+
+        const chat = await Chat.findById(chatId);
+        if (!chat) return errorResponse(res, 'Chat not found', 404);
+
+        if (!chat.participants.map(p => p.toString()).includes(userId)) {
+            return errorResponse(res, 'Unauthorized', 403);
+        }
+
+        // To "delete" like WhatsApp, we add the user to a "deletedBy" array
+        // We need to add deletedBy to the schema, or we can just clear the messages for them (like clear chat)
+        // A common pattern is having a 'clearedAt' timestamp per user, or physically removing them from participants if both delete
+        // If they want to just delete the chat entirely from view:
+        if (!chat.deletedBy) chat.deletedBy = [];
+        if (!chat.deletedBy.map(id => id.toString()).includes(userId)) {
+            chat.deletedBy.push(userId);
+            await chat.save();
+        }
+
+        return successResponse(res, 'Chat deleted successfully');
+    } catch (error) {
+        logger.error('Error deleting chat:', error);
+        return errorResponse(res, 'Server error', 500);
+    }
+};

@@ -228,6 +228,9 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
     }
     chat.lastMessageTime = Date.now();
 
+    // Re-surface the chat for anyone who deleted it if someone sends a new message
+    chat.deletedBy = [];
+
     chat.participants.forEach(pId => {
         if (pId.toString() !== senderId) {
             const currentCount = chat.unreadCounts.get(pId.toString()) || 0;

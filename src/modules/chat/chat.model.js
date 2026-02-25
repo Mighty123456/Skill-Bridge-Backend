@@ -30,7 +30,12 @@ const chatSchema = new mongoose.Schema({
         type: Map,
         of: Number,
         default: {}
-    }
+    },
+    // Users who have deleted the chat from their view
+    deletedBy: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User'
+    }]
 }, {
     timestamps: true
 });
