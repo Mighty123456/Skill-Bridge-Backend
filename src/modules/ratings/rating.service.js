@@ -11,7 +11,7 @@ class RatingService {
      * @returns {Object} the newly created rating
      */
     async submitRating(ratingData) {
-        const { job: jobId, client: clientId, worker: workerId, rating } = ratingData;
+        const { job: jobId, client: clientId, worker: workerProvidedId, rating } = ratingData;
 
         // Verify job completion status (assuming job must be completed or similar state)
         const job = await Job.findById(jobId);
@@ -19,9 +19,21 @@ class RatingService {
             throw new Error('Job not found');
         }
 
+        // The worker ID provided from frontend is likely the User ID.
+        let workerProfile = await Worker.findOne({ user: workerProvidedId });
+        if (!workerProfile) {
+            // Fallback in case it's already a worker profile ID
+            workerProfile = await Worker.findById(workerProvidedId);
+        }
+
+        if (!workerProfile) {
+            throw new Error('Worker not found');
+        }
+
         // Create Rating document
         const newRating = await Rating.create({
             ...ratingData,
+            worker: workerProfile._id,
             isEmergency: job.is_emergency || false
         });
 
@@ -30,7 +42,7 @@ class RatingService {
         await job.save();
 
         // Update Worker Statistics & Evaluate Badges
-        await this.updateWorkerMetrics(workerId);
+        await this.updateWorkerMetrics(workerProfile._id);
 
         return newRating;
     }
