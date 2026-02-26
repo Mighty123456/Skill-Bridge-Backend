@@ -114,6 +114,7 @@ router.use('/jobs', require('../modules/jobs/job.routes'));
 router.use('/notifications', require('../modules/notifications/notification.routes'));
 router.use('/quotations', require('../modules/quotations/quotation.routes'));
 router.use('/chats', require('../modules/chat/chat.routes'));
+router.use('/ratings', require('../modules/ratings/rating.routes'));
 
 // User routes (FCM token management, profile, etc.)
 router.use('/users', require('../modules/users/user.routes'));

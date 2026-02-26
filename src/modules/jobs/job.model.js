@@ -181,7 +181,10 @@ const jobSchema = new mongoose.Schema(
             reason: String,
             penalty: Number,
             at: Date
-        }
+        },
+
+        // Rating
+        is_rated: { type: Boolean, default: false }
     },
     {
         timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
