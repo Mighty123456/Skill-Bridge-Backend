@@ -496,6 +496,8 @@ const deleteUser = async (req, res) => {
 
     logger.warn(`Admin ${req.userId} deleted user account: ${user.email} (Role: ${user.role})`);
 
+    return successResponse(res, 'User deleted successfully');
+
   } catch (error) {
     logger.error(`Admin deleteUser error: ${error.message}`);
     return errorResponse(res, 'Failed to delete user', 500);

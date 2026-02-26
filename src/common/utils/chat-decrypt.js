@@ -25,7 +25,7 @@ function decryptChatMessage(encryptedBase64) {
 
     try {
         const encrypted = Buffer.from(trimmed, 'base64');
-        const decipher = crypto.createDecipheriv('aes-256-cbc', keyPadded, iv);
+        const decipher = crypto.createDecipheriv('aes-256-ctr', keyPadded, iv);
         let decrypted = decipher.update(encrypted, undefined, 'utf8');
         decrypted += decipher.final('utf8');
         return decrypted;
