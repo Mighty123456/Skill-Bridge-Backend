@@ -80,7 +80,9 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
     let warning = null;
 
     // Check against global market average for this skill
+    // OPTIMIZATION: Filter status BEFORE costly lookup
     const marketStats = await Quotation.aggregate([
+        { $match: { status: 'accepted' } },
         {
             $lookup: {
                 from: 'jobs',
@@ -90,7 +92,7 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
             }
         },
         { $unwind: '$job' },
-        { $match: { 'job.skill_required': job.skill_required, status: 'accepted' } },
+        { $match: { 'job.skill_required': job.skill_required } },
         { $group: { _id: null, avg: { $avg: '$total_cost' }, count: { $sum: 1 } } }
     ]);
 

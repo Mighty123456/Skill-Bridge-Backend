@@ -11,7 +11,7 @@ class FraudDetectionService {
   async detectPaymentFailures(userId) {
     try {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-      
+
       const failedPayments = await Payment.countDocuments({
         user: userId,
         status: 'failed',
@@ -93,7 +93,9 @@ class FraudDetectionService {
       if (!job) return false;
 
       // Get market average for this skill
+      // OPTIMIZATION: Match status BEFORE lookup to reduce join overhead
       const marketStats = await require('../quotations/quotation.model').aggregate([
+        { $match: { status: 'accepted' } },
         {
           $lookup: {
             from: 'jobs',
@@ -103,7 +105,7 @@ class FraudDetectionService {
           }
         },
         { $unwind: '$job' },
-        { $match: { 'job.skill_required': job.skill_required, status: 'accepted' } },
+        { $match: { 'job.skill_required': job.skill_required } },
         { $group: { _id: null, avg: { $avg: '$total_cost' }, count: { $sum: 1 } } }
       ]);
 
