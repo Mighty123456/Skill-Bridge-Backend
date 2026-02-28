@@ -715,7 +715,7 @@ exports.claimWarranty = async (req, res) => {
     try {
         const { id } = req.params;
         const { reason } = req.body;
-        const job = await JobService.claimWarranty(id, req.userId, reason);
+        const job = await JobService.claimWarranty(id, req.user._id, reason);
         res.json({ success: true, message: 'Warranty claim raised successfully', data: job });
     } catch (error) {
         logger.error('Claim Warranty Error:', error);
@@ -729,7 +729,7 @@ exports.claimWarranty = async (req, res) => {
 exports.resolveWarranty = async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await JobService.resolveWarranty(id, req.userId);
+        const job = await JobService.resolveWarranty(id, req.user._id);
         res.json({ success: true, message: 'Warranty claim resolved successfully', data: job });
     } catch (error) {
         logger.error('Resolve Warranty Error:', error);
