@@ -29,6 +29,18 @@ const walletSchema = new mongoose.Schema(
             default: 0,
             min: 0,
         },
+        warrantyReserveBalance: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
+        activeWarranties: [
+            {
+                amount: Number,
+                releaseAt: Date,
+                jobId: { type: mongoose.Schema.Types.ObjectId, ref: 'Job' }
+            }
+        ],
         pendingPayouts: [
             {
                 amount: Number,

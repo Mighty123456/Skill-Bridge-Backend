@@ -316,7 +316,7 @@ exports.releasePayment = async (jobId) => {
         }
         await userWallet.save({ session });
 
-        // 4. Credit Worker Wallet (With Delay Logic)
+        // 4. Credit Worker Wallet (With Delay Logic & Warranty Reserve)
         const worker = await Worker.findOne({ user: job.selected_worker_id }).session(session);
         const isNewWorker = !worker || (worker.totalJobsCompleted || 0) < 5;
 
@@ -328,35 +328,63 @@ exports.releasePayment = async (jobId) => {
             await worker.save({ session });
         }
 
+        let warrantyReserve = 0;
+        if (job.diagnosis_report && job.diagnosis_report.warranty_offered && job.diagnosis_report.warranty_duration_days > 0) {
+            // Reserve 5% of the total labor payout. For simplicity, we assume totalWorkerPayout captures labor mostly here.
+            warrantyReserve = Math.round(totalWorkerPayout * 0.05);
+            job.warranty_reserve_locked = warrantyReserve;
+            await job.save({ session });
+        }
+
+        const payoutToWallet = totalWorkerPayout - warrantyReserve;
+        const warrantyExpiryDate = new Date(Date.now() + (job.diagnosis_report?.warranty_duration_days || 0) * 24 * 60 * 60 * 1000);
+
         const workerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
         if (!workerWallet) {
             // ... (Wallet creation logic remains)
             const initialWallet = {
                 user: job.selected_worker_id,
-                balance: isNewWorker ? 0 : totalWorkerPayout,
-                pendingBalance: isNewWorker ? totalWorkerPayout : 0,
+                balance: isNewWorker ? 0 : payoutToWallet,
+                pendingBalance: isNewWorker ? payoutToWallet : 0,
                 pendingPayouts: isNewWorker ? [{
-                    amount: totalWorkerPayout,
+                    amount: payoutToWallet,
                     releaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 Hour Delay
+                    jobId: jobId
+                }] : [],
+                warrantyReserveBalance: warrantyReserve,
+                activeWarranties: warrantyReserve > 0 ? [{
+                    amount: warrantyReserve,
+                    releaseAt: warrantyExpiryDate,
                     jobId: jobId
                 }] : []
             };
             await Wallet.create([initialWallet], { session });
         } else {
+            if (warrantyReserve > 0) {
+                workerWallet.warrantyReserveBalance = (workerWallet.warrantyReserveBalance || 0) + warrantyReserve;
+                if (!workerWallet.activeWarranties) workerWallet.activeWarranties = [];
+                workerWallet.activeWarranties.push({
+                    amount: warrantyReserve,
+                    releaseAt: warrantyExpiryDate,
+                    jobId: jobId
+                });
+            }
+
             if (isNewWorker) {
-                workerWallet.pendingBalance += totalWorkerPayout;
+                workerWallet.pendingBalance = (workerWallet.pendingBalance || 0) + payoutToWallet;
+                if (!workerWallet.pendingPayouts) workerWallet.pendingPayouts = [];
                 workerWallet.pendingPayouts.push({
-                    amount: totalWorkerPayout,
+                    amount: payoutToWallet,
                     releaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
                     jobId: jobId
                 });
             } else {
                 // AUTO-PAYOUT LOGIC (Stripe Connect)
                 // If worker is NOT new and has a Stripe account, attempt automated transfer
-                const stripeResult = await this.processStripeTransfer(job.selected_worker_id, totalWorkerPayout, jobId);
+                const stripeResult = await this.processStripeTransfer(job.selected_worker_id, payoutToWallet, jobId);
 
                 if (stripeResult.success) {
-                    workerWallet.balance += totalWorkerPayout;
+                    workerWallet.balance = (workerWallet.balance || 0) + payoutToWallet;
                     // We still record it in our wallet for ledger consistency, 
                     // but we might want to mark it as withdrawn/processed externally.
                     // For now, increasing balance is fine as the worker can see it as "paid".

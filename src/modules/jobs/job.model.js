@@ -69,7 +69,7 @@ const jobSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['open', 'assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed'],
+            enum: ['open', 'assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed', 'warranty_in_progress'],
             default: 'open',
             index: true,
         },
@@ -144,11 +144,19 @@ const jobSchema = new mongoose.Schema(
         },
 
         // Warranty / Recall Tracking
+        warranty_reserve_locked: { type: Number, default: 0 },
         warranty_claim: {
-            active: { type: Boolean, default: false },
+            active: { type: Boolean, default: false }, // Legacy compat
+            status: { type: String, enum: ['none', 'pending_worker_review', 'worker_fixing', 'SLA_breach', 'resolved', 'expired', 'rejected'], default: 'none' },
             reason: { type: String, trim: true },
+            evidence_photos: [{ type: String }],
             claimed_at: { type: Date },
+            sla_deadline: { type: Date },
             resolved: { type: Boolean, default: false },
+            resolved_at: { type: Date },
+            resolution_note: { type: String, trim: true },
+            reserve_amount_used: { type: Number, default: 0 },
+            reassigned_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
         },
 
         // Module 4: Execution & Timeline

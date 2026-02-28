@@ -631,7 +631,12 @@ exports.getWarrantyCard = async (req, res) => {
             return res.status(404).send('Warranty not found or not offered for this job');
         }
 
-        const expiry = new Date(job.updated_at.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
+        const completedAt = job.completed_at || job.updated_at;
+        const expiry = new Date(completedAt.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
+        const isExpired = new Date() > expiry;
+        const statusHtml = isExpired
+            ? '<div class="status" style="background: #fef2f2; color: #991b1b; border: 1px solid #fecaca;">EXPIRED WARRANTY</div>'
+            : '<div class="status">ACTIVE WARRANTY</div>';
 
         const html = `
         <!DOCTYPE html>
@@ -639,8 +644,8 @@ exports.getWarrantyCard = async (req, res) => {
         <head>
             <style>
                 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; padding: 50px; }
-                .warranty-card { max-width: 600px; margin: auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 2px solid #10b981; }
-                .top-bar { background: #10b981; padding: 30px; text-align: center; color: white; }
+                .warranty-card { max-width: 600px; margin: auto; background: white; border-radius: 15px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); border: 2px solid ${isExpired ? '#991b1b' : '#10b981'}; }
+                .top-bar { background: ${isExpired ? '#991b1b' : '#10b981'}; padding: 30px; text-align: center; color: white; }
                 .content { padding: 40px; }
                 .info-row { display: flex; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px dashed #eee; padding-bottom: 10px; }
                 .label { color: #666; font-size: 14px; }
@@ -675,7 +680,7 @@ exports.getWarrantyCard = async (req, res) => {
                         <span class="label">Valid Until</span>
                         <span class="value" style="color: #ef4444;">${expiry.toLocaleDateString()}</span>
                     </div>
-                    <div class="status">ACTIVE WARRANTY</div>
+                    ${statusHtml}
                     <p style="font-size: 12px; color: #999; margin-top: 30px; line-height: 1.4;">
                         This warranty covers defects related to the specific labor performed. It does not cover new issues or material wear and tear unless specified. Contact through SkillBridge for claims.
                     </p>
@@ -715,7 +720,16 @@ exports.claimWarranty = async (req, res) => {
     try {
         const { id } = req.params;
         const { reason } = req.body;
-        const job = await JobService.claimWarranty(id, req.user._id, reason);
+
+        let evidence = [];
+        if (req.files && req.files.length > 0) {
+            const { uploadOptimizedImage } = require('../../common/services/cloudinary.service');
+            const uploadPromises = req.files.map(file => uploadOptimizedImage(file.buffer, `skillbridge/warranty/${id}`));
+            const uploadResults = await Promise.all(uploadPromises);
+            evidence = uploadResults.map(r => r.url);
+        }
+
+        const job = await JobService.claimWarranty(id, req.user._id, reason, evidence);
         res.json({ success: true, message: 'Warranty claim raised successfully', data: job });
     } catch (error) {
         logger.error('Claim Warranty Error:', error);
@@ -729,7 +743,8 @@ exports.claimWarranty = async (req, res) => {
 exports.resolveWarranty = async (req, res) => {
     try {
         const { id } = req.params;
-        const job = await JobService.resolveWarranty(id, req.user._id);
+        const { resolutionNote } = req.body;
+        const job = await JobService.resolveWarranty(id, req.user._id, resolutionNote);
         res.json({ success: true, message: 'Warranty claim resolved successfully', data: job });
     } catch (error) {
         logger.error('Resolve Warranty Error:', error);

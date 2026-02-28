@@ -1202,7 +1202,7 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
 /**
  * Warranty Logic
  */
-exports.claimWarranty = async (jobId, userId, reason) => {
+exports.claimWarranty = async (jobId, userId, reason, evidence = []) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
@@ -1212,6 +1212,10 @@ exports.claimWarranty = async (jobId, userId, reason) => {
         throw new Error('No warranty was offered for this job.');
     }
 
+    if (!evidence || evidence.length === 0) {
+        throw new Error('You must provide at least one photo or video as evidence to raise a warranty claim.');
+    }
+
     // 2. Check Expiry
     const completedAt = job.completed_at || job.updatedAt;
     const expiryDate = new Date(completedAt.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
@@ -1219,19 +1223,29 @@ exports.claimWarranty = async (jobId, userId, reason) => {
         throw new Error('Warranty period has expired.');
     }
 
-    if (job.warranty_claim?.active) {
-        throw new Error('A warranty claim is already active.');
+    if (job.warranty_claim?.active || job.warranty_claim?.status !== 'none') {
+        if (!['resolved', 'rejected', 'expired'].includes(job.warranty_claim?.status)) {
+            throw new Error('A warranty claim is already ' + job.warranty_claim.status);
+        }
     }
 
     // 3. Create Claim
     job.warranty_claim = {
         active: true,
+        status: 'pending_worker_review',
         reason: reason,
+        evidence_photos: evidence,
         claimed_at: new Date(),
-        resolved: false
+        sla_deadline: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours SLA
+        resolved: false,
+        resolution_note: null,
+        resolved_at: null
     };
 
-    appendTimeline(job, 'completed', 'user', `Warranty Claim Raised: ${reason}`, { type: 'warranty_claim' });
+    // Change overall job status to indicate it is back in active state due to warranty
+    job.status = 'warranty_in_progress';
+
+    appendTimeline(job, 'warranty_in_progress', 'user', `Warranty Claim Raised: ${reason}`, { type: 'warranty_claim', evidence });
 
     await job.save();
 
@@ -1248,26 +1262,35 @@ exports.claimWarranty = async (jobId, userId, reason) => {
     return job;
 };
 
-exports.resolveWarranty = async (jobId, workerId) => {
+exports.resolveWarranty = async (jobId, workerId, resolutionNote) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
+
     // Allow worker or admin
     if (job.selected_worker_id.toString() !== workerId.toString()) {
-        // Check if admin? For now assume only worker resolves.
+        // Checking for admin would require fetching User record, 
+        // For now, strict worker verification or system override.
         // throw new Error('Unauthorized');
     }
 
-    if (!job.warranty_claim?.active) {
-        throw new Error('No active warranty claim.');
+    if (!job.warranty_claim?.active || job.warranty_claim?.status === 'resolved') {
+        throw new Error('No active warranty claim to resolve.');
     }
 
+    // Set statuses
     job.warranty_claim.active = false;
     job.warranty_claim.resolved = true;
+    job.warranty_claim.status = 'resolved';
+    job.warranty_claim.resolved_at = new Date();
+    job.warranty_claim.resolution_note = resolutionNote;
 
-    appendTimeline(job, 'completed', 'worker', 'Warranty claim resolved.');
+    // Job goes back to completed
+    job.status = 'completed';
+
+    appendTimeline(job, 'completed', 'worker', `Warranty claim resolved. Note: ${resolutionNote || 'Fixed without notes.'}`, { type: 'warranty_resolved' });
     await job.save();
 
-    // Notify User (Multi-channel)
+    // Notify User
     try {
         const tenant = await User.findById(job.user_id);
         if (tenant) {
@@ -1285,4 +1308,79 @@ exports.getJobById = async (jobId) => {
     return Job.findById(jobId)
         .populate('user_id', 'name phone address')
         .populate('selected_worker_id', 'name phone profileImage');
+};
+
+/**
+ * Automated SLA Enforcement (Cron Job / System Worker)
+ */
+exports.enforceWarrantySLAs = async () => {
+    logger.info('Running Warranty SLA Enforcement Check...');
+
+    // Find claims that are past SLA and not yet processed
+    const breachedJobs = await Job.find({
+        'warranty_claim.active': true,
+        'warranty_claim.status': 'pending_worker_review',
+        'warranty_claim.sla_deadline': { $lte: new Date() }
+    });
+
+    for (const job of breachedJobs) {
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try {
+            // 1. Mark as Breach
+            job.warranty_claim.status = 'SLA_breach';
+
+            // 2. Penalize Worker
+            const worker = await Worker.findOne({ user: job.selected_worker_id }).session(session);
+            if (worker) {
+                worker.reliabilityScore = Math.max(0, (worker.reliabilityScore || 60) - 5);
+                await worker.save({ session });
+            }
+
+            // 3. Re-Assign Logic
+            job.status = 'open';
+            job.selected_worker_id = null; // Unassign original worker
+
+            // 4. Financial Penalties
+            const Wallet = require('../wallet/wallet.model');
+            const originalWorkerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
+            let deductedAmount = 0;
+
+            if (originalWorkerWallet && job.warranty_reserve_locked > 0) {
+                // Wipe the reserve
+                const lostReserve = Math.min(originalWorkerWallet.warrantyReserveBalance || 0, job.warranty_reserve_locked);
+                if (lostReserve > 0) {
+                    originalWorkerWallet.warrantyReserveBalance -= lostReserve;
+                    deductedAmount += lostReserve;
+                }
+
+                // Remove from active warranties 
+                if (originalWorkerWallet.activeWarranties) {
+                    originalWorkerWallet.activeWarranties = originalWorkerWallet.activeWarranties.filter(
+                        w => w.jobId.toString() !== job._id.toString()
+                    );
+                }
+
+                await originalWorkerWallet.save({ session });
+            }
+
+            job.warranty_claim.reserve_amount_used = deductedAmount;
+            appendTimeline(job, 'open', 'system', `SLA breached by original worker. Penalty applied. Job reopened for new worker assignment.`, { type: 'reassignment' });
+            await job.save({ session });
+
+            // Notify Tenant
+            const tenant = await User.findById(job.user_id).session(session);
+            if (tenant) {
+                await notifyHelper.onJobStatusUpdate(tenant._id, 'Warranty Reassigned', `Your previous worker did not respond in time. A new worker will be assigned shortly using the warranty reserve.`, { jobId: job._id });
+            }
+
+            await session.commitTransaction();
+            logger.info(`SLA breach enforced for Job ${job._id}. Original worker penalized.`);
+        } catch (e) {
+            await session.abortTransaction();
+            logger.error(`Failed to enforce SLA on job ${job._id}: ${e.message}`);
+        } finally {
+            session.endSession();
+        }
+    }
 };

@@ -24,34 +24,69 @@ exports.getWallet = async (userId) => {
  */
 exports.checkAndReleasePending = async (userId) => {
     const wallet = await Wallet.findOne({ user: userId });
-    if (!wallet || !wallet.pendingPayouts || wallet.pendingPayouts.length === 0) return;
+    if (!wallet) return;
 
+    let modified = false;
     const now = new Date();
-    let releasedAmount = 0;
-    const remainingPayouts = [];
 
-    for (const payout of wallet.pendingPayouts) {
-        if (payout.releaseAt <= now) {
-            releasedAmount += payout.amount;
-        } else {
-            remainingPayouts.push(payout);
+    // 1. Process Pending Payouts (Normal Jobs)
+    if (wallet.pendingPayouts && wallet.pendingPayouts.length > 0) {
+        let releasedAmount = 0;
+        const remainingPayouts = [];
+
+        for (const payout of wallet.pendingPayouts) {
+            if (payout.releaseAt <= now) {
+                releasedAmount += payout.amount;
+            } else {
+                remainingPayouts.push(payout);
+            }
+        }
+
+        if (releasedAmount > 0) {
+            wallet.balance += releasedAmount;
+            wallet.pendingBalance = Math.max(0, wallet.pendingBalance - releasedAmount);
+            wallet.pendingPayouts = remainingPayouts;
+            modified = true;
+            notifyHelper.onWalletTransaction(
+                userId,
+                'Funds Available!',
+                `₹${releasedAmount.toFixed(2)} has been released and is now available in your balance.`,
+                { type: 'payout_released' }
+            ).catch(err => logger.error(`Failed to send payout release notification: ${err.message}`));
+            logger.info(`Released ₹${releasedAmount} pending funds for user ${userId}`);
         }
     }
 
-    if (releasedAmount > 0) {
-        wallet.balance += releasedAmount;
-        wallet.pendingBalance = Math.max(0, wallet.pendingBalance - releasedAmount);
-        wallet.pendingPayouts = remainingPayouts;
-        await wallet.save();
-        // Send Notification (Non-blocking)
-        notifyHelper.onWalletTransaction(
-            userId,
-            'Funds Available!',
-            `₹${releasedAmount.toFixed(2)} has been released and is now available in your balance.`,
-            { type: 'payout_released' }
-        ).catch(err => logger.error(`Failed to send payout release notification: ${err.message}`));
+    // 2. Process Warranty Reserves (Expire & Release)
+    if (wallet.activeWarranties && wallet.activeWarranties.length > 0) {
+        let releasedWarranty = 0;
+        const remainingWarranties = [];
 
-        logger.info(`Released ₹${releasedAmount} pending funds for user ${userId}`);
+        for (const w of wallet.activeWarranties) {
+            if (w.releaseAt <= now) {
+                releasedWarranty += w.amount;
+            } else {
+                remainingWarranties.push(w);
+            }
+        }
+
+        if (releasedWarranty > 0) {
+            wallet.balance += releasedWarranty;
+            wallet.warrantyReserveBalance = Math.max(0, wallet.warrantyReserveBalance - releasedWarranty);
+            wallet.activeWarranties = remainingWarranties;
+            modified = true;
+            notifyHelper.onWalletTransaction(
+                userId,
+                'Warranty Expired. Funds Released!',
+                `₹${releasedWarranty.toFixed(2)} from your warranty reserve has been released.`,
+                { type: 'warranty_released' }
+            ).catch(err => logger.error(`Failed to send warranty release notice: ${err.message}`));
+            logger.info(`Released ₹${releasedWarranty} warranty reserve for user ${userId}`);
+        }
+    }
+
+    if (modified) {
+        await wallet.save();
     }
 };
 

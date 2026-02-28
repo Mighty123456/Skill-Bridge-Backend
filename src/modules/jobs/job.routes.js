@@ -38,7 +38,7 @@ router.post('/:id/cancel', protect, jobController.cancelJob); // New Cancellatio
 router.post('/:id/dispute', protect, authorize('user'), jobController.raiseDispute);
 router.post('/:id/dispute/resolve', protect, authorize('admin', 'user'), jobController.resolveDispute);
 
-router.post('/:id/warranty/claim', protect, authorize('user'), jobController.claimWarranty);
+router.post('/:id/warranty/claim', protect, authorize('user'), catchUploadErrors(uploadMultiple('evidence_photos', 3)), jobController.claimWarranty);
 router.post('/:id/warranty/resolve', protect, authorize('worker', 'admin'), jobController.resolveWarranty);
 
 // Documents
