@@ -11,7 +11,7 @@ const ensureDB = () => {
 };
 
 // Export the Express app as a serverless function that waits for DB
-module.exports = async (req, res) => {
+const handler = async (req, res) => {
   try {
     if (process.env.MONGODB_URI) {
       await ensureDB();
@@ -22,5 +22,14 @@ module.exports = async (req, res) => {
     res.statusCode = 500;
     res.end('Database connection error');
   }
+};
+
+module.exports = handler;
+
+// Disable Vercel's default body parser so Express can handle raw streams (required for Stripe Webhooks)
+module.exports.config = {
+  api: {
+    bodyParser: false,
+  },
 };
 

@@ -187,7 +187,7 @@ exports.handleStripeWebhook = async (req, res) => {
                     return res.json({ received: true });
                 }
 
-                if (session.metadata.type === 'wallet_topup') {
+                if (session.metadata?.type === 'wallet_topup') {
                     const userId = session.metadata.userId;
                     const amount = Number(session.metadata.amount);
 
@@ -207,7 +207,7 @@ exports.handleStripeWebhook = async (req, res) => {
                     await payment.save({ session: session_stripe });
                     await WalletService.creditWallet(userId, amount, session_stripe);
                 }
-                else if (session.metadata.type === 'job_payment') {
+                else if (session.metadata?.type === 'job_payment') {
                     const jobId = session.metadata.jobId;
                     const amount = Number(session.metadata.amount);
                     logger.info(`💸 finalizing job payment for job: ${jobId}, amount: ${amount}`);
