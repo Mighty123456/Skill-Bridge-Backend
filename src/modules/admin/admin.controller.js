@@ -782,8 +782,15 @@ const listWarrantyClaims = async (req, res) => {
       tenant: job.user_id,
       worker: job.selected_worker_id,
       reason: job.warranty_claim.reason,
+      evidencePhotos: job.warranty_claim.evidence_photos || [],
+      status: job.warranty_claim.status,
+      slaDeadline: job.warranty_claim.sla_deadline,
+      reserveLocked: job.warranty_reserve_locked || 0,
+      reserveUsed: job.warranty_claim.reserve_amount_used || 0,
       claimedAt: job.warranty_claim.claimed_at,
       resolved: job.warranty_claim.resolved,
+      resolvedAt: job.warranty_claim.resolved_at,
+      resolutionNote: job.warranty_claim.resolution_note,
       warrantyDuration: job.diagnosis_report?.warranty_duration_days || 0
     }));
 
