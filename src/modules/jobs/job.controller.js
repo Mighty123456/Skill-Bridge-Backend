@@ -416,7 +416,7 @@ exports.raiseDispute = async (req, res) => {
     try {
         const { id } = req.params;
         const { reason } = req.body;
-        const job = await JobService.raiseDispute(id, req.user._id, reason);
+        const job = await JobService.raiseDispute(id, req.user._id, reason, req.files);
         res.json({ success: true, message: 'Dispute raised', data: job });
     } catch (error) {
         logger.error('Raise Dispute Error:', error);

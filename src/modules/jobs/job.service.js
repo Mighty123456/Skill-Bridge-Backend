@@ -1072,7 +1072,7 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
     return job;
 };
 
-exports.raiseDispute = async (jobId, userId, reason) => {
+exports.raiseDispute = async (jobId, userId, reason, files) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
 
@@ -1080,10 +1080,20 @@ exports.raiseDispute = async (jobId, userId, reason) => {
     if (job.status !== 'cooling_window') throw new Error('Disputes can only be raised during the cooling window.');
     if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
 
+    let evidence_photos = [];
+    if (files && files.length > 0) {
+        const uploadPromises = files.map(file =>
+            cloudinaryService.uploadOptimizedImage(file.buffer, `skillbridge/disputes/${jobId}`)
+        );
+        const uploadResults = await Promise.all(uploadPromises);
+        evidence_photos = uploadResults.map(r => r.url);
+    }
+
     job.status = 'disputed';
     job.dispute = {
         is_disputed: true,
         reason: reason,
+        evidence_photos: evidence_photos,
         opened_at: new Date(),
         status: 'open'
     };

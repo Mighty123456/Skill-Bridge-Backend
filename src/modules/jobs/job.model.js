@@ -177,6 +177,7 @@ const jobSchema = new mongoose.Schema(
         dispute: {
             is_disputed: { type: Boolean, default: false },
             reason: { type: String },
+            evidence_photos: [{ type: String }],
             opened_at: { type: Date },
             resolved_at: { type: Date },
             status: { type: String, enum: ['open', 'resolved', 'closed'], default: 'open' }
