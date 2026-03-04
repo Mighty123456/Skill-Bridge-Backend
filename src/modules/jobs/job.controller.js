@@ -111,10 +111,12 @@ exports.getJob = async (req, res) => {
 
         // Check if current user (worker) has already submitted a quotation
         let hasSubmittedQuotation = false;
+        let submittedQuotation = null;
         if (req.user && req.user.role === 'worker') {
             const Quotation = require('../quotations/quotation.model');
             const existingQuotation = await Quotation.findOne({ job_id: job._id, worker_id: req.user._id });
             hasSubmittedQuotation = !!existingQuotation;
+            submittedQuotation = existingQuotation;
         }
 
         // Check if current user is the Job Owner (Tenant)
@@ -132,6 +134,7 @@ exports.getJob = async (req, res) => {
             data: {
                 ...job._doc,
                 hasSubmittedQuotation,
+                submittedQuotation,
                 start_otp // Will be undefined for non-owners
             }
         });
@@ -155,7 +158,8 @@ exports.getWorkerFeed = async (req, res) => {
             const existingQuotation = await Quotation.findOne({ job_id: job._id, worker_id: req.user._id });
             return {
                 ...job,
-                hasSubmittedQuotation: !!existingQuotation
+                hasSubmittedQuotation: !!existingQuotation,
+                submittedQuotation: existingQuotation
             };
         }));
 

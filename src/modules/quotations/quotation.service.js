@@ -30,14 +30,15 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
         throw new Error('Quotation submission window has closed');
     }
 
-    // 4. Validate Duplicate
-    const existing = await Quotation.findOne({ job_id: quotationData.job_id, worker_id: user._id });
-    if (existing) throw new Error('You have already submitted a quotation for this job');
+    // 4. Check Existing for Update
+    let existingQuotation = await Quotation.findOne({ job_id: quotationData.job_id, worker_id: user._id });
 
-    // Constraint: Max 10 bids per job
-    const bidCount = await Quotation.countDocuments({ job_id: quotationData.job_id });
-    if (bidCount >= 10) {
-        throw new Error('This job has reached the maximum number of bids (10).');
+    // Constraint: Max 10 bids per job (only check if it's a new quotation)
+    if (!existingQuotation) {
+        const bidCount = await Quotation.countDocuments({ job_id: quotationData.job_id });
+        if (bidCount >= 10) {
+            throw new Error('This job has reached the maximum number of bids (10).');
+        }
     }
 
     // 5. Availability Check (Clash Prevention)
@@ -132,22 +133,39 @@ exports.createQuotation = async (quotationData, user, videoFile) => {
     if (rScore >= 130) rTier = 'top'; // e.g. 80 reliability + 5.0 rating = 130
     else if (rScore >= 90) rTier = 'standard';
 
-    const quotation = new Quotation({
-        job_id: quotationData.job_id,
-        worker_id: user._id,
-        labor_cost,
-        material_cost,
-        total_cost,
-        estimated_days: Number(quotationData.estimated_days),
-        notes: quotationData.notes,
-        tags: quotationData.tags,
-        arrival_time: quotationData.arrival_time ? new Date(quotationData.arrival_time) : undefined,
-        completion_time: quotationData.completion_time ? new Date(quotationData.completion_time) : undefined,
-        warranty: quotationData.warranty,
-        video_url,
-        rankingScore: rScore,
-        tier: rTier
-    });
+    let quotation;
+    if (existingQuotation) {
+        quotation = existingQuotation;
+        quotation.labor_cost = labor_cost;
+        quotation.material_cost = material_cost;
+        quotation.total_cost = total_cost;
+        quotation.estimated_days = Number(quotationData.estimated_days);
+        quotation.notes = quotationData.notes;
+        quotation.tags = quotationData.tags;
+        if (quotationData.arrival_time) quotation.arrival_time = new Date(quotationData.arrival_time);
+        if (quotationData.completion_time) quotation.completion_time = new Date(quotationData.completion_time);
+        quotation.warranty = quotationData.warranty;
+        if (video_url) quotation.video_url = video_url;
+        quotation.rankingScore = rScore;
+        quotation.tier = rTier;
+    } else {
+        quotation = new Quotation({
+            job_id: quotationData.job_id,
+            worker_id: user._id,
+            labor_cost,
+            material_cost,
+            total_cost,
+            estimated_days: Number(quotationData.estimated_days),
+            notes: quotationData.notes,
+            tags: quotationData.tags,
+            arrival_time: quotationData.arrival_time ? new Date(quotationData.arrival_time) : undefined,
+            completion_time: quotationData.completion_time ? new Date(quotationData.completion_time) : undefined,
+            warranty: quotationData.warranty,
+            video_url,
+            rankingScore: rScore,
+            tier: rTier
+        });
+    }
 
     await quotation.save();
 
