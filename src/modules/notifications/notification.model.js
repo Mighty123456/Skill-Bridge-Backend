@@ -36,7 +36,10 @@ const notificationSchema = new mongoose.Schema(
     }
 );
 
-// Auto-expire notifications after 30 days
+// Optimization Indexes
+notificationSchema.index({ 'data.jobId': 1 });
+
+// Auto-expire notifications after 30 days to save storage
 notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 const Notification = mongoose.model('Notification', notificationSchema);

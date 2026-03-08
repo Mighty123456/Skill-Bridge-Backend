@@ -64,3 +64,32 @@ exports.markAllAsRead = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+exports.markReadByJob = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        await Notification.updateMany(
+            { recipient: req.user._id, 'data.jobId': jobId, read: false },
+            { read: true }
+        );
+        res.json({ success: true, message: 'Job notifications marked as read' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.deleteByJob = async (req, res) => {
+    try {
+        const { jobId } = req.params;
+        const result = await Notification.deleteMany({
+            recipient: req.user._id,
+            'data.jobId': jobId
+        });
+        res.json({
+            success: true,
+            message: `Deleted ${result.deletedCount} notifications for this job`
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

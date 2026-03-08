@@ -279,7 +279,12 @@ exports.acceptQuotation = async (quotationId, userId) => {
         }
 
         // Notify Tenant: OTP reminder (in-app only — OTP is sensitive, no push)
-        const { createNotification } = require('../notifications/notification.service');
+        const { createNotification, cleanupJobNotifications } = require('../notifications/notification.service');
+
+        // --- STORAGE OPTIMIZATION: Prune stale notifications ---
+        // Once a worker is hired, "Job Alerts" and "New Quotations" are no longer relevant
+        await cleanupJobNotifications(job._id, ['job_alert', 'quotation_received']);
+
         await createNotification({
             recipient: job.user_id,
             title: 'Share OTP with Worker',

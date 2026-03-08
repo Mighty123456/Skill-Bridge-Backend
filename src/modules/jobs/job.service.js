@@ -911,6 +911,11 @@ exports.finalizeJob = async (jobId) => {
         logger.error(`Failed to send payout email for job ${job.id}`, emailErr);
     }
 
+    // --- STORAGE OPTIMIZATION: Final Cleanup ---
+    // Remove all job update notifications, keep only payments for records
+    const { cleanupJobNotifications } = require('../notifications/notification.service');
+    await cleanupJobNotifications(job._id, ['job_alert', 'job_update', 'system', 'info', 'action_required', 'alert', 'job_started', 'completion_review']);
+
     return job;
 };
 
@@ -1067,6 +1072,10 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
     } catch (e) {
         logger.error(`cancelJob notify failed: ${e.message}`);
     }
+
+    // --- STORAGE OPTIMIZATION: Wipe all alerts on cancellation ---
+    const { cleanupJobNotifications } = require('../notifications/notification.service');
+    await cleanupJobNotifications(job._id); // Wipe everything for this job
 
     return job;
 };

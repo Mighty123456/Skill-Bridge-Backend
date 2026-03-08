@@ -4,44 +4,41 @@ const logger = require('../../config/logger');
 const { getIo } = require('../../socket/socket');
 
 exports.createNotification = async (data) => {
-    // --- MNC STANDARD: Notification Aggregation & Deduplication ---
-    // If a notification of the same type for the same job already exists and is unread,
-    // we aggregate them (e.g., "You have 3 new quotations for...") instead of spamming.
-    if (data.data && data.data.jobId && data.type) {
+    // --- MNC STANDARD: Job-Level Aggregation & Deduplication ---
+    // Instead of flooding the UI, we consolidate updates for the same job.
+    if (data.data && data.data.jobId) {
         try {
             const existingNotification = await Notification.findOne({
                 recipient: data.recipient,
-                type: data.type,
                 'data.jobId': data.data.jobId,
                 read: false
             });
 
             if (existingNotification) {
-                // If the notification type is something quantitative like quotations, we aggregate
-                if (data.type === 'quotation_received') {
-                    // Extract current count or default to 1
+                // If it's a quotation, increment count
+                if (data.type === 'quotation_received' && existingNotification.type === 'quotation_received') {
                     let count = existingNotification.data.count || 1;
                     count += 1;
-
-                    // Update existing notification with new grouped message
                     existingNotification.message = `You have received ${count} new quotations for your job.`;
                     existingNotification.data = { ...existingNotification.data, count };
                     existingNotification.updatedAt = new Date();
-
                     await existingNotification.save();
 
-                    // Fire socket event for the updated notification
                     const io = getIo();
                     io.to(data.recipient.toString()).emit('notification_updated', existingNotification);
                     return existingNotification;
-                } else {
-                    // For state-based alerts (e.g., "Job Started", "Review Completion")
-                    // we simply delete the old one and let the new one take its place at the top of the feed (Deduplication)
+                }
+
+                // For other job updates (Started -> Arrived -> Completed), 
+                // we replace the old unread one with the new status to keep the feed clean.
+                // This prevents "Notification Bloat" for the same job.
+                if (existingNotification.type !== 'payment' && data.type !== 'payment') {
                     await Notification.deleteOne({ _id: existingNotification._id });
+                    logger.info(`Deduplicated notification for job ${data.data.jobId} (Type: ${data.type})`);
                 }
             }
         } catch (e) {
-            logger.error('Error during notification deduplication/aggregation:', e);
+            logger.error('Error during notification aggregation:', e);
         }
     }
 
@@ -53,10 +50,28 @@ exports.createNotification = async (data) => {
         const recipientRoom = data.recipient.toString();
         io.to(recipientRoom).emit('notification', notification);
     } catch (err) {
-        // Socket not initialized or connection error - silent fail as it's saved in DB
+        // Socket not initialized or connection error
     }
 
     return notification;
+};
+
+/**
+ * Cleans up transient notifications for a job that is no longer in a specific state.
+ * E.g. When a job is assigned, we delete "Job Alert" notifications for everyone else.
+ */
+exports.cleanupJobNotifications = async (jobId, types = []) => {
+    try {
+        const query = { 'data.jobId': jobId };
+        if (types.length > 0) {
+            query.type = { $in: types };
+        }
+        const result = await Notification.deleteMany(query);
+        logger.info(`Cleaned up ${result.deletedCount} notifications for job ${jobId}`);
+        return result.deletedCount;
+    } catch (err) {
+        logger.error(`Failed to cleanup notifications for job ${jobId}:`, err);
+    }
 };
 
 exports.sendThrottledJobAlerts = async (users, job) => {

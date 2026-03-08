@@ -385,6 +385,7 @@ exports.getPassport = async (req, res) => {
             userId: worker.user._id,
             name: worker.user.name,
             profileImage: worker.user.profileImage,
+            address: worker.user.address,
             memberSince: worker.createdAt,
             verified: worker.verificationStatus === 'verified',
             rating: worker.rating,

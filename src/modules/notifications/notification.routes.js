@@ -5,7 +5,9 @@ const { authenticate: protect } = require('../../common/middleware/auth.middlewa
 
 router.get('/', protect, notificationController.getNotifications);
 router.patch('/read-all', protect, notificationController.markAllAsRead);
+router.patch('/job/:jobId/read', protect, notificationController.markReadByJob);
 router.patch('/:id/read', protect, notificationController.markAsRead);
+router.delete('/job/:jobId', protect, notificationController.deleteByJob);
 router.delete('/:id', protect, notificationController.deleteNotification);
 
 module.exports = router;
