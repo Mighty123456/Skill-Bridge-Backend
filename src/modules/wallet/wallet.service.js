@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const Withdrawal = require('./withdrawal.model');
 const NotificationService = require('../notifications/notification.service');
 const notifyHelper = require('../../common/notification.helper');
+const logger = require('../../config/logger');
 
 /**
  * Get or create wallet for a user
@@ -13,7 +14,7 @@ exports.getWallet = async (userId) => {
         wallet = await Wallet.create({ user: userId });
     } else {
         // Auto-check for released funds
-        await this.checkAndReleasePending(userId);
+        await exports.checkAndReleasePending(userId);
         wallet = await Wallet.findOne({ user: userId }); // Reload
     }
     return wallet;

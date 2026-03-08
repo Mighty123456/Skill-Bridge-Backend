@@ -644,6 +644,12 @@ const getTenantFinancials = async (req, res) => {
       if (item._id === 'refund') stats.totalRefunds = item.total;
     });
 
+    // Calculate active escrow from Payment records (not wallet)
+    const activeEscrowData = await Payment.aggregate([
+      { $match: { user: new mongoose.Types.ObjectId(tenantId), type: 'escrow', status: 'completed' } },
+      { $group: { _id: null, total: { $sum: '$amount' } } }
+    ]);
+
     return successResponse(res, 'Tenant financials fetched', {
       tenant: {
         id: user._id,
@@ -652,9 +658,8 @@ const getTenantFinancials = async (req, res) => {
         role: user.role
       },
       wallet: {
-        balance: wallet?.balance || 0,
-        escrowBalance: wallet?.escrowBalance || 0,
-        currency: wallet?.currency || 'INR'
+        activeEscrow: activeEscrowData[0]?.total || 0,
+        currency: 'INR'
       },
       stats,
       history: transactionHistory.map(p => ({

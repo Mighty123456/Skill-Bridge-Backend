@@ -586,7 +586,7 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
 /**
  * Helper: Finalize Job Status after successful Escrow/Payment
  */
-exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayId = null, session = null) => {
+exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayId = null, session = null, paymentIntentId = null) => {
     const job = await Job.findById(jobId)
         .populate('user_id', 'name email')
         .populate('selected_worker_id', 'name email')
@@ -596,7 +596,7 @@ exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayI
 
     // If external gateway used, ensuring we record the payment in our DB
     if (gateway) {
-        await PaymentService.recordExternalEscrow(jobId, job.user_id._id, amount, gateway, gatewayId, session);
+        await PaymentService.recordExternalEscrow(jobId, job.user_id._id, amount, gateway, gatewayId, session, paymentIntentId);
     }
 
     job.status = 'diagnosed';
@@ -657,15 +657,14 @@ exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
             throw new Error('Invalid diagnosis cost. Cannot proceed to payment.');
         }
 
-        try {
-            // Attempt wallet payment first (Legacy flow)
-            await PaymentService.createEscrow(jobId, userId, amount);
-            return await this.handleJobPaymentSuccess(jobId, amount);
-        } catch (paymentError) {
-            // If wallet fails, we allow the controller to offer Stripe Checkout
-            logger.info(`Wallet payment skipped/failed for job ${jobId}: ${paymentError.message}`);
-            throw paymentError;
-        }
+        // Direct Pay: Always create Stripe Checkout session.
+        // No tenant wallet involved — tenant pays via card/UPI directly.
+        // The webhook will call handleJobPaymentSuccess() after payment.
+        const error = new Error('PAYMENT_REQUIRED');
+        error.code = 'PAYMENT_REQUIRED';
+        error.jobId = jobId;
+        error.amount = amount;
+        throw error;
     } else {
         job.diagnosis_report.status = 'rejected';
         job.diagnosis_report.rejection_reason = rejectionReason;
@@ -727,29 +726,29 @@ exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
     if (!request) throw new Error('Request not found');
 
     if (approved) {
-        try {
-            // Lock funds for material
-            await PaymentService.createMaterialEscrow(jobId, userId, request.cost);
-            request.status = 'approved';
-        } catch (e) {
-            logger.error(`Material Escrow Failed: ${e.message}`);
-            throw new Error(`Approval Failed: Insufficient funds or payment error. ${e.message}`);
-        }
+        // Direct Pay: Return a flag indicating payment is needed.
+        // The controller will create a Stripe checkout session.
+        request.status = 'payment_pending';
+        request.responded_at = new Date();
+        appendTimeline(job, job.status, 'user', `Material approved, awaiting payment`);
+        await job.save();
+
+        // Return job + flag for controller to create Stripe session
+        return { job, needsPayment: true, materialCost: request.cost, requestId };
     } else {
         request.status = 'rejected';
+        request.responded_at = new Date();
+
+        // Check if any other pending?
+        const hasPending = job.material_requests.some(r => r.status === 'pending');
+        if (!hasPending) {
+            job.status = 'in_progress'; // Resume
+        }
+
+        appendTimeline(job, job.status, 'user', `Material Rejected`);
+        await job.save();
+        return { job, needsPayment: false };
     }
-    request.responded_at = new Date();
-
-    // Check if any other pending?
-    const hasPending = job.material_requests.some(r => r.status === 'pending');
-    if (!hasPending) {
-        job.status = 'in_progress'; // Resume
-    }
-
-    appendTimeline(job, job.status, 'user', `Material ${approved ? 'Approved' : 'Rejected'}`);
-
-    await job.save();
-    return job;
 };
 
 /**
@@ -940,14 +939,12 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
         throw new Error('Cannot cancel job in its current state.');
     }
 
-    // Refund logic if Escrow was already created (Status: diagnosed, in_progress, reviewing, material_pending...)
-    // Basically if diagnosis was approved.
-    const escrowStages = ['diagnosed', 'in_progress', 'reviewing', 'material_pending_approval', 'eta_confirmed']; // eta_confirmed might be BEFORE diagnosis?
-    // Check timeline or diagnosis status
+    // Refund logic if Escrow was already created
+    // Diagnosis approved = escrow exists (paid via Stripe)
     if (job.diagnosis_report?.status === 'approved') {
         try {
             await PaymentService.refundPayment(jobId);
-            appendTimeline(job, 'cancelled', 'system', 'Escrow refunded to user wallet.');
+            appendTimeline(job, 'cancelled', 'system', 'Escrow refunded to original payment method via Stripe.');
         } catch (e) {
             logger.error(`Refund failed for job ${jobId}`, e);
             // Verify if escrow existed? PaymentService.refundPayment handles check.
@@ -995,9 +992,10 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
         }
     }
 
-    // 4. Tenant Cancellation Logic (Stage-Based Matrix)
+    // 4. Tenant Cancellation Logic (Stage-Based)
     else if (userRole === 'user' || userRole === 'admin') {
-        const WalletService = require('../wallet/wallet.service');
+        // Pre-escrow cancellation: penalties tracked as outstanding balance
+        // Post-escrow cancellation: penalties come from existing escrow (handled by refundPayment above)
         switch (job.status) {
             case 'open':
                 penaltyAmount = 0;
@@ -1005,20 +1003,24 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
                 break;
             case 'assigned':
             case 'eta_confirmed':
-                penaltyAmount = 50; // Small fee
+                penaltyAmount = 50;
                 penaltyReason = 'Late cancellation fee (Assigned stage)';
                 break;
             case 'on_the_way':
-                penaltyAmount = 150; // Travel fee
+                penaltyAmount = 150;
                 penaltyReason = 'Travel compensation fee for worker';
                 break;
             case 'arrived':
-            case 'in_progress':
             case 'diagnosis_mode':
+                penaltyAmount = 500;
+                penaltyReason = 'Visit/Diagnosis compensation';
+                break;
+            case 'in_progress':
             case 'diagnosed':
             case 'reviewing':
             case 'material_pending_approval':
-                // Base Visit Charge (Varies by industry, but 500 is standard enterprise minimum)
+                // Post-escrow: compensation comes from the escrowed funds.
+                // refundPayment() above already refunded Stripe. Worker gets penalty from platform.
                 penaltyAmount = 500;
                 penaltyReason = 'Work/Diagnosis started compensation';
                 break;
@@ -1026,19 +1028,16 @@ exports.cancelJob = async (jobId, userId, userRole, reason) => {
                 penaltyAmount = 0;
         }
 
-        // Apply Financial Penalty for User
-        if (penaltyAmount > 0) {
+        // Apply Financial Penalty: Credit worker from platform funds
+        if (penaltyAmount > 0 && job.selected_worker_id) {
             try {
-                await WalletService.debitWallet(userId, penaltyAmount);
-                if (job.selected_worker_id) {
-                    // Credit 80% to worker as compensation for travel/time, 20% to platform
-                    await WalletService.creditWallet(job.selected_worker_id, penaltyAmount * 0.8);
-                    await WalletService.creditPlatformRevenue(penaltyAmount * 0.2);
-                }
+                const WalletService = require('../wallet/wallet.service');
+                // Credit 80% to worker as compensation for travel/time
+                await WalletService.creditWallet(job.selected_worker_id, penaltyAmount * 0.8);
+                // Platform absorbs the cost (recouped from the non-refundable protection fee + commission when applicable)
+                logger.info(`Worker ${job.selected_worker_id} credited ₹${penaltyAmount * 0.8} for cancellation penalty on job ${jobId}`);
             } catch (walletErr) {
-                logger.error(`Failed to process tenant cancellation penalty for job ${jobId}: ${walletErr.message}`);
-                // In a production app, we might want to prevent cancellation if debit fails, 
-                // but usually, we allow cancellation and leave the wallet negative (overdraft).
+                logger.error(`Failed to credit worker cancellation compensation for job ${jobId}: ${walletErr.message}`);
             }
         }
     }

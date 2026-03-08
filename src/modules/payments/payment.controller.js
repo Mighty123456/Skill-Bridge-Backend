@@ -32,8 +32,14 @@ exports.getFinancialStats = async (req, res) => {
             }
         ]);
 
-        const totalEscrowResults = await Wallet.aggregate([
-            { $group: { _id: null, totalEscrow: { $sum: '$escrowBalance' }, totalPending: { $sum: '$pendingBalance' } } }
+        // Active escrow from Payment records (not wallet balances)
+        const escrowResults = await Payment.aggregate([
+            { $match: { type: 'escrow', status: 'completed' } },
+            { $group: { _id: null, totalEscrow: { $sum: '$amount' } } }
+        ]);
+
+        const totalPendingResults = await Wallet.aggregate([
+            { $group: { _id: null, totalPending: { $sum: '$pendingBalance' } } }
         ]);
 
         // Mapping types to readable stats
@@ -41,8 +47,8 @@ exports.getFinancialStats = async (req, res) => {
 
         const result = {
             totalPlatformBalance: platformWallet.balance,
-            currentEscrowedFunds: totalEscrowResults[0]?.totalEscrow || 0,
-            pendingPayouts: totalEscrowResults[0]?.totalPending || 0,
+            currentEscrowedFunds: escrowResults[0]?.totalEscrow || 0,
+            pendingPayouts: totalPendingResults[0]?.totalPending || 0,
             totalCommission: getStat('commission'),
             totalRefunds: getStat('refund'),
             totalPayouts: getStat('payout'),
@@ -211,7 +217,32 @@ exports.handleStripeWebhook = async (req, res) => {
                     const jobId = session.metadata.jobId;
                     const amount = Number(session.metadata.amount);
                     logger.info(`💸 finalizing job payment for job: ${jobId}, amount: ${amount}`);
-                    await JobService.handleJobPaymentSuccess(jobId, amount, 'stripe', session.id, session_stripe);
+                    await JobService.handleJobPaymentSuccess(jobId, amount, 'stripe', session.id, session_stripe, session.payment_intent);
+                }
+                else if (session.metadata?.type === 'material_payment') {
+                    const jobId = session.metadata.jobId;
+                    const amount = Number(session.metadata.amount);
+                    const requestId = session.metadata.requestId;
+                    logger.info(`💸 Material payment received for job: ${jobId}, amount: ${amount}`);
+
+                    // Record material escrow (with payment_intent for refunds)
+                    await PaymentService.createMaterialEscrow(jobId, session.metadata.userId, amount, 'stripe', session.id, session_stripe, session.payment_intent);
+
+                    // Update the material request status to approved
+                    const job = await Job.findById(jobId).session(session_stripe);
+                    if (job && requestId) {
+                        const request = job.material_requests.id(requestId);
+                        if (request) {
+                            request.status = 'approved';
+                            request.responded_at = new Date();
+                        }
+                        // Resume job if no more pending material requests
+                        const hasPending = job.material_requests.some(r => r.status === 'pending' || r.status === 'payment_pending');
+                        if (!hasPending) {
+                            job.status = 'in_progress';
+                        }
+                        await job.save({ session: session_stripe });
+                    }
                 }
                 break;
 

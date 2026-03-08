@@ -338,8 +338,34 @@ exports.approveDiagnosis = async (req, res) => {
     try {
         const { id } = req.params;
         const { approved, rejectionReason } = req.body;
-        const job = await JobService.approveDiagnosis(id, req.user._id, approved, rejectionReason);
-        res.json({ success: true, message: approved ? 'Diagnosis approved, job started' : 'Diagnosis rejected', data: job });
+
+        if (!approved) {
+            const job = await JobService.approveDiagnosis(id, req.user._id, false, rejectionReason);
+            return res.json({ success: true, message: 'Diagnosis rejected', data: job });
+        }
+
+        try {
+            const job = await JobService.approveDiagnosis(id, req.user._id, true, rejectionReason);
+            res.json({ success: true, message: 'Diagnosis approved, job started', data: job });
+        } catch (error) {
+            if (error.code === 'PAYMENT_REQUIRED') {
+                // Direct Pay: Create Stripe Checkout session for the tenant
+                const PaymentService = require('../payments/payment.service');
+                const protocol = req.protocol;
+                const host = req.get('host');
+                const backEndUrl = `${protocol}://${host}/api/payments`;
+
+                const session = await PaymentService.createJobCheckoutSession(error.jobId, req.user._id, backEndUrl);
+                return res.json({
+                    success: true,
+                    message: 'Payment required. Redirecting to checkout.',
+                    requiresPayment: true,
+                    sessionId: session.id,
+                    url: session.url
+                });
+            }
+            throw error;
+        }
     } catch (error) {
         logger.error('Approve Diagnosis Error:', error);
         res.status(500).json({ success: false, message: error.message });
@@ -365,8 +391,30 @@ exports.respondToMaterial = async (req, res) => {
     try {
         const { id, requestId } = req.params;
         const { approved } = req.body;
-        const job = await JobService.respondToMaterial(id, req.user._id, requestId, approved);
-        res.json({ success: true, message: 'Material response recorded', data: job });
+        const result = await JobService.respondToMaterial(id, req.user._id, requestId, approved);
+
+        if (result.needsPayment) {
+            // Direct Pay: Create Stripe session for material payment
+            const PaymentService = require('../payments/payment.service');
+            const protocol = req.protocol;
+            const host = req.get('host');
+            const backEndUrl = `${protocol}://${host}/api/payments`;
+
+            const session = await PaymentService.createMaterialCheckoutSession(
+                id, req.user._id, result.materialCost, result.requestId, backEndUrl
+            );
+
+            return res.json({
+                success: true,
+                message: 'Material approved. Payment required.',
+                requiresPayment: true,
+                sessionId: session.id,
+                url: session.url,
+                data: result.job
+            });
+        }
+
+        res.json({ success: true, message: 'Material response recorded', data: result.job });
     } catch (error) {
         logger.error('Respond Material Error:', error);
         res.status(500).json({ success: false, message: error.message });

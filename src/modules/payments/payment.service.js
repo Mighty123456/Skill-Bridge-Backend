@@ -1,5 +1,5 @@
 const Payment = require('./payment.model');
-const Wallet = require('../wallet/wallet.model'); // Direct model access or service
+const Wallet = require('../wallet/wallet.model');
 const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const Worker = require('../workers/worker.model');
@@ -84,54 +84,35 @@ exports.calculateBreakdown = async (jobAmount, workerId) => {
 };
 
 /**
- * Create Escrow Payment
- * Locks funds from User's main balance to Escrow Balance
+ * Create Escrow Payment (Direct Pay — No Tenant Wallet)
+ * Records the escrow after Stripe/external payment has been collected.
+ * Tenant pays directly via Stripe — no wallet balance involved.
  */
-exports.createEscrow = async (jobId, userId, jobAmount) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+exports.createEscrow = async (jobId, userId, jobAmount, gateway = 'stripe', gatewayId = null, session = null) => {
+    const ownSession = !session;
+    if (ownSession) {
+        session = await mongoose.startSession();
+        session.startTransaction();
+    }
 
     try {
-        // Need to find worker ID from job context or pass it?
-        // Ideally we pass it. But we only have jobId here.
-        // Let's fetch job first? Or assume caller passed valid args?
-        // createEscrow is called from JobService.approveDiagnosis(jobId, userId, amount)
-        // JobService has the job object there.
-        // But to keep signature clean, let's just fetch job here if needed or assume we query it?
-        // Actually, we need the job to find the worker.
-
         const job = await Job.findById(jobId).session(session);
         if (!job) throw new Error('Job not found for escrow');
 
-        const breakdown = await this.calculateBreakdown(jobAmount, job.selected_worker_id);
+        const breakdown = await exports.calculateBreakdown(jobAmount, job.selected_worker_id);
         const totalAmount = breakdown.totalUserPayable;
 
-        // 1. Check User Wallet Balance
-        const userWallet = await Wallet.findOne({ user: userId }).session(session);
-        if (!userWallet) {
-            throw new Error('User wallet not initialized');
-        }
-
-        if (userWallet.balance < totalAmount) {
-            throw new Error(`Insufficient funds. Required: ₹${totalAmount}, Available: ₹${userWallet.balance}`);
-        }
-
-        // 2. Lock Funds (Move from Balance -> EscrowBalance)
-        userWallet.balance -= totalAmount;
-        userWallet.escrowBalance += totalAmount;
-        await userWallet.save({ session });
-
-        // 3. Create Payment Record (Escrow)
+        // Create Payment Record (Escrow) — money is held by Stripe/platform, not tenant wallet
         const payment = new Payment({
             job: jobId,
             user: userId,
             amount: totalAmount,
             type: 'escrow',
-            status: 'completed', // Escrow is funded
-            transactionId: `TXN_ESCROW_${Date.now()}_${jobId}`,
+            status: 'completed',
+            transactionId: gatewayId || `TXN_ESCROW_${Date.now()}_${jobId}`,
             currency: 'INR',
-            paymentMethod: 'wallet',
-            gatewayResponse: { breakdown } // Store breakdown in metadata
+            paymentMethod: gateway,
+            gatewayResponse: { breakdown, gateway, isDirectPay: true }
         });
 
         await signPayment(payment, session);
@@ -152,13 +133,19 @@ exports.createEscrow = async (jobId, userId, jobAmount) => {
             logger.error(`Escrow notification failed: ${notifyErr.message}`);
         }
 
-        await session.commitTransaction();
+        if (ownSession) {
+            await session.commitTransaction();
+        }
         return payment;
     } catch (error) {
-        await session.abortTransaction();
+        if (ownSession) {
+            await session.abortTransaction();
+        }
         throw error;
     } finally {
-        session.endSession();
+        if (ownSession) {
+            session.endSession();
+        }
     }
 };
 
@@ -166,14 +153,14 @@ exports.createEscrow = async (jobId, userId, jobAmount) => {
  * Record External Escrow (Stripe/External Pay)
  * This doesn't touch internal wallet balance, but records the escrow in our DB
  */
-exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatewayId, session = null) => {
+exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatewayId, session = null, paymentIntentId = null) => {
     const Payment = require('./payment.model');
     const Job = require('../jobs/job.model');
 
     const job = await Job.findById(jobId).session(session);
     if (!job) throw new Error('Job not found for external escrow');
 
-    const breakdown = await this.calculateBreakdown(job.diagnosis_report.final_total_cost, job.selected_worker_id);
+    const breakdown = await exports.calculateBreakdown(job.diagnosis_report.final_total_cost, job.selected_worker_id);
 
     const payment = new Payment({
         job: jobId,
@@ -184,7 +171,7 @@ exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatew
         transactionId: gatewayId || `TXN_EXT_${Date.now()}_${jobId}`,
         currency: 'INR',
         paymentMethod: gateway,
-        gatewayResponse: { breakdown, isExternal: true }
+        gatewayResponse: { breakdown, isExternal: true, gateway, paymentIntentId }
     });
 
     await signPayment(payment, session);
@@ -211,45 +198,88 @@ exports.recordExternalEscrow = async (jobId, userId, totalAmount, gateway, gatew
 /**
  * Create Material Escrow (100% to Worker, No Commission assumed for now)
  */
-exports.createMaterialEscrow = async (jobId, userId, amount) => {
-    const session = await mongoose.startSession();
-    session.startTransaction();
+/**
+ * Create Material Escrow (Direct Pay — No Tenant Wallet)
+ * Records the material escrow after Stripe payment collected.
+ */
+exports.createMaterialEscrow = async (jobId, userId, amount, gateway = 'stripe', gatewayId = null, session = null, paymentIntentId = null) => {
+    const ownSession = !session;
+    if (ownSession) {
+        session = await mongoose.startSession();
+        session.startTransaction();
+    }
 
     try {
-        const userWallet = await Wallet.findOne({ user: userId }).session(session);
-        if (!userWallet) throw new Error('User wallet not initialized');
-
-        if (userWallet.balance < amount) {
-            throw new Error(`Insufficient funds for material. Required: ₹${amount}, Available: ₹${userWallet.balance}`);
-        }
-
-        userWallet.balance -= amount;
-        userWallet.escrowBalance += amount;
-        await userWallet.save({ session });
-
         const payment = new Payment({
             job: jobId,
             user: userId,
             amount: amount,
             type: 'escrow',
             status: 'completed',
-            transactionId: `TXN_MAT_ESCROW_${Date.now()}_${jobId}`,
+            transactionId: gatewayId || `TXN_MAT_ESCROW_${Date.now()}_${jobId}`,
             currency: 'INR',
-            paymentMethod: 'wallet',
-            gatewayResponse: { isMaterial: true }
+            paymentMethod: gateway,
+            gatewayResponse: { isMaterial: true, gateway, isDirectPay: true, paymentIntentId }
         });
 
         await signPayment(payment, session);
         await payment.save({ session });
 
-        await session.commitTransaction();
+        if (ownSession) {
+            await session.commitTransaction();
+        }
         return payment;
     } catch (error) {
-        await session.abortTransaction();
+        if (ownSession) {
+            await session.abortTransaction();
+        }
         throw error;
     } finally {
-        session.endSession();
+        if (ownSession) {
+            session.endSession();
+        }
     }
+};
+
+/**
+ * Create Stripe Checkout Session for Material Payment
+ */
+exports.createMaterialCheckoutSession = async (jobId, userId, materialAmount, requestId, backEndUrl = null) => {
+    const stripe = getStripe();
+    if (!stripe) throw new Error('Stripe is not configured.');
+
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+
+    const baseReturnUrl = backEndUrl || `${config.RENDER_BACKEND_URL}/api/payments`;
+
+    const session = await stripe.checkout.sessions.create({
+        payment_method_types: ['card'],
+        line_items: [{
+            price_data: {
+                currency: 'inr',
+                product_data: {
+                    name: `Material: ${job.job_title}`,
+                    description: `Additional material cost for your job.`,
+                },
+                unit_amount: Math.round(materialAmount * 100),
+            },
+            quantity: 1,
+        }],
+        mode: 'payment',
+        success_url: `${baseReturnUrl}/success?jobId=${jobId}&type=material_payment&session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${baseReturnUrl}/cancel?jobId=${jobId}&type=material_payment`,
+        customer_email: (await mongoose.model('User').findById(userId))?.email,
+        metadata: {
+            userId: userId.toString(),
+            jobId: jobId.toString(),
+            amount: materialAmount.toString(),
+            requestId: requestId?.toString() || '',
+            type: 'material_payment'
+        }
+    });
+
+    return session;
 };
 
 /**
@@ -305,16 +335,13 @@ exports.releasePayment = async (jobId) => {
             // We'll rely on Job.payment_released flag to prevent double pay.
         }
 
-        // 3. Debit User Escrow (Bulk)
-        const userWallet = await Wallet.findOne({ user: job.user_id }).session(session);
-        if (userWallet.escrowBalance < totalLocked) {
-            // Inconsistency correction
-            //  logger.warn(`User ${job.user_id} escrow balance mismatch. Needed ${totalLocked}, has ${userWallet.escrowBalance}`);
-            userWallet.escrowBalance = Math.max(0, userWallet.escrowBalance - totalLocked);
-        } else {
-            userWallet.escrowBalance -= totalLocked;
+        // 3. Escrow is a DB record (Payment model), NOT tenant wallet balance.
+        // No tenant wallet to debit — money was collected via Stripe directly.
+        // Mark escrow payments as released.
+        for (const ep of escrowPayments) {
+            ep.status = 'released';
+            await ep.save({ session });
         }
-        await userWallet.save({ session });
 
         // 4. Credit Worker Wallet (With Delay Logic & Warranty Reserve)
         const worker = await Worker.findOne({ user: job.selected_worker_id }).session(session);
@@ -381,7 +408,7 @@ exports.releasePayment = async (jobId) => {
             } else {
                 // AUTO-PAYOUT LOGIC (Stripe Connect)
                 // If worker is NOT new and has a Stripe account, attempt automated transfer
-                const stripeResult = await this.processStripeTransfer(job.selected_worker_id, payoutToWallet, jobId);
+                const stripeResult = await exports.processStripeTransfer(job.selected_worker_id, payoutToWallet, jobId);
 
                 if (stripeResult.success) {
                     workerWallet.balance = (workerWallet.balance || 0) + payoutToWallet;
@@ -391,7 +418,7 @@ exports.releasePayment = async (jobId) => {
                     const { appendTimeline } = require('../jobs/job.service');
                     appendTimeline(job, 'completed', 'system', `Automated payout via Stripe Connect successful. Transfer ID: ${stripeResult.transferId}`);
                 } else {
-                    workerWallet.balance += totalWorkerPayout;
+                    workerWallet.balance += payoutToWallet;
                     logger.info(`Manual payout required for Job ${jobId}. Reason: ${stripeResult.message}`);
                 }
             }
@@ -477,6 +504,10 @@ exports.releasePayment = async (jobId) => {
 /**
  * Refund Payment (Full Refund to User)
  */
+/**
+ * Refund Payment (Direct Pay — issues Stripe refund, no tenant wallet)
+ * Refunds via Stripe back to the tenant's original payment method.
+ */
 exports.refundPayment = async (jobId) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -492,21 +523,33 @@ exports.refundPayment = async (jobId) => {
 
         let totalRefund = 0;
 
+        // Issue Stripe refunds for each escrow payment
+        const stripe = getStripe();
         for (const payment of escrowPayments) {
             totalRefund += payment.amount;
-
-            // Refund Record per escrow or bulk? Bulk is cleaner.
             payment.status = 'refunded';
+
+            // Attempt Stripe refund if paid via Stripe
+            if (stripe && payment.gatewayResponse?.gateway === 'stripe') {
+                try {
+                    const paymentIntentId = payment.gatewayResponse?.paymentIntentId;
+                    if (paymentIntentId) {
+                        await stripe.refunds.create({
+                            payment_intent: paymentIntentId,
+                            amount: Math.round(payment.amount * 100), // cents
+                        });
+                        logger.info(`Stripe refund issued for payment ${payment._id}`);
+                    }
+                } catch (stripeErr) {
+                    logger.error(`Stripe refund failed for payment ${payment._id}: ${stripeErr.message}`);
+                    // Continue — record refund in our DB even if Stripe call fails (admin can handle manually)
+                }
+            }
+
             await payment.save({ session });
         }
 
-        // 1. Unlock User Funds (Escrow -> Balance)
-        const userWallet = await Wallet.findOne({ user: escrowPayments[0].user }).session(session); // Assume same user
-        userWallet.escrowBalance -= totalRefund;
-        userWallet.balance += totalRefund;
-        await userWallet.save({ session });
-
-        // 2. Create Refund Record
+        // Create Refund Record in our ledger
         const refund = new Payment({
             job: jobId,
             user: escrowPayments[0].user,
@@ -527,7 +570,7 @@ exports.refundPayment = async (jobId) => {
                 userName: job.user_id.name,
                 jobTitle: job.job_title,
                 refundAmount: totalRefund,
-                reason: 'Job cancelled'
+                reason: 'Job cancelled — refund issued to original payment method'
             }).catch(err => logger.error(`Failed to send refund email: ${err.message}`));
         }
 
@@ -583,12 +626,29 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
             await p.save({ session });
         }
 
-        const userWallet = await Wallet.findOne({ user: job.user_id }).session(session);
-        userWallet.escrowBalance = Math.max(0, userWallet.escrowBalance - totalEscrowed);
-
-        // 3. Refund Tenant portion
+        // 3. Refund Tenant portion via Stripe (no tenant wallet)
         if (tenantAmount > 0) {
-            userWallet.balance += tenantAmount;
+            // Attempt Stripe refund
+            const stripe = getStripe();
+            if (stripe) {
+                for (const ep of escrowPayments) {
+                    if (ep.gatewayResponse?.gateway === 'stripe') {
+                        try {
+                            const paymentIntentId = ep.gatewayResponse?.paymentIntentId;
+                            if (paymentIntentId) {
+                                await stripe.refunds.create({
+                                    payment_intent: paymentIntentId,
+                                    amount: Math.round(tenantAmount * 100),
+                                });
+                                logger.info(`Stripe settlement refund of \u20b9${tenantAmount} for job ${jobId}`);
+                                break; // Only need to refund once
+                            }
+                        } catch (stripeErr) {
+                            logger.error(`Stripe settlement refund failed: ${stripeErr.message}`);
+                        }
+                    }
+                }
+            }
 
             const refundRecord = new Payment({
                 job: jobId,
@@ -602,7 +662,6 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
             await signPayment(refundRecord, session);
             await refundRecord.save({ session });
         }
-        await userWallet.save({ session });
 
         // 4. Pay Worker portion
         if (workerAmount > 0) {
@@ -737,7 +796,7 @@ exports.createJobCheckoutSession = async (jobId, userId, backEndUrl = null) => {
     if (!job) throw new Error('Job not found');
 
     const amount = job.diagnosis_report.final_total_cost;
-    const breakdown = await this.calculateBreakdown(amount, job.selected_worker_id);
+    const breakdown = await exports.calculateBreakdown(amount, job.selected_worker_id);
 
     const stripe = getStripe();
     if (!stripe) throw new Error('Stripe is not configured. Please set STRIPE_SECRET_KEY.');
@@ -860,11 +919,9 @@ exports.handleExternalRefund = async (chargeId, amount, session) => {
             );
         }
     } else if (originalPayment.type === 'escrow') {
-        const wallet = await Wallet.findOne({ user: originalPayment.user }).session(session);
-        if (wallet) {
-            wallet.escrowBalance = Math.max(0, wallet.escrowBalance - amount);
-            await wallet.save({ session });
-        }
+        // Escrow is just a DB record now — mark it as refunded, no tenant wallet to update
+        originalPayment.status = 'refunded';
+        await originalPayment.save({ session });
     }
 
     logger.info(`Processed external refund for payment ${originalPayment._id}. Amount: ₹${amount}`);
