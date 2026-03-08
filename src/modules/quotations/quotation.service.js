@@ -237,6 +237,17 @@ exports.getQuotationsForJob = async (jobId, userId) => {
     return enriched;
 };
 
+exports.getWorkerQuotations = async (workerId) => {
+    const quotations = await Quotation.find({ worker_id: workerId })
+        .populate({
+            path: 'job_id',
+            populate: { path: 'user_id', select: 'name profileImage' }
+        })
+        .sort({ created_at: -1 });
+
+    return quotations;
+};
+
 exports.acceptQuotation = async (quotationId, userId) => {
     const quotation = await Quotation.findById(quotationId).populate('job_id').populate('worker_id', 'name email');
     if (!quotation) throw new Error('Quotation not found');

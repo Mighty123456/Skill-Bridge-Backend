@@ -138,7 +138,7 @@ exports.onQuotationAccepted = async (worker, job, totalCost) => {
 
     // Email (permanent record for the worker)
     if (worker.email) {
-        await emailService.sendQuotationAcceptedEmail(worker.email, worker.name, job.job_title, totalCost);
+        await emailService.sendQuotationAcceptedEmail(worker.email, worker.name, job.job_title, totalCost, job._id);
     }
 
     logger.info(`[NotifyHelper] onQuotationAccepted: Worker ${worker._id} notified for job ${job._id}`);

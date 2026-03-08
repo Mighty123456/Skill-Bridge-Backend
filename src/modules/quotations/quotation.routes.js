@@ -10,6 +10,7 @@ const { uploadFields } = require('../../common/middleware/upload.middleware');
 
 // Public/Worker routes
 router.get('/stats', quotationController.getQuotationStats);
+router.get('/my-bids', quotationController.getWorkerQuotations);
 router.post('/', uploadFields([{ name: 'video_pitch', maxCount: 1 }]), quotationController.createQuotation);
 
 // Tenant can view quotations for their job

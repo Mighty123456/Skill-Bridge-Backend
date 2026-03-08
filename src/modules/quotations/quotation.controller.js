@@ -8,7 +8,6 @@ const logger = require('../../config/logger');
 
 
 // Create a new quotation
-// Create a new quotation
 exports.createQuotation = async (req, res) => {
     try {
         const { job_id, labor_cost, material_cost, estimated_days, notes, tags, arrival_time, completion_time, warranty } = req.body;
@@ -60,6 +59,17 @@ exports.getQuotationsByJob = async (req, res) => {
     } catch (error) {
         logger.error('Get Quotations Error:', error);
         res.status(500).json({ success: false, message: error.message || 'Failed to fetch quotations' });
+    }
+};
+
+// Get worker's own quotations
+exports.getWorkerQuotations = async (req, res) => {
+    try {
+        const quotations = await QuotationService.getWorkerQuotations(req.user._id);
+        res.json({ success: true, data: quotations });
+    } catch (error) {
+        logger.error('Get Worker Quotations Error:', error);
+        res.status(500).json({ success: false, message: error.message || 'Failed to fetch your quotations' });
     }
 };
 

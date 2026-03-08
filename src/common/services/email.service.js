@@ -397,7 +397,7 @@ const initializeEmailService = async () => {
 /**
  * Send quotation accepted email
  */
-const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost) => {
+const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost, jobId) => {
   if (!transporter) {
     const ready = await initializeTransporter();
     if (!ready) return { success: false };
@@ -424,7 +424,7 @@ const sendQuotationAcceptedEmail = async (email, workerName, jobTitle, totalCost
       <p>Please log in to the SkillBridge app to view complete job details and start working on the task. Good luck!</p>
       
       <div style="margin-top: 35px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/dashboard" style="background-color: #008080; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px;">
+        <a href="skillbridge://job/${jobId || ''}" style="background-color: #008080; color: #ffffff; padding: 14px 32px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; font-size: 16px;">
           View Job Details
         </a>
       </div>
@@ -492,7 +492,7 @@ const sendPaymentEscrowedUser = async (email, data) => {
       <p style="font-size: 14px; color: #6b7280;">You can download your official tax invoice and warranty card from the job details page in the app.</p>
       
       <div style="margin-top: 30px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/jobs/${data.jobId}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job Detail</a>
+        <a href="skillbridge://job/${data.jobId}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job Detail</a>
       </div>
     `, 'SkillBridge - Payment Receipt');
 
@@ -658,7 +658,7 @@ const sendPaymentSuccessEmail = async (email, data) => {
       
       <div style="margin-top: 30px; text-align: center;">
         <a href="${invoiceUrl || config.FRONTEND_URL}" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block; margin-right: 10px;">Download Invoice</a>
-        <a href="${config.FRONTEND_URL}/jobs/${data.jobId}" style="background-color: #f3f4f6; color: #374151; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job</a>
+        <a href="skillbridge://job/${data.jobId}" style="background-color: #f3f4f6; color: #374151; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Job</a>
       </div>
     `, 'SkillBridge - Payment Successful');
 
@@ -708,7 +708,7 @@ const sendRefundEmail = async (email, data) => {
       <p style="font-size: 14px; color: #6b7280;">The refund will be credited to your original payment method within 5-7 business days.</p>
       
       <div style="margin-top: 30px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
+        <a href="skillbridge://wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
       </div>
     `, 'SkillBridge - Refund Processed');
 
@@ -783,7 +783,7 @@ const sendWithdrawalStatusEmail = async (email, data) => {
       `}
       
       <div style="margin-top: 30px; text-align: center;">
-        <a href="${config.FRONTEND_URL}/wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
+        <a href="skillbridge://wallet" style="background-color: #008080; color: #ffffff; padding: 12px 28px; text-decoration: none; border-radius: 8px; font-weight: 600; display: inline-block;">View Wallet</a>
       </div>
     `, `SkillBridge - Withdrawal ${statusText}`);
 
