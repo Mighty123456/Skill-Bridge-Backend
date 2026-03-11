@@ -367,16 +367,63 @@ exports.handleStripeWebhook = async (req, res) => {
                 const account = event.data.object;
                 logger.info(`👤 Stripe Account Updated: ${account.id}`);
                 
-                // If the account has finished onboarding and can receive payouts
-                if (account.details_submitted && account.payouts_enabled) {
-                    const worker = await Worker.findOne({ stripeAccountId: account.id }).session(session_stripe);
-                    if (worker && !worker.stripeOnboarded) {
-                        worker.stripeOnboarded = true;
-                        await worker.save({ session: session_stripe });
-                        logger.info(`✅ Worker ${worker.user} fully onboarded for Stripe Connect.`);
-                        
-                        // Notify worker
+                const worker = await Worker.findOne({ stripeAccountId: account.id }).session(session_stripe);
+                if (worker) {
+                    const chargesEnabled = account.charges_enabled;
+                    const payoutsEnabled = account.payouts_enabled;
+                    const detailsSubmitted = account.details_submitted;
+
+                    // Sync status
+                    worker.stripeOnboarded = detailsSubmitted && payoutsEnabled;
+                    worker.payoutEnabled = payoutsEnabled;
+
+                    if (!payoutsEnabled && account.requirements?.eventually_due?.length > 0) {
+                        worker.lastPayoutError = `Restricted: ${account.requirements.eventually_due.join(', ')}`;
+                    } else if (payoutsEnabled) {
+                        worker.lastPayoutError = null;
+                        worker.consecutivePayoutFailures = 0;
+                    }
+
+                    await worker.save({ session: session_stripe });
+                    
+                    if (worker.stripeOnboarded && !worker.payoutEnabled) {
+                        logger.info(`✅ Worker ${worker.user} verified but payouts still pending Stripe approval.`);
+                    } else if (worker.stripeOnboarded && worker.payoutEnabled) {
+                        logger.info(`✅ Worker ${worker.user} fully active for Stripe Connect.`);
                         await notifyHelper.onStripeOnboarded(worker.user);
+                    }
+                }
+                break;
+
+            case 'payout.paid':
+                const paidPayout = event.data.object;
+                logger.info(`💰 Stripe Payout Succeeded: ${paidPayout.id} for account ${event.account}`);
+                
+                // Track back to internal withdrawal if possible
+                const Withdrawal = require('../wallet/withdrawal.model');
+                const withdrawal = await Withdrawal.findOne({ stripeTransferId: paidPayout.id }).session(session_stripe);
+                if (withdrawal) {
+                    withdrawal.status = 'processed';
+                    withdrawal.processedAt = new Date();
+                    await withdrawal.save({ session: session_stripe });
+                }
+                break;
+
+            case 'payout.failed':
+                const failedPayout = event.data.object;
+                logger.error(`❌ Stripe Payout Failed: ${failedPayout.id} - ${failedPayout.failure_code}`);
+                
+                const fWithdrawal = await Withdrawal.findOne({ stripeTransferId: failedPayout.id }).session(session_stripe);
+                if (fWithdrawal) {
+                    fWithdrawal.status = 'failed';
+                    fWithdrawal.failureReason = failedPayout.failure_message;
+                    await fWithdrawal.save({ session: session_stripe });
+                    
+                    // Notify worker
+                    const fWorker = await Worker.findOne({ user: fWithdrawal.user }).session(session_stripe);
+                    if (fWorker) {
+                        fWorker.lastPayoutError = `Bank payout failed: ${failedPayout.failure_message}`;
+                        await fWorker.save({ session: session_stripe });
                     }
                 }
                 break;

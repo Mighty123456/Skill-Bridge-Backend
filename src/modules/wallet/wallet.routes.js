@@ -23,6 +23,7 @@ router.post('/withdraw', authenticate, WalletController.withdraw);
 router.get('/history', authenticate, WalletController.getHistory);
 router.get('/transactions', authenticate, WalletController.getHistory); // Alias for compatibility
 router.get('/payout-status', authenticate, WalletController.getPayoutStatus);
+router.get('/earnings-stats', authenticate, WalletController.getEarningsStats);
 
 // Admin Routes
 router.get('/admin/withdrawals', authenticate, authorize('admin'), WalletController.getPendingWithdrawals);

@@ -254,6 +254,42 @@ class FraudDetectionService {
   }
 
   /**
+   * Detect IP anomalies (multiple accounts on same IP)
+   */
+  async detectIPAnomaly(userId, ipAddress) {
+    try {
+      if (!ipAddress) return false;
+
+      // Check how many different verified users share this IP
+      const usersOnIP = await User.countDocuments({
+        'legal.ipAddress': ipAddress,
+        _id: { $ne: userId },
+        status: 'active'
+      });
+
+      if (usersOnIP >= 5) {
+        await this.createAlert({
+          type: 'ip_anomaly',
+          severity: usersOnIP >= 10 ? 'high' : 'medium',
+          userId,
+          title: 'Mass IP Association Detected',
+          description: `${usersOnIP} other active accounts are using the same IP address (${ipAddress})`,
+          metadata: {
+            ipAddress,
+            associatedUserCount: usersOnIP,
+            detectionSource: 'auth_service'
+          }
+        });
+        return true;
+      }
+      return false;
+    } catch (error) {
+      logger.error(`Fraud detection error (IP anomaly): ${error.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Create a fraud alert
    */
   async createAlert(alertData) {
@@ -275,10 +311,35 @@ class FraudDetectionService {
 
       const alert = await FraudAlert.create(alertData);
       logger.warn(`Fraud alert created: ${alert.type} for user ${alertData.userId} (Severity: ${alert.severity})`);
+      
+      // Auto-Ban Logic for High Severity Alerts
+      if (alert.severity === 'high') {
+        await this.handleAutoBan(alertData.userId, alert);
+      }
+      
       return alert;
     } catch (error) {
       logger.error(`Error creating fraud alert: ${error.message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Automatically suspend a user for high-risk activity
+   */
+  async handleAutoBan(userId, alert) {
+    try {
+      const user = await User.findById(userId);
+      if (!user || user.status === 'suspended') return;
+
+      user.status = 'suspended';
+      await user.save();
+
+      logger.error(`🚨 AUTO-BAN: User ${userId} suspended due to high-severity ${alert.type} alert.`);
+      
+      // We could also notify the user here via email, or just log it for admin review
+    } catch (err) {
+      logger.error(`Auto-ban failed for user ${userId}: ${err.message}`);
     }
   }
 

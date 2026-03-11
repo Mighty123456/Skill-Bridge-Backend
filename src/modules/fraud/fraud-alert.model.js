@@ -15,7 +15,8 @@ const fraudAlertSchema = new mongoose.Schema(
         'suspicious_pricing',
         'payment_failure_spike',
         'account_takeover',
-        'identity_verification_failure'
+        'identity_verification_failure',
+        'ip_anomaly'
       ],
       required: true,
       index: true,

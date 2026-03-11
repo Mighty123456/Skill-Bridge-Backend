@@ -12,6 +12,7 @@ const logger = require('../../config/logger');
 const { ROLES } = require('../../common/constants/roles');
 const Wallet = require('../wallet/wallet.model');
 const WalletService = require('../wallet/wallet.service');
+const FraudDetectionService = require('../fraud/fraud-detection.service');
 
 /**
  * Register a new user
@@ -357,8 +358,17 @@ const login = async (email, password, deviceInfo = {}) => {
     }
   }
 
-  // Update last login
+  // Update last login & IP tracking
   user.lastLogin = new Date();
+  if (deviceInfo.ipAddress) {
+    user.legal = user.legal || {};
+    user.legal.ipAddress = deviceInfo.ipAddress;
+    user.legal.userAgent = deviceInfo.userAgent;
+    // Fraud Check: Multiple accounts on same IP
+    FraudDetectionService.detectIPAnomaly(user._id, deviceInfo.ipAddress).catch(err => 
+      logger.error(`Fraud check failed: ${err.message}`)
+    );
+  }
 
   // Fix for invalid location data (missing coordinates)
   if (user.location && user.location.type === 'Point' && (!user.location.coordinates || user.location.coordinates.length !== 2)) {
@@ -384,9 +394,8 @@ const login = async (email, password, deviceInfo = {}) => {
   // Ensure 'role' is present on both models. Admin model has default role='admin'.
   const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
-  // Remove password from response
-  const userResponse = user.toObject();
-  delete userResponse.password;
+  // Move this before toObject to ensure sessionId is there
+  const userResponse = await _getPopulatedUserResponse(user);
 
   logger.info(`User logged in: ${user.email} (${user.role})`);
 
@@ -426,7 +435,7 @@ const verifyDevice = async (email, deviceId, otp) => {
   await user.save({ validateBeforeSave: false });
 
   const token = generateToken({ userId: user._id, role: user.role, sessionId });
-  const userResponse = user.toJSON();
+  const userResponse = await _getPopulatedUserResponse(user);
 
   return {
     user: userResponse,
@@ -500,7 +509,7 @@ const loginWithOTP = async (email, otp) => {
   const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
-  const userResponse = user.toJSON();
+  const userResponse = await _getPopulatedUserResponse(user);
 
   logger.info(`User logged in with OTP: ${user.email} (${user.role})`);
 
@@ -545,7 +554,7 @@ const verifyOTPForLogin = async (email, otp) => {
   const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
-  const userResponse = user.toJSON();
+  const userResponse = await _getPopulatedUserResponse(user);
 
   logger.info(`OTP verified for: ${user.email} (${user.role})`);
 
@@ -647,31 +656,42 @@ const getProfile = async (userId) => {
     throw new Error('User not found');
   }
 
-  const userObj = user.toObject();
+  return await _getPopulatedUserResponse(user);
+};
 
-  // Fetch role-specific data and merge
+/**
+ * Internal helper to get a fully populated user response with role-specific data
+ */
+const _getPopulatedUserResponse = async (user) => {
+  const userObj = user.toObject();
+  delete userObj.password;
+
   if (user.role === ROLES.WORKER) {
-    const workerData = await Worker.findOne({ user: userId });
+    const workerData = await Worker.findOne({ user: user._id });
     if (workerData) {
       const workerObj = workerData.toObject();
-      // Merge worker-specific fields
       userObj.skills = workerObj.skills || [];
       userObj.experience = workerObj.experience || 0;
       userObj.rating = workerObj.rating || 5.0;
       userObj.verificationStatus = workerObj.verificationStatus;
       userObj.governmentId = workerObj.governmentId;
       userObj.selfie = workerObj.selfie;
-      userObj.profession = workerObj.skills?.[0] || 'Service Provider'; // Primary skill as profession
+      userObj.profession = workerObj.skills?.[0] || 'Service Provider';
+      
+      // Stripe Payout Info
+      userObj.payoutEnabled = workerObj.payoutEnabled !== false;
+      userObj.lastPayoutError = workerObj.lastPayoutError || null;
+      userObj.stripeOnboarded = workerObj.stripeOnboarded || false;
+      userObj.consecutivePayoutFailures = workerObj.consecutivePayoutFailures || 0;
 
-      // Fetch Wallet Data
-      const wallet = await WalletService.getWallet(userId);
+      const wallet = await WalletService.getWallet(user._id);
       if (wallet) {
         userObj.wallet_balance = wallet.balance || 0;
         userObj.pending_balance = wallet.pendingBalance || 0;
       }
     }
   } else if (user.role === ROLES.CONTRACTOR) {
-    const contractorData = await Contractor.findOne({ user: userId });
+    const contractorData = await Contractor.findOne({ user: user._id });
     if (contractorData) {
       const contractorObj = contractorData.toObject();
       userObj.services = contractorObj.services || [];
@@ -680,7 +700,6 @@ const getProfile = async (userId) => {
       userObj.verificationStatus = contractorObj.verificationStatus;
     }
   }
-
   return userObj;
 };
 
@@ -790,7 +809,7 @@ const verifyRegistration = async (email, otp) => {
   const token = generateToken({ userId: user._id, role: user.role, sessionId });
 
   // Remove password from response
-  const userResponse = user.toJSON();
+  const userResponse = await _getPopulatedUserResponse(user);
 
   logger.info(`User verified registration: ${user.email}`);
 

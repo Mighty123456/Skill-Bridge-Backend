@@ -499,6 +499,16 @@ exports.onRefundProcessed = async (tenant, job, amount) => {
         data: { jobId: job._id },
     });
 
+    // Email (permanent financial record for refunds)
+    if (tenant.email) {
+        await emailService.sendRefundEmail(tenant.email, {
+            userName: tenant.name,
+            jobTitle: job.job_title,
+            refundAmount: amount,
+            reason: 'Job cancelled or dispute resolved',
+        });
+    }
+
     logger.info(`[NotifyHelper] onRefundProcessed: Tenant ${tenant._id} notified.`);
 };
 
@@ -538,6 +548,16 @@ exports.onSettlementProcessed = async (tenant, worker, job, tenantAmount, worker
         type: 'payment', data: { jobId: job._id },
     });
 
+    // Email receipt for tenant (refund portion)
+    if (tenant.email && tenantAmount > 0) {
+        await emailService.sendRefundEmail(tenant.email, {
+            userName: tenant.name,
+            jobTitle: job.job_title,
+            refundAmount: tenantAmount,
+            reason: 'Dispute resolved — partial refund issued',
+        });
+    }
+
     // Notify Worker
     const wTitle = '⚖️ Dispute Resolved';
     const wBody = `The dispute for "${job.job_title}" is resolved. You have been paid ₹${workerAmount.toFixed(2)}.`;
@@ -550,6 +570,15 @@ exports.onSettlementProcessed = async (tenant, worker, job, tenantAmount, worker
         recipient: worker._id, title: wTitle, message: wBody,
         type: 'payment', data: { jobId: job._id },
     });
+
+    // Email receipt for worker (payout portion)
+    if (worker.email && workerAmount > 0) {
+        await emailService.sendPaymentReleasedWorker(worker.email, {
+            workerName: worker.name,
+            jobTitle: job.job_title,
+            netPayout: workerAmount,
+        });
+    }
 
     logger.info(`[NotifyHelper] onSettlementProcessed: Both parties notified for job ${job._id}`);
 };

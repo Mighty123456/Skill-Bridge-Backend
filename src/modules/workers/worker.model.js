@@ -170,6 +170,8 @@ const workerSchema = new mongoose.Schema(
     payoutEnabled: { type: Boolean, default: true },
     lastPayoutError: { type: String, trim: true },
     lastPayoutAt: { type: Date },
+    consecutivePayoutFailures: { type: Number, default: 0 },
+    lastPayoutFailedAt: { type: Date },
 
   },
   {

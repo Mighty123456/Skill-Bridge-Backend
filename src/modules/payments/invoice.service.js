@@ -190,6 +190,120 @@ class InvoiceService {
 
         return await PDFService.generatePDF(html);
     }
+
+    /**
+     * Generate Invoice for Dispute Settlement
+     */
+    async generateSettlementInvoice(job, settlementData, user) {
+        const jobId = job?._id ? job._id.toString().slice(-6).toUpperCase() : 'N/A';
+        const jobTitle = job?.job_title || 'Settled Service';
+        const invId = `SET-${Date.now().toString().slice(-6)}`;
+        
+        const tenantRefund = Number(settlementData.tenantAmount || 0);
+        const workerPayout = Number(settlementData.workerAmount || 0);
+        const totalEscrow = tenantRefund + workerPayout;
+
+        const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <style>
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #1e293b; margin: 0; padding: 40px; line-height: 1.6; }
+          .header { border-bottom: 3px solid #64748b; padding-bottom: 20px; margin-bottom: 30px; display: table; width: 100%; }
+          .header-left { display: table-cell; vertical-align: top; }
+          .header-right { display: table-cell; vertical-align: top; text-align: right; }
+          .logo { color: #008080; font-size: 32px; font-weight: 800; }
+          .invoice-label { font-size: 24px; font-weight: 700; color: #64748b; margin: 0; }
+          
+          .meta-section { margin-bottom: 30px; display: table; width: 100%; }
+          .meta-box { display: table-cell; width: 50%; vertical-align: top; }
+          .meta-title { font-size: 11px; font-weight: 700; text-transform: uppercase; color: #94a3b8; margin-bottom: 8px; }
+          
+          .table { width: 100%; border-collapse: collapse; margin-bottom: 30px; }
+          .table th { background: #f8fafc; text-align: left; padding: 12px; border-bottom: 2px solid #e2e8f0; font-size: 12px; font-weight: 700; color: #475569; }
+          .table td { padding: 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; }
+          
+          .summary-container { margin-top: 20px; display: table; width: 100%; }
+          .summary-spacer { display: table-cell; width: 60%; }
+          .summary-content { display: table-cell; width: 40%; }
+          
+          .summary-row { display: table; width: 100%; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
+          .summary-label { display: table-cell; font-size: 13px; color: #64748b; }
+          .summary-value { display: table-cell; text-align: right; font-weight: 600; }
+          .grand-total { border-top: 2px solid #64748b; margin-top: 5px; padding-top: 10px; }
+          
+          .footer { margin-top: 60px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 10px; color: #94a3b8; text-align: center; }
+          .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; background: #fef3c7; color: #92400e; font-size: 11px; font-weight: 700; margin-top: 10px; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div class="header-left">
+            <div class="logo">SkillBridge</div>
+            <div class="badge">SETTLEMENT INVOICE</div>
+          </div>
+          <div class="header-right">
+            <h1 class="invoice-label">SETTLEMENT DETAIL</h1>
+            <p style="margin: 5px 0; font-size: 13px;"><strong>INV-${invId}</strong></p>
+            <p style="margin: 5px 0; font-size: 11px; color: #64748b;">Date: ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })}</p>
+          </div>
+        </div>
+
+        <div class="meta-section">
+          <div class="meta-box">
+            <div class="meta-title">Job Information</div>
+            <div style="font-weight: 700; font-size: 14px;">${jobTitle}</div>
+            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Job ID: ${jobId}</div>
+          </div>
+          <div class="meta-box" style="text-align: right;">
+            <div class="meta-title">Settlement Notes</div>
+            <div style="font-size: 12px; color: #475569;">${settlementData.notes || 'Dispute resolved via mutually agreed settlement.'}</div>
+          </div>
+        </div>
+
+        <table class="table">
+          <thead>
+            <tr>
+              <th style="width: 70%;">Settlement Distribution</th>
+              <th style="text-align: right; width: 30%;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Refund to Tenant (Escrow Return)</td>
+              <td style="text-align: right;">₹${tenantRefund.toLocaleString('en-IN')}</td>
+            </tr>
+            <tr>
+              <td>Payout to Worker (Service Completion)</td>
+              <td style="text-align: right;">₹${workerPayout.toLocaleString('en-IN')}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="summary-container">
+          <div class="summary-spacer"></div>
+          <div class="summary-content">
+            <div class="summary-row">
+              <div class="summary-label">Total Escrow Funds</div>
+              <div class="summary-value">₹${totalEscrow.toLocaleString('en-IN')}</div>
+            </div>
+            <div class="summary-row grand-total">
+                <div class="summary-label" style="font-weight: 800; color: #1e293b;">Settled Balance</div>
+                <div class="summary-value" style="font-weight: 800; color: #1e293b;">₹0.00</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer">
+          <p>This document serves as an official record of the financial settlement for the referenced job.</p>
+          <p>SkillBridge Dispute Resolution Service | support@skillbridge.club</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+        return await PDFService.generatePDF(html);
+    }
 }
 
 module.exports = new InvoiceService();

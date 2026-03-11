@@ -277,10 +277,18 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                 
                 if (stripeResult.success) {
                     withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
+                    withdrawal.stripeTransferId = stripeResult.transferId;
                 } else {
-                    logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Manual transfer required.`);
+                    // Mark as failed so the retry cron can pick it up
+                    withdrawal.status = 'failed';
+                    withdrawal.failureReason = stripeResult.message;
+                    withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will auto-retry.)`;
+                    logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry.`);
                 }
             } catch (err) {
+                withdrawal.status = 'failed';
+                withdrawal.failureReason = err.message;
+                withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Will auto-retry.)`;
                 logger.error(`Withdrawal Stripe integration error: ${err.message}`);
             }
         }
@@ -329,4 +337,50 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
     } finally {
         session.endSession();
     }
+};
+
+/**
+ * Get daily earnings stats for a worker (last 7 days)
+ */
+exports.getEarningsStats = async (workerId) => {
+    const Payment = require('../payments/payment.model');
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+    
+    const sevenDaysAgo = new Date(startOfToday);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+
+    const stats = await Payment.aggregate([
+        {
+            $match: {
+                worker: new mongoose.Types.ObjectId(workerId),
+                type: 'payout',
+                status: 'completed',
+                createdAt: { $gte: sevenDaysAgo }
+            }
+        },
+        {
+            $group: {
+                _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                totalAmount: { $sum: "$amount" }
+            }
+        },
+        { $sort: { "_id": 1 } }
+    ]);
+
+    // Fill missing days with 0
+    const result = [];
+    for (let i = 0; i < 7; i++) {
+        const date = new Date(sevenDaysAgo);
+        date.setDate(date.getDate() + i);
+        const dateStr = date.toISOString().split('T')[0];
+        
+        const dayStat = stats.find(s => s._id === dateStr);
+        result.push({
+            date: dateStr,
+            amount: dayStat ? dayStat.totalAmount : 0
+        });
+    }
+
+    return result;
 };

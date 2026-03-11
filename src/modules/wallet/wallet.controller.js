@@ -149,6 +149,21 @@ exports.getPayoutStatus = async (req, res, next) => {
 };
 
 /**
+ * Get Weekly Earnings Stats for Worker
+ */
+exports.getEarningsStats = async (req, res, next) => {
+    try {
+        const stats = await WalletService.getEarningsStats(req.user._id);
+        res.status(200).json({
+            success: true,
+            data: stats
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * ADMIN: Get Pending Withdrawals
  */
 exports.getPendingWithdrawals = async (req, res, next) => {

@@ -31,7 +31,9 @@ const register = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password, deviceId, deviceName } = req.body;
-    const result = await authService.login(email, password, { deviceId, deviceName });
+    const ipAddress = req.ip || req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    const result = await authService.login(email, password, { deviceId, deviceName, ipAddress, userAgent });
 
     // Handle Device Verification Required
     if (result.requireDeviceVerification) {

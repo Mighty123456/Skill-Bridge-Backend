@@ -99,6 +99,24 @@ exports.createEscrow = async (jobId, userId, jobAmount, gateway = 'stripe', gate
         const job = await Job.findById(jobId).session(session);
         if (!job) throw new Error('Job not found for escrow');
 
+        // EDGE CASE: Prevent duplicate escrow for same job
+        const existingEscrow = await Payment.findOne({
+            job: jobId, type: 'escrow', status: 'completed'
+        }).session(session);
+        if (existingEscrow) {
+            logger.warn(`Duplicate escrow attempt blocked for job ${jobId}. Existing TXN: ${existingEscrow.transactionId}`);
+            if (ownSession) await session.commitTransaction();
+            return existingEscrow;
+        }
+
+        // EDGE CASE: Validate amount bounds
+        if (!jobAmount || isNaN(jobAmount) || jobAmount <= 0) {
+            throw new Error(`Invalid job amount: ${jobAmount}. Amount must be a positive number.`);
+        }
+        if (jobAmount > 500000) {
+            throw new Error(`Job amount \u20b9${jobAmount} exceeds maximum allowed (\u20b9500,000). Contact support.`);
+        }
+
         const breakdown = await exports.calculateBreakdown(jobAmount, job.selected_worker_id);
         const totalAmount = breakdown.totalUserPayable;
 
@@ -442,7 +460,7 @@ exports.releasePayment = async (jobId) => {
             type: 'payout',
             status: 'completed',
             transactionId: `TXN_PAYOUT_${Date.now()}_${jobId}`,
-            currency: 'INR',
+            currency: config.DEFAULT_CURRENCY || 'INR',
             gatewayResponse: { revenue: totalPlatformRevenue }
         });
         await signPayment(payout, session);
@@ -457,7 +475,7 @@ exports.releasePayment = async (jobId) => {
                 type: 'commission',
                 status: 'completed',
                 transactionId: `TXN_COMM_${Date.now()}_${jobId}`,
-                currency: 'INR'
+                currency: config.DEFAULT_CURRENCY || 'INR'
             });
             await signPayment(commissionRecord, session);
             await commissionRecord.save({ session });
@@ -519,7 +537,25 @@ exports.refundPayment = async (jobId) => {
             status: 'completed'
         }).session(session);
 
-        if (escrowPayments.length === 0) throw new Error('Escrow record not found');
+        if (escrowPayments.length === 0) {
+            // EDGE CASE: Check if already refunded (idempotency)
+            const existingRefund = await Payment.findOne({
+                job: jobId, type: 'refund'
+            }).session(session);
+            if (existingRefund) {
+                logger.warn(`Refund already processed for job ${jobId}. TXN: ${existingRefund.transactionId}`);
+                await session.abortTransaction();
+                return existingRefund;
+            }
+            // EDGE CASE: Check if payment was already released (cannot refund)
+            const releasedPayments = await Payment.findOne({
+                job: jobId, type: 'escrow', status: 'released'
+            }).session(session);
+            if (releasedPayments) {
+                throw new Error('Payment already released to worker. Cannot refund a released payment. Use settlement instead.');
+            }
+            throw new Error('Escrow record not found');
+        }
 
         let totalRefund = 0;
 
@@ -557,7 +593,7 @@ exports.refundPayment = async (jobId) => {
             type: 'refund',
             status: 'refunded',
             transactionId: `TXN_REFUND_${Date.now()}_${jobId}`,
-            currency: 'INR'
+            currency: config.DEFAULT_CURRENCY || 'INR'
         });
         await signPayment(refund, session);
         await refund.save({ session });
@@ -616,8 +652,15 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId, n
 
         const totalEscrowed = escrowPayments.reduce((sum, p) => sum + p.amount, 0);
 
-        if (workerAmount + tenantAmount > totalEscrowed + 0.01) { // Adding small epsilon for floating point
-            throw new Error(`Total settlement (₹${workerAmount + tenantAmount}) exceeds escrowed funds (₹${totalEscrowed})`);
+        // EDGE CASE: Validate settlement amounts
+        if (workerAmount < 0 || tenantAmount < 0) {
+            throw new Error('Settlement amounts cannot be negative');
+        }
+        if (isNaN(workerAmount) || isNaN(tenantAmount)) {
+            throw new Error('Settlement amounts must be valid numbers');
+        }
+        if (workerAmount + tenantAmount > totalEscrowed + 0.01) {
+            throw new Error(`Total settlement (\u20b9${(workerAmount + tenantAmount).toFixed(2)}) exceeds escrowed funds (\u20b9${totalEscrowed.toFixed(2)})`);
         }
 
         // 2. Adjust Status of Escrow Records
@@ -779,10 +822,10 @@ exports.createStripeCheckoutSession = async (userId, amount, backEndUrl = null) 
         line_items: [
             {
                 price_data: {
-                    currency: 'inr',
+                    currency: (config.DEFAULT_CURRENCY || 'INR').toLowerCase(),
                     product_data: {
                         name: 'SkillBridge Wallet Top-up',
-                        description: `Add ₹${amount} to your professional wallet.`,
+                        description: `Add ${config.DEFAULT_CURRENCY || 'INR'} ${amount} to your professional wallet.`,
                     },
                     unit_amount: amountInCents,
                 },
@@ -825,7 +868,7 @@ exports.createJobCheckoutSession = async (jobId, userId, backEndUrl = null) => {
         line_items: [
             {
                 price_data: {
-                    currency: 'inr',
+                    currency: (config.DEFAULT_CURRENCY || 'INR').toLowerCase(),
                     product_data: {
                         name: `Job Approval: ${job.job_title}`,
                         description: `Payment for labor and platform protection fee.`,
@@ -950,6 +993,14 @@ exports.processStripeTransfer = async (workerId, amount, jobId) => {
     const stripe = getStripe();
     if (!stripe) return { success: false, message: 'Stripe not configured' };
 
+    // EDGE CASE: Validate transfer amount
+    if (!amount || isNaN(amount) || amount <= 0) {
+        return { success: false, message: `Invalid transfer amount: ${amount}` };
+    }
+    if (amount < 1) {
+        return { success: false, message: 'Transfer amount too small (minimum ₹1)' };
+    }
+
     try {
         const worker = await Worker.findOne({ user: workerId });
         if (!worker || !worker.stripeAccountId || !worker.stripeOnboarded) {
@@ -957,17 +1008,29 @@ exports.processStripeTransfer = async (workerId, amount, jobId) => {
             return { success: false, message: 'Worker not onboarded for Stripe Connect' };
         }
 
+        // EDGE CASE: Check if payouts are disabled (auto-disabled after 3 failures)
+        if (!worker.payoutEnabled) {
+            logger.warn(`Stripe: Worker ${workerId} payouts are disabled. Manual review required.`);
+            return { success: false, message: 'Worker payouts disabled due to repeated failures. Admin review required.' };
+        }
+
+        // Use idempotency key to prevent duplicate transfers on retries
+        const idempotencyKey = `transfer_${workerId}_${jobId}_${Math.round(amount * 100)}`;
+
         const transfer = await stripe.transfers.create({
             amount: Math.round(amount * 100), // In cents
-            currency: 'inr',
+            currency: (config.DEFAULT_CURRENCY || 'INR').toLowerCase(),
             destination: worker.stripeAccountId,
             description: `Payout for Job ID: ${jobId}`,
             metadata: { jobId: jobId.toString(), workerId: workerId.toString() }
+        }, {
+            idempotencyKey
         });
 
-        // Track success on worker profile
+        // Track success — reset failure counters
         worker.lastPayoutAt = new Date();
         worker.lastPayoutError = null;
+        worker.consecutivePayoutFailures = 0;
         await worker.save();
 
         logger.info(`Stripe: Automated transfer successful for Job ${jobId}. Transfer ID: ${transfer.id}`);
@@ -975,12 +1038,21 @@ exports.processStripeTransfer = async (workerId, amount, jobId) => {
     } catch (error) {
         logger.error(`Stripe Transfer Failed for worker ${workerId}: ${error.message}`);
         
-        // Track failure on worker profile
+        // Track failure on worker profile with retry metadata
         try {
-            await Worker.findOneAndUpdate(
-                { user: workerId },
-                { lastPayoutError: error.message }
-            );
+            const failedWorker = await Worker.findOne({ user: workerId });
+            if (failedWorker) {
+                failedWorker.lastPayoutError = error.message;
+                failedWorker.consecutivePayoutFailures = (failedWorker.consecutivePayoutFailures || 0) + 1;
+                failedWorker.lastPayoutFailedAt = new Date();
+
+                // EDGE CASE: Auto-disable payouts after 3 consecutive failures
+                if (failedWorker.consecutivePayoutFailures >= 3) {
+                    failedWorker.payoutEnabled = false;
+                    logger.warn(`Stripe: Auto-disabled payouts for worker ${workerId} after ${failedWorker.consecutivePayoutFailures} consecutive failures. Manual review required.`);
+                }
+                await failedWorker.save();
+            }
         } catch (dbErr) {
             logger.error(`Failed to update worker payout error: ${dbErr.message}`);
         }

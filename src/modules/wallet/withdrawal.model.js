@@ -27,7 +27,7 @@ const withdrawalSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['pending', 'processed', 'rejected'],
+            enum: ['pending', 'processing', 'completed', 'processed', 'rejected', 'failed'],
             default: 'pending',
         },
         bankDetails: {
@@ -37,11 +37,27 @@ const withdrawalSchema = new mongoose.Schema(
             accountHolderName: String
         },
         processedAt: Date,
-        rejectionReason: String
+        processedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User',
+        },
+        adminNotes: String,
+        rejectionReason: String,
+
+        // Retry tracking for failed payouts
+        retryCount: { type: Number, default: 0 },
+        maxRetries: { type: Number, default: 3 },
+        lastRetryAt: Date,
+        failureReason: String,
+        stripeTransferId: String,
     },
     {
         timestamps: true,
     }
 );
+
+// Index for cron jobs to find retryable withdrawals
+withdrawalSchema.index({ status: 1, retryCount: 1 });
+withdrawalSchema.index({ user: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Withdrawal', withdrawalSchema);
