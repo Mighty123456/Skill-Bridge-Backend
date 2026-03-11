@@ -212,6 +212,53 @@ router.get(
   adminController.getChatMessages
 );
 
+// --- New Routes ---
+
+// System Config
+router.get(
+  '/config',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getSystemConfig
+);
+
+router.patch(
+  '/config',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.updateSystemConfig
+);
+
+// Ratings Moderation
+router.get(
+  '/ratings',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listRatings
+);
+
+router.patch(
+  '/ratings/:id/flag',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.flagRating
+);
+
+router.delete(
+  '/ratings/:id',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.deleteRating
+);
+
+// Audit Logs
+router.get(
+  '/audit-logs',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listAuditLogs
+);
+
 module.exports = router;
 
 

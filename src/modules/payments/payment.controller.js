@@ -14,6 +14,7 @@ const JobService = require('../jobs/job.service');
 const User = require('../users/user.model');
 const Worker = require('../workers/worker.model');
 const mongoose = require('mongoose');
+const { logAdminAction } = require('../../common/utils/admin-logger');
 
 /**
  * Get Platform Financial Stats (Admin)
@@ -499,6 +500,8 @@ exports.processSettlement = async (req, res, next) => {
             req.user._id,
             notes
         );
+
+        await logAdminAction(req.user._id, 'partial_settlement', jobId, 'job', `Manually settled job ${jobId}. Worker: ₹${workerAmount}, Tenant Refund: ₹${tenantAmount}.`, req.ip);
 
         res.status(200).json({
             success: true,

@@ -11,14 +11,20 @@ const Wallet = require('../wallet/wallet.model'); // Added
 const Notification = require('../notifications/notification.model');
 const Chat = require('../chat/chat.model');
 const Message = require('../chat/message.model');
-const { decryptChatMessage } = require('../../common/utils/chat-decrypt');
-const { ROLES } = require('../../common/constants/roles');
+const SystemLog = require('./systemLog.model');
+const SystemConfig = require('./systemConfig.model');
+const Rating = require('../ratings/rating.model');
+const logger = require('../../config/logger');
 const { successResponse, errorResponse } = require('../../common/utils/response');
+const { ROLES } = require('../../common/constants/roles');
 const authService = require('../auth/auth.service');
-const emailService = require('../../common/services/email.service');
 const paymentService = require('../payments/payment.service');
 const notifyHelper = require('../../common/notification.helper');
-const logger = require('../../config/logger');
+const { decryptChatMessage } = require('../../common/utils/chat-decrypt');
+const { logAdminAction } = require('../../common/utils/admin-logger');
+
+
+
 
 
 /**
@@ -170,6 +176,8 @@ const updateProfessionalStatus = async (req, res) => {
       await notifyHelper.onVerificationUpdate(professional.user, status, reason);
     }
 
+    await logAdminAction(req.userId, 'update_status', id, professional.user.role === 'worker' ? 'worker' : 'contractor', `Updated status to ${status} for ${professional.user.name}`, req.ip);
+
     return successResponse(res, 'Status updated successfully', { status });
   } catch (error) {
     logger.error(`Admin updateProfessionalStatus error: ${error.message}`);
@@ -294,6 +302,15 @@ const updateUserStatus = async (req, res) => {
     // Pre-save hook will update isActive automatically
     await user.save();
 
+    // Notify user of status change
+    try {
+      await notifyHelper.onUserStatusUpdate(user, status, reason || 'Account status updated by administrator.');
+    } catch (err) {
+      logger.error(`Failed to notify user ${userId} of status update: ${err.message}`);
+    }
+
+    await logAdminAction(req.userId, 'update_user_status', userId, 'user', `Updated user status to ${status}${reason ? `: ${reason}` : ''}`, req.ip);
+
     logger.info(`Admin ${req.userId} updated user ${userId} status to ${status}`);
 
     return successResponse(res, 'User status updated successfully', { user });
@@ -321,7 +338,10 @@ const getDashboardStats = async (req, res) => {
       completedJobs,
       emergencyJobs,
       revenueData,
-      escrowData
+      escrowData,
+      revenueTrendsRaw,
+      jobTrendsRaw,
+      recentTransactionsRaw
     ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
@@ -340,7 +360,44 @@ const getDashboardStats = async (req, res) => {
       Payment.aggregate([
         { $match: { type: 'escrow', status: { $in: ['pending', 'completed'] } } },
         { $group: { _id: null, total: { $sum: '$amount' } } }
-      ])
+      ]),
+      // Trends for Charts (Last 30 days)
+      Payment.aggregate([
+        {
+          $match: {
+            type: 'commission',
+            status: 'completed',
+            createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            amount: { $sum: "$amount" }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]),
+      Job.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) }
+          }
+        },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            count: { $sum: 1 }
+          }
+        },
+        { $sort: { _id: 1 } }
+      ]),
+      // Recent Activity Feed
+      Payment.find({ status: { $in: ['completed', 'released', 'payout'] } })
+        .sort({ createdAt: -1 })
+        .limit(6)
+        .populate('user', 'name profileImage')
+        .lean()
     ]);
 
     const totalRevenue = revenueData[0]?.total || 0;
@@ -362,7 +419,19 @@ const getDashboardStats = async (req, res) => {
       emergencyJobs,
       totalRevenue: platformStats.totalRevenue || totalRevenue,
       escrowBalance,
-      transactionCount: platformStats.transactionCount || 0
+      transactionCount: platformStats.transactionCount || 0,
+      trends: {
+        revenue: revenueTrendsRaw || [],
+        jobs: jobTrendsRaw || []
+      },
+      recentActivity: (recentTransactionsRaw || []).map(p => ({
+        id: p._id,
+        user: p.user?.name || 'Platform',
+        type: p.type,
+        amount: p.amount,
+        createdAt: p.createdAt,
+        avatar: p.user?.profileImage
+      }))
     });
   } catch (error) {
     logger.error(`Admin getDashboardStats error: ${error.message}`);
@@ -496,6 +565,8 @@ const deleteUser = async (req, res) => {
 
     logger.warn(`Admin ${req.userId} deleted user account: ${user.email} (Role: ${user.role})`);
 
+    await logAdminAction(req.userId, 'delete_account', userId, user.role, `Permanently deleted user: ${user.name} (${user.email})`, req.ip);
+
     return successResponse(res, 'User deleted successfully');
 
   } catch (error) {
@@ -510,9 +581,17 @@ const deleteUser = async (req, res) => {
  */
 const listJobs = async (req, res) => {
   try {
-    const { status } = req.query; // optional filter e.g. ?status=in_progress
+    const { status, is_emergency, search } = req.query;
     const filter = {};
     if (status) filter.status = status;
+    if (is_emergency === 'true') filter.is_emergency = true;
+
+    if (search) {
+      filter.$or = [
+        { job_title: { $regex: search, $options: 'i' } },
+        { 'location.address_text': { $regex: search, $options: 'i' } }
+      ];
+    }
 
     const jobs = await Job.find(filter)
       .populate('user_id', 'name email phone')
@@ -870,6 +949,8 @@ const broadcastNotification = async (req, res) => {
     // Send Multi-Channel Broadcast
     await notifyHelper.onBroadcast(users, title, message, type);
 
+    await logAdminAction(req.userId, 'broadcast', 'all', 'user', `Broadcasted: ${title}`, req.ip);
+
     logger.info(`Admin ${req.userId} broadcasted notification to ${users.length} users (Role: ${targetRole || 'all'})`);
 
     return successResponse(res, `Broadcast successful to ${users.length} users`);
@@ -1051,6 +1132,130 @@ const getChatMessages = async (req, res) => {
   }
 };
 
+/**
+ * System Config Management
+ */
+const getSystemConfig = async (req, res) => {
+  try {
+    let config = await SystemConfig.findOne().sort({ createdAt: -1 });
+    if (!config) {
+      config = await SystemConfig.create({}); // Create default if none exists
+    }
+    return successResponse(res, 'System configuration fetched', { config });
+  } catch (error) {
+    return errorResponse(res, 'Failed to fetch system config', 500);
+  }
+};
+
+const updateSystemConfig = async (req, res) => {
+  try {
+    const updates = req.body;
+    let config = await SystemConfig.findOne().sort({ createdAt: -1 });
+    if (!config) {
+      config = new SystemConfig(updates);
+    } else {
+      Object.assign(config, updates);
+    }
+    config.lastChangedBy = req.userId;
+    await config.save();
+
+    await logAdminAction(req.userId, 'update_config', 'system', 'system', 'Updated platform systemic parameters', req.ip);
+
+    return successResponse(res, 'System configuration updated', { config });
+  } catch (error) {
+    return errorResponse(res, 'Failed to update system config', 500);
+  }
+};
+
+/**
+ * Ratings Moderation
+ */
+const listRatings = async (req, res) => {
+  try {
+    const { isFlagged } = req.query;
+    const filter = {};
+    if (isFlagged === 'true') filter.isFlagged = true;
+
+    const ratings = await Rating.find(filter)
+      .populate('client', 'name email profileImage')
+      .populate({
+        path: 'worker',
+        populate: { path: 'user', select: 'name email profileImage' }
+      })
+      .sort({ createdAt: -1 });
+
+    const formatted = ratings.map(r => ({
+      id: r._id,
+      jobId: r.job,
+      client: r.client,
+      workerName: r.worker?.user?.name || 'Unknown',
+      rating: r.rating,
+      comment: r.comment,
+      isFlagged: r.isFlagged,
+      createdAt: r.createdAt
+    }));
+
+    return successResponse(res, 'Ratings fetched', { ratings: formatted });
+  } catch (error) {
+    return errorResponse(res, 'Failed to fetch ratings', 500);
+  }
+};
+
+const flagRating = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { isFlagged } = req.body;
+    const rating = await Rating.findByIdAndUpdate(id, { isFlagged }, { new: true });
+    if (!rating) return errorResponse(res, 'Rating not found', 404);
+
+    await logAdminAction(req.userId, 'flag_rating', id, 'rating', `${isFlagged ? 'Flagged' : 'Unflagged'} rating entry`, req.ip);
+
+    return successResponse(res, 'Rating status updated', { rating });
+  } catch (error) {
+    return errorResponse(res, 'Failed to updated rating status', 500);
+  }
+};
+
+const deleteRating = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rating = await Rating.findByIdAndDelete(id);
+    if (!rating) return errorResponse(res, 'Rating not found', 404);
+
+    await logAdminAction(req.userId, 'delete_rating', id, 'rating', 'Permanently removed rating from the system', req.ip);
+
+    return successResponse(res, 'Rating deleted successfully');
+  } catch (error) {
+    return errorResponse(res, 'Failed to delete rating', 500);
+  }
+};
+
+/**
+ * Audit Logs
+ */
+const listAuditLogs = async (req, res) => {
+  try {
+    const { type, limit = 100 } = req.query;
+    const filter = {};
+    if (type && type !== 'all') {
+      // Try to match either action or targetType
+      filter.$or = [
+        { action: type },
+        { targetType: type }
+      ];
+    }
+
+    const logs = await SystemLog.find(filter)
+      .populate('adminId', 'name email')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    return successResponse(res, 'Audit logs fetched', { logs });
+  } catch (error) {
+    return errorResponse(res, 'Failed to fetch audit logs', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -1076,6 +1281,12 @@ module.exports = {
   listLegalAuditLogs,
   listAllChats,
   getChatMessages,
+  getSystemConfig,
+  updateSystemConfig,
+  listRatings,
+  flagRating,
+  deleteRating,
+  listAuditLogs,
 };
 
 

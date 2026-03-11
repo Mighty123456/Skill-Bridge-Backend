@@ -76,9 +76,13 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
         android: {
             priority: 'high',
             notification: {
+                icon: 'launcher_icon',
+                color: '#2196F3',
                 sound: 'default',
                 channelId: 'skillbridge_main_channel',
                 clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+                visibility: 'public', // Show even on lock screen
+                priority: 'max',     // Internal importance
                 // collapseKey causes a new notification to REPLACE the previous one with the same key
                 ...(collapseKey && { tag: collapseKey }),
             },
@@ -128,6 +132,9 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
         };
     } catch (err) {
         logger.error(`FCM: Error sending multicast message: ${err.message}`);
+        if (err.message.includes('Requested entity was not found')) {
+            logger.error('FCM: CRITICAL CONFIG ERROR - Your backend Firebase Service Account likely does not match the app\'s google-services.json project!');
+        }
         return { success: false, error: err.message };
     }
 };

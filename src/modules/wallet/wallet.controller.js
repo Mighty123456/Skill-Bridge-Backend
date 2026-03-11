@@ -1,5 +1,6 @@
 const WalletService = require('./wallet.service');
 const PaymentService = require('../payments/payment.service');
+const { logAdminAction } = require('../../common/utils/admin-logger');
 
 /**
  * Get current user's wallet
@@ -190,6 +191,9 @@ exports.processWithdrawal = async (req, res, next) => {
         }
 
         const withdrawal = await WalletService.processWithdrawal(id, req.user._id, status, notes);
+
+        await logAdminAction(req.user._id, `withdrawal_${status}`, id, 'payment', `Withdrawal ${id} was ${status}. Notes: ${notes || 'None'}`, req.ip);
+
         res.status(200).json({
             success: true,
             message: `Withdrawal ${status} successfully`,
