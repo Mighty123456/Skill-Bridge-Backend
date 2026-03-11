@@ -1137,7 +1137,7 @@ exports.raiseDispute = async (jobId, userId, reason, files) => {
     return job;
 };
 
-exports.resolveDispute = async (jobId, adminId, decision, notes) => {
+exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 0, tenantAmount = 0) => {
     const job = await Job.findById(jobId)
         .populate('user_id', 'name email')
         .populate('selected_worker_id', 'name email');
@@ -1146,10 +1146,12 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
 
     job.dispute.status = 'resolved';
     job.dispute.resolved_at = new Date();
+    job.dispute.decision = decision;
+    job.dispute.resolution_note = notes;
 
     let notificationTitle = 'Dispute Resolved';
 
-    // Decision Logic: 'release_payment' or 'refund_client'
+    // Decision Logic: 'release_payment', 'refund_client', or 'partial_refund'
     if (decision === 'release_payment') {
         try {
             await PaymentService.releasePayment(jobId);
@@ -1163,7 +1165,6 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
     } else if (decision === 'refund_client') {
         try {
             const refund = await PaymentService.refundPayment(jobId);
-            // Refund email notification is already handled in PaymentService.refundPayment
             job.status = 'cancelled';
             job.payment_released = false;
             appendTimeline(job, 'cancelled', 'admin', `Dispute resolved in favor of client. Note: ${notes}`);
@@ -1171,8 +1172,19 @@ exports.resolveDispute = async (jobId, adminId, decision, notes) => {
         } catch (e) {
             throw new Error(`Failed to refund payment: ${e.message}`);
         }
+    } else if (decision === 'partial_refund') {
+        try {
+            await PaymentService.processSettlement(jobId, workerAmount, tenantAmount, adminId, notes);
+            // Settlement handles updating status and timeline inherently but we sync here too
+            job.status = 'completed';
+            job.payment_released = (workerAmount > 0);
+            notificationTitle = 'Dispute Resolved: Partial Refund Issued';
+        } catch (e) {
+            throw new Error(`Failed to process settlement: ${e.message}`);
+        }
     } else {
         job.status = 'cooling_window';
+        job.cooling_period.dispute_raised = false;
         appendTimeline(job, 'cooling_window', 'admin', `Dispute resolved: Continuing cooling period. Note: ${notes}`);
     }
 

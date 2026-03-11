@@ -134,6 +134,21 @@ exports.getHistory = async (req, res, next) => {
 };
 
 /**
+ * Get Stripe Payout Status
+ */
+exports.getPayoutStatus = async (req, res, next) => {
+    try {
+        const payouts = await PaymentService.getStripePayouts(req.user._id);
+        res.status(200).json({
+            success: true,
+            data: payouts
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * ADMIN: Get Pending Withdrawals
  */
 exports.getPendingWithdrawals = async (req, res, next) => {

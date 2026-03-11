@@ -280,7 +280,57 @@ exports.handleStripeWebhook = async (req, res) => {
                             detectionSource: 'stripe_webhook'
                         }
                     });
+
+                    // Auto-mark job as disputed if not already
+                    if (disputePayment.job) {
+                        const job = await Job.findById(disputePayment.job).session(session_stripe);
+                        if (job && !job.dispute.is_disputed) {
+                            job.dispute.is_disputed = true;
+                            job.dispute.reason = `External Chargeback: ${dispute.reason}`;
+                            job.dispute.opened_at = new Date();
+                            job.status = 'disputed';
+                            await job.save({ session: session_stripe });
+                        }
+                    }
                 }
+                break;
+
+            case 'charge.dispute.closed':
+                const closedDispute = event.data.object;
+                const closedChargeId = closedDispute.charge;
+                const status = closedDispute.status; // won, lost
+
+                const closedDisputePayment = await Payment.findOne({
+                    $or: [
+                        { transactionId: closedChargeId },
+                        { 'gatewayResponse.chargeId': closedChargeId }
+                    ]
+                }).session(session_stripe);
+
+                if (closedDisputePayment && closedDisputePayment.job) {
+                    const job = await Job.findById(closedDisputePayment.job).session(session_stripe);
+                    if (job) {
+                        job.dispute.status = 'closed';
+                        job.dispute.resolved_at = new Date();
+                        job.dispute.resolution_note = `Stripe Dispute Closed: ${status.toUpperCase()}`;
+                        
+                        // If we won, we might want to release payment. If we lost, it's already gone.
+                        if (status === 'won') {
+                            job.status = 'completed';
+                        } else {
+                            job.status = 'cancelled';
+                        }
+                        await job.save({ session: session_stripe });
+                    }
+                }
+                break;
+
+            case 'charge.dispute.funds_withdrawn':
+                logger.warn(`💸 Funds withdrawn for dispute on charge ${event.data.object.charge}`);
+                break;
+
+            case 'charge.dispute.funds_reinstated':
+                logger.info(`💰 Funds reinstated for won dispute on charge ${event.data.object.charge}`);
                 break;
 
             case 'payment_intent.payment_failed':
@@ -389,7 +439,7 @@ exports.getJobPaymentDetails = async (req, res, next) => {
  */
 exports.processSettlement = async (req, res, next) => {
     try {
-        const { jobId, workerAmount, tenantAmount } = req.body;
+        const { jobId, workerAmount, tenantAmount, notes } = req.body;
 
         if (!jobId || workerAmount === undefined || tenantAmount === undefined) {
             return res.status(400).json({ success: false, message: 'jobId, workerAmount, and tenantAmount are required' });
@@ -399,7 +449,8 @@ exports.processSettlement = async (req, res, next) => {
             jobId,
             Number(workerAmount),
             Number(tenantAmount),
-            req.user._id
+            req.user._id,
+            notes
         );
 
         res.status(200).json({

@@ -599,7 +599,7 @@ exports.refundPayment = async (jobId) => {
  * Process Settlement (Split escrow between tenant and worker)
  * Used for dispute resolution or mutual cancellations with partial pay
  */
-exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) => {
+exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId, notes) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -668,10 +668,18 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
             // Credit worker wallet
             const workerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
             if (!workerWallet) {
-                // If no wallet exists for some reason, create one or throw? Service handles credit usually.
                 await WalletService.creditWallet(job.selected_worker_id, workerAmount, session);
             } else {
-                workerWallet.balance += workerAmount;
+                // Check for automated payout (Stripe Connect)
+                const stripeResult = await exports.processStripeTransfer(job.selected_worker_id, workerAmount, jobId);
+                
+                if (stripeResult.success) {
+                    workerWallet.balance += workerAmount;
+                    appendTimeline(job, 'completed', 'system', `Settlement payout via Stripe Connect successful. Transfer ID: ${stripeResult.transferId}`);
+                } else {
+                    workerWallet.balance += workerAmount;
+                    logger.info(`Manual settlement payout required for Job ${jobId}. Reason: ${stripeResult.message}`);
+                }
                 await workerWallet.save({ session });
             }
 
@@ -690,10 +698,17 @@ exports.processSettlement = async (jobId, workerAmount, tenantAmount, adminId) =
         }
 
         // 5. Update Job Status
-        job.status = 'resolved';
+        job.status = 'completed'; // Changed from 'resolved' to standard status
+        if (job.dispute && job.dispute.is_disputed) {
+            job.dispute.status = 'resolved';
+            job.dispute.resolved_at = new Date();
+            job.dispute.decision = 'partial_refund';
+            job.dispute.resolution_note = notes;
+        }
+        
         job.timeline.push({
-            status: 'resolved',
-            note: `Settlement processed by admin. Worker paid ₹${workerAmount}, Tenant refunded ₹${tenantAmount}.`,
+            status: 'completed',
+            note: `Settlement processed by admin. Worker paid ₹${workerAmount}, Tenant refunded ₹${tenantAmount}.${notes ? ' Note: ' + notes : ''}`,
             timestamp: new Date()
         });
         await job.save({ session });
@@ -950,10 +965,26 @@ exports.processStripeTransfer = async (workerId, amount, jobId) => {
             metadata: { jobId: jobId.toString(), workerId: workerId.toString() }
         });
 
+        // Track success on worker profile
+        worker.lastPayoutAt = new Date();
+        worker.lastPayoutError = null;
+        await worker.save();
+
         logger.info(`Stripe: Automated transfer successful for Job ${jobId}. Transfer ID: ${transfer.id}`);
         return { success: true, transferId: transfer.id };
     } catch (error) {
         logger.error(`Stripe Transfer Failed for worker ${workerId}: ${error.message}`);
+        
+        // Track failure on worker profile
+        try {
+            await Worker.findOneAndUpdate(
+                { user: workerId },
+                { lastPayoutError: error.message }
+            );
+        } catch (dbErr) {
+            logger.error(`Failed to update worker payout error: ${dbErr.message}`);
+        }
+
         return { success: false, message: error.message };
     }
 };
@@ -1020,3 +1051,28 @@ exports.createStripeLoginLink = async (workerId) => {
     const loginLink = await stripe.accounts.createLoginLink(worker.stripeAccountId);
     return loginLink.url;
 };
+
+/**
+ * STRIPE: Get Payouts for a Connected Account
+ */
+exports.getStripePayouts = async (userId) => {
+    const stripe = getStripe();
+    if (!stripe) throw new Error('Stripe not configured');
+
+    const worker = await Worker.findOne({ user: userId });
+    if (!worker || !worker.stripeAccountId) {
+        return [];
+    }
+
+    try {
+        const payouts = await stripe.payouts.list(
+            { limit: 20 },
+            { stripeAccount: worker.stripeAccountId }
+        );
+        return payouts.data;
+    } catch (e) {
+        logger.error(`Stripe: Failed to fetch payouts for worker ${userId}: ${e.message}`);
+        return [];
+    }
+};
+

@@ -167,6 +167,9 @@ const workerSchema = new mongoose.Schema(
     // Financial (Stripe Connect)
     stripeAccountId: { type: String, trim: true },
     stripeOnboarded: { type: Boolean, default: false },
+    payoutEnabled: { type: Boolean, default: true },
+    lastPayoutError: { type: String, trim: true },
+    lastPayoutAt: { type: Date },
 
   },
   {

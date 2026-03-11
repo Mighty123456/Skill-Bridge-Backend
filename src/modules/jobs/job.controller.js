@@ -479,8 +479,8 @@ exports.raiseDispute = async (req, res) => {
 exports.resolveDispute = async (req, res) => {
     try {
         const { id } = req.params;
-        const { decision, notes } = req.body; // admin only
-        const job = await JobService.resolveDispute(id, req.user._id, decision, notes);
+        const { decision, notes, workerAmount, tenantAmount } = req.body; // admin only
+        const job = await JobService.resolveDispute(id, req.user._id, decision, notes, workerAmount, tenantAmount);
         res.json({ success: true, message: 'Dispute resolved', data: job });
     } catch (error) {
         logger.error('Resolve Dispute Error:', error);

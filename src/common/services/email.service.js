@@ -878,6 +878,9 @@ const sendDisputeResolvedEmail = async (email, data) => {
     } else if (decision === 'refund_client') {
       decisionText = "Funds Refunded to Client";
       color = "#ef4444";
+    } else if (decision === 'partial_refund') {
+      decisionText = "Partial Settlement Issued";
+      color = "#f59e0b"; // Amber
     }
 
     const html = baseEmailTemplate(`

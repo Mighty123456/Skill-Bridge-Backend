@@ -180,7 +180,9 @@ const jobSchema = new mongoose.Schema(
             evidence_photos: [{ type: String }],
             opened_at: { type: Date },
             resolved_at: { type: Date },
-            status: { type: String, enum: ['open', 'resolved', 'closed'], default: 'open' }
+            status: { type: String, enum: ['open', 'resolved', 'closed'], default: 'open' },
+            decision: { type: String, enum: ['release_payment', 'refund_client', 'partial_refund', 'closed'] },
+            resolution_note: { type: String, trim: true }
         },
 
         payment_released: { type: Boolean, default: false },

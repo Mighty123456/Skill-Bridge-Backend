@@ -758,8 +758,11 @@ const listDisputes = async (req, res) => {
       tenant: job.user_id,
       worker: job.selected_worker_id,
       reason: job.dispute.reason,
+      evidencePhotos: job.dispute.evidence_photos || [],
       openedAt: job.dispute.opened_at,
       status: job.dispute.status,
+      decision: job.dispute.decision,
+      resolutionNote: job.dispute.resolution_note,
       totalCost: job.diagnosis_report?.final_total_cost || 0
     }));
 

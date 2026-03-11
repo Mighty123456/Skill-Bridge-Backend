@@ -269,6 +269,22 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
         withdrawal.processedAt = new Date();
         withdrawal.processedBy = adminId;
 
+        if (status === 'completed') {
+            // Trigger actual transfer via Stripe Connect if onboarded
+            try {
+                const PaymentService = require('../payments/payment.service');
+                const stripeResult = await PaymentService.processStripeTransfer(withdrawal.user, withdrawal.netAmount, `WITHDRAWAL_${withdrawal._id}`);
+                
+                if (stripeResult.success) {
+                    withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
+                } else {
+                    logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Manual transfer required.`);
+                }
+            } catch (err) {
+                logger.error(`Withdrawal Stripe integration error: ${err.message}`);
+            }
+        }
+
         if (status === 'rejected') {
             // Give money back to user wallet if rejected
             const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
