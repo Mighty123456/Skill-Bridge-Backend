@@ -957,3 +957,66 @@ exports.processStripeTransfer = async (workerId, amount, jobId) => {
         return { success: false, message: error.message };
     }
 };
+
+/**
+ * Create Stripe Onboarding Link for Worker
+ */
+exports.createStripeOnboardingLink = async (workerId, baseUrl) => {
+    const stripe = getStripe();
+    if (!stripe) throw new Error('Stripe not configured');
+
+    const worker = await Worker.findOne({ user: workerId });
+    if (!worker) throw new Error('Worker profile not found');
+
+    let stripeAccountId = worker.stripeAccountId;
+
+    // 1. Create Account if not exists
+    if (!stripeAccountId) {
+        const User = require('../users/user.model');
+        const user = await User.findById(workerId).lean();
+        
+        const account = await stripe.accounts.create({
+            type: 'express',
+            country: 'US', // Changed to US for testing to avoid GST requirements
+            email: user.email,
+            capabilities: {
+                card_payments: { requested: true },
+                transfers: { requested: true },
+            },
+            business_type: 'individual',
+            metadata: { userId: workerId.toString() }
+        });
+
+        stripeAccountId = account.id;
+        worker.stripeAccountId = stripeAccountId;
+        await worker.save();
+        logger.info(`Stripe: Created connected account ${stripeAccountId} for worker ${workerId}`);
+    }
+
+    // 2. Create Onboarding Link
+    const accountLink = await stripe.accountLinks.create({
+        account: stripeAccountId,
+        refresh_url: `${baseUrl}/onboarding-refresh?workerId=${workerId}`,
+        return_url: `${baseUrl}/onboarding-success?workerId=${workerId}`,
+        type: 'account_onboarding',
+    });
+
+    return accountLink.url;
+};
+
+/**
+ * Create Stripe Login Link for Worker
+ * Allows workers to access their Express Dashboard to see payouts/bank info.
+ */
+exports.createStripeLoginLink = async (workerId) => {
+    const stripe = getStripe();
+    if (!stripe) throw new Error('Stripe not configured');
+
+    const worker = await Worker.findOne({ user: workerId });
+    if (!worker || !worker.stripeAccountId) {
+        throw new Error('Stripe account not found for this worker');
+    }
+
+    const loginLink = await stripe.accounts.createLoginLink(worker.stripeAccountId);
+    return loginLink.url;
+};

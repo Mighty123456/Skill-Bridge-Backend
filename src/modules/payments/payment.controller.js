@@ -12,6 +12,7 @@ const WalletService = require('../wallet/wallet.service');
 const Job = require('../jobs/job.model');
 const JobService = require('../jobs/job.service');
 const User = require('../users/user.model');
+const Worker = require('../workers/worker.model');
 const mongoose = require('mongoose');
 
 /**
@@ -310,6 +311,24 @@ exports.handleStripeWebhook = async (req, res) => {
             case 'checkout.session.expired':
                 const expiredSession = event.data.object;
                 logger.info(`Stripe Checkout Session ${expiredSession.id} expired.`);
+                break;
+
+            case 'account.updated':
+                const account = event.data.object;
+                logger.info(`👤 Stripe Account Updated: ${account.id}`);
+                
+                // If the account has finished onboarding and can receive payouts
+                if (account.details_submitted && account.payouts_enabled) {
+                    const worker = await Worker.findOne({ stripeAccountId: account.id }).session(session_stripe);
+                    if (worker && !worker.stripeOnboarded) {
+                        worker.stripeOnboarded = true;
+                        await worker.save({ session: session_stripe });
+                        logger.info(`✅ Worker ${worker.user} fully onboarded for Stripe Connect.`);
+                        
+                        // Notify worker
+                        await notifyHelper.onStripeOnboarded(worker.user);
+                    }
+                }
                 break;
 
             default:
@@ -655,6 +674,91 @@ exports.verifyJobPayment = async (req, res, next) => {
         });
     } catch (e) {
         logger.error(`❌ verifyJobPayment Error: ${e.message}`);
+        next(e);
+    }
+};
+
+/**
+ * STRIPE: Init Onboarding for Worker
+ */
+exports.onboardWorker = async (req, res, next) => {
+    try {
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const baseUrl = `${protocol}://${host}/api/payments`;
+
+        const url = await PaymentService.createStripeOnboardingLink(req.user.id, baseUrl);
+        
+        res.status(200).json({
+            success: true,
+            url
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+/**
+ * Handle Onboarding Success
+ */
+exports.stripeOnboardingSuccess = async (req, res) => {
+    const { workerId } = req.query;
+    
+    // Update worker status if possible (better to use webhooks but this is a fallback)
+    const worker = await Worker.findOne({ user: workerId });
+    if (worker) {
+        worker.stripeOnboarded = true;
+        await worker.save();
+    }
+
+    res.send(`
+        <html>
+            <head>
+                <title>Success</title>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    body { font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f4f7f6; }
+                    .card { background: white; padding: 2rem; border-radius: 12px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+                    .btn { background: #008080; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; }
+                </style>
+            </head>
+            <body>
+                <div class="card">
+                    <h1>Stripe Connected!</h1>
+                    <p>Your bank account has been linked successfully.</p>
+                    <a href="skillbridge://stripe/onboarding/success" class="btn">Return to App</a>
+                </div>
+            </body>
+        </html>
+    `);
+};
+
+/**
+ * Handle Onboarding Refresh
+ */
+exports.stripeOnboardingRefresh = async (req, res) => {
+    res.send(`
+        <html>
+            <body>
+                <h1>Session Expired</h1>
+                <p>Please try again from the app.</p>
+                <a href="skillbridge://stripe/onboarding/refresh">Return to App</a>
+            </body>
+        </html>
+    `);
+};
+
+/**
+ * STRIPE: Get Login Link for Worker Dashboard
+ */
+exports.getWorkerLoginLink = async (req, res, next) => {
+    try {
+        const url = await PaymentService.createStripeLoginLink(req.user.id);
+        res.status(200).json({
+            success: true,
+            url
+        });
+    } catch (e) {
         next(e);
     }
 };

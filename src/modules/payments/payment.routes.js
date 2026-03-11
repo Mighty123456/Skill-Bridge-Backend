@@ -22,6 +22,12 @@ router.get('/cancel', paymentController.stripeCancel);
 // Verify payment status (polling fallback)
 router.get('/verify/:jobId', protect, paymentController.verifyJobPayment);
 
+// Stripe Connect Onboarding
+router.post('/onboard-worker', protect, authorize('worker'), paymentController.onboardWorker);
+router.get('/login-link', protect, authorize('worker'), paymentController.getWorkerLoginLink);
+router.get('/onboarding-success', paymentController.stripeOnboardingSuccess);
+router.get('/onboarding-refresh', paymentController.stripeOnboardingRefresh);
+
 // Stripe Webhook (Stripe needs to call this without JWT)
 // Note: express.raw is handled in app.js for this path
 router.post('/webhook', paymentController.handleStripeWebhook);

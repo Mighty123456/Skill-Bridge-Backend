@@ -673,3 +673,27 @@ exports.onJobStatusUpdate = async (userId, title, body, data) => {
         data
     });
 };
+
+// =============================================================================
+// ✅ EVENT 18: Stripe Onboarding Complete → Notify Worker
+// =============================================================================
+exports.onStripeOnboarded = async (userId) => {
+    const title = '🏦 Bank Account Linked!';
+    const body = 'Your Stripe account is fully set up. You can now receive automated payouts for your completed jobs.';
+
+    await _sendPushToUser(userId, title, body, {
+        type: 'system',
+        screen: 'wallet',
+        recipientRole: 'worker'
+    });
+
+    await notificationService.createNotification({
+        recipient: userId,
+        title,
+        message: body,
+        type: 'system',
+        data: { screen: 'wallet' }
+    });
+
+    logger.info(`[NotifyHelper] onStripeOnboarded: Worker ${userId} notified.`);
+};
