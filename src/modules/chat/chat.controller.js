@@ -15,18 +15,23 @@ exports.initiateChat = async (req, res) => {
             return errorResponse(res, 'Recipient ID and Job ID are required', 400);
         }
 
-        // Check if chat exists for this job and participants
+        // Check if chat exists for these participants (Reuse existing chat for the same person)
         let chat = await Chat.findOne({
-            job: jobId,
             participants: { $all: [senderId, recipientId] }
         });
 
         if (chat) {
-            // Un-delete if the user had previously deleted it
+            // Update to latest job context and reactivate
+            chat.job = jobId;
+            chat.status = 'active'; 
+            chat.lastMessageTime = new Date(); // Move to top of list as it's "re-initiated"
+
+            // Un-delete for the sender
             if (chat.deletedBy && chat.deletedBy.map(id => id.toString()).includes(senderId)) {
                 chat.deletedBy = chat.deletedBy.filter(id => id.toString() !== senderId);
-                await chat.save();
             }
+            
+            await chat.save();
 
             chat = await Chat.findById(chat._id)
                 .populate('participants', 'name profileImage role')

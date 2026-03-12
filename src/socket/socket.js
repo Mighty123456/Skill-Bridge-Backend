@@ -105,25 +105,27 @@ const initializeSocket = (server) => {
                     readBy: { $ne: userId }
                 });
 
+                let messageIds = [];
                 if (unreadMessages.length > 0) {
-                    const messageIds = unreadMessages.map(m => m._id);
+                    messageIds = unreadMessages.map(m => m._id);
                     await Message.updateMany(
                         { _id: { $in: messageIds } },
                         { $addToSet: { readBy: userId, deliveredTo: userId } }
                     );
-
-                    // Update unread count
-                    await Chat.findByIdAndUpdate(chatIdStr, {
-                        $set: { [`unreadCounts.${userId}`]: 0 }
-                    });
-
-                    // Broadcast to the room so sender sees blue ticks
-                    io.to(chatIdStr).emit('messages_read', {
-                        chatId: chatIdStr,
-                        messageIds: messageIds,
-                        readBy: userId
-                    });
                 }
+
+                // ALWAYS Reset unread count for this user in this chat
+                await Chat.findByIdAndUpdate(chatIdStr, {
+                    $set: { [`unreadCounts.${userId}`]: 0 }
+                });
+
+                // Broadcast to the room so sender sees blue ticks (if any messages were read)
+                // or just to confirm read status for the current user's other devices/list view
+                io.to(chatIdStr).emit('messages_read', {
+                    chatId: chatIdStr,
+                    messageIds: messageIds,
+                    readBy: userId
+                });
             } catch (e) {
                 logger.error(`Socket mark_read error: ${e.message}`);
             }

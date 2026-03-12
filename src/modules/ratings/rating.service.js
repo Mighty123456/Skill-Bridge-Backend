@@ -32,8 +32,14 @@ class RatingService {
 
         // Create Rating document
         const newRating = await Rating.create({
-            ...ratingData,
+            job: jobId,
+            client: clientId,
             worker: workerProfile._id,
+            rating,
+            comment: ratingData.comment,
+            punctualityScore: ratingData.punctualityScore || 5,
+            communicationScore: ratingData.communicationScore || 5,
+            workQualityScore: ratingData.workQualityScore || 5,
             isEmergency: job.is_emergency || false
         });
 
