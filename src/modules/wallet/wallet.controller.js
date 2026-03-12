@@ -157,7 +157,7 @@ exports.exportTransactions = async (req, res, next) => {
         
         res.status(200).json({
             success: true,
-            downloadUrl: `${baseUrl}/api/wallet/transactions/download?token=${token}`
+            downloadUrl: `/wallet/transactions/download?token=${token}`
         });
     } catch (e) {
         next(e);
