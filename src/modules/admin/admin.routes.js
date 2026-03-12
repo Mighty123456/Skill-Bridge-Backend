@@ -251,6 +251,14 @@ router.delete(
   adminController.deleteRating
 );
 
+// Role Stats
+router.get(
+  '/roles/stats',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getRoleStats
+);
+
 // Audit Logs
 router.get(
   '/audit-logs',

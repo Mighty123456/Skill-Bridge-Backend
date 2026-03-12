@@ -1256,6 +1256,41 @@ const listAuditLogs = async (req, res) => {
   }
 };
 
+/**
+ * Get user counts by role for Role Management
+ * GET /api/admin/roles/stats
+ */
+const getRoleStats = async (req, res) => {
+  try {
+    const stats = await User.aggregate([
+      {
+        $group: {
+          _id: '$role',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format as an object for easier consumption { admin: 2, user: 15, ... }
+    const roleCounts = {};
+    Object.values(ROLES).forEach(role => {
+      roleCounts[role] = 0;
+    });
+
+    stats.forEach(s => {
+      if (s._id) roleCounts[s._id] = s.count;
+    });
+
+    return successResponse(res, 'Role statistics fetched', { 
+      stats: roleCounts,
+      total: Object.values(roleCounts).reduce((a, b) => a + b, 0)
+    });
+  } catch (error) {
+    logger.error(`Admin getRoleStats error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch role statistics', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -1287,6 +1322,7 @@ module.exports = {
   flagRating,
   deleteRating,
   listAuditLogs,
+  getRoleStats,
 };
 
 
