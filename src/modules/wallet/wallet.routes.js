@@ -25,6 +25,10 @@ router.get('/transactions', authenticate, WalletController.getHistory); // Alias
 router.get('/payout-status', authenticate, WalletController.getPayoutStatus);
 router.get('/earnings-stats', authenticate, WalletController.getEarningsStats);
 
+// Export Transactions
+router.get('/transactions/export', authenticate, WalletController.exportTransactions);
+router.get('/transactions/download', WalletController.downloadExport);
+
 // Admin Routes
 router.get('/admin/withdrawals', authenticate, authorize('admin'), WalletController.getPendingWithdrawals);
 router.patch('/admin/withdrawals/:id', authenticate, authorize('admin'), WalletController.processWithdrawal);

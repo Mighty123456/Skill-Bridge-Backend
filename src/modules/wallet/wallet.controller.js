@@ -134,6 +134,117 @@ exports.getHistory = async (req, res, next) => {
     }
 };
 
+const crypto = require('crypto');
+const exportTokens = new Map();
+
+/**
+ * Generate a tokenized download URL for transaction export
+ */
+exports.exportTransactions = async (req, res, next) => {
+    try {
+        const token = crypto.randomBytes(32).toString('hex');
+        
+        // Store query details with user ID to build history later
+        const exportData = {
+            userId: req.user._id,
+            query: req.query,
+            expiresAt: Date.now() + 5 * 60 * 1000 // Valid for 5 minutes
+        };
+        exportTokens.set(token, exportData);
+
+        const config = require('../../config/env');
+        const baseUrl = config.API_URL || `${req.protocol}://${req.get('host')}`;
+        
+        res.status(200).json({
+            success: true,
+            downloadUrl: `${baseUrl}/api/wallet/transactions/download?token=${token}`
+        });
+    } catch (e) {
+        next(e);
+    }
+};
+
+/**
+ * Download CSV file for transaction export
+ */
+exports.downloadExport = async (req, res, next) => {
+    try {
+        const { token } = req.query;
+        if (!token || !exportTokens.has(token)) {
+            return res.status(400).send('Invalid or expired export token');
+        }
+
+        const exportData = exportTokens.get(token);
+        if (Date.now() > exportData.expiresAt) {
+            exportTokens.delete(token);
+            return res.status(400).send('Export token expired');
+        }
+
+        const { userId, query } = exportData;
+        
+        const Payment = require('../payments/payment.model');
+        const Withdrawal = require('./withdrawal.model');
+        const { type } = query;
+        
+        const paymentQuery = { 
+            $or: [{ user: userId }, { worker: userId }]
+        };
+        if (type) paymentQuery.type = type;
+
+        const payments = await Payment.find(paymentQuery)
+            .populate('job', 'job_title')
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const withdrawals = await Withdrawal.find({ user: userId })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Combine and sort by date
+        const allTransactions = [
+            ...payments.map(p => ({
+                date: p.createdAt,
+                type: 'payment',
+                subType: p.type,
+                amount: p.amount,
+                status: p.status,
+                description: p.type === 'escrow' ? `Escrow for job` : 
+                           p.type === 'payout' ? `Payment received` :
+                           p.type === 'topup' ? `Wallet top-up` :
+                           p.type === 'refund' ? `Refund` : p.type,
+                transactionId: p.transactionId || 'N/A'
+            })),
+            ...withdrawals.map(w => ({
+                date: w.createdAt,
+                type: 'withdrawal',
+                subType: w.type,
+                amount: w.amount,
+                status: w.status,
+                description: `Withdrawal (${w.type})`,
+                transactionId: 'N/A'
+            }))
+        ].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+        // Generate CSV string
+        let csv = 'Date,Type,Description,Amount,Status,Transaction ID\n';
+        allTransactions.forEach(t => {
+            const date = new Date(t.date).toLocaleString().replace(/,/g, '');
+            const description = `"${t.description.replace(/"/g, '""')}"`;
+            csv += `${date},${t.subType},${description},${t.amount},${t.status},${t.transactionId}\n`;
+        });
+
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=transactions_export.csv');
+        res.status(200).send(csv);
+
+        // Consume token
+        exportTokens.delete(token);
+    } catch (e) {
+        console.error("Download Error:", e);
+        res.status(500).send('Error generating export');
+    }
+};
+
 /**
  * Get Stripe Payout Status
  */
