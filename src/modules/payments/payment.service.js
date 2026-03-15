@@ -57,6 +57,7 @@ const signPayment = async (payment, session = null) => {
  */
 exports.calculateBreakdown = async (jobAmount, workerId) => {
     let commissionRate = COMMISSION_RATE; // Default 15%
+    const GST_RATE = 0.18; // 18% Professional GST standard
 
     if (workerId) {
         const worker = await Worker.findOne({ user: workerId });
@@ -67,18 +68,43 @@ exports.calculateBreakdown = async (jobAmount, workerId) => {
         }
     }
 
-    const commission = Math.round(jobAmount * commissionRate);
-    const workerAmount = jobAmount - commission;
-    const totalUserPayable = jobAmount + PROTECTION_FEE;
-    const platformRevenue = commission + PROTECTION_FEE;
+    // 1. Protection Fee Calculation (Tenant Side)
+    const baseProtectionFee = PROTECTION_FEE;
+    const protectionGST = Math.round(baseProtectionFee * GST_RATE);
+    const totalProtection = baseProtectionFee + protectionGST;
+
+    // 2. Platform Commission Calculation (Worker Side)
+    const baseCommission = Math.round(jobAmount * commissionRate);
+    const commissionGST = Math.round(baseCommission * GST_RATE);
+    const totalCommissionDeduction = baseCommission + commissionGST;
+
+    // 3. Split GST for transparency (9% CGST + 9% SGST)
+    const protectionCGST = Number((protectionGST / 2).toFixed(2));
+    const protectionSGST = Number((protectionGST / 2).toFixed(2));
+    const commissionCGST = Number((commissionGST / 2).toFixed(2));
+    const commissionSGST = Number((commissionGST / 2).toFixed(2));
+
+    // 4. Final Totals
+    const workerAmount = Math.max(0, jobAmount - totalCommissionDeduction);
+    const totalUserPayable = jobAmount + totalProtection;
+    const platformRevenue = baseCommission + baseProtectionFee;
+    const totalGST = protectionGST + commissionGST;
 
     return {
         jobAmount,
-        protectionFee: PROTECTION_FEE,
-        commission,
+        protectionFee: baseProtectionFee,
+        protectionTax: protectionGST,
+        protectionCGST,
+        protectionSGST,
+        commission: baseCommission,
+        commissionTax: commissionGST,
+        commissionCGST,
+        commissionSGST,
         workerAmount,
         totalUserPayable,
         platformRevenue,
+        totalGST,
+        gstRate: GST_RATE,
         rateApplied: commissionRate
     };
 };

@@ -44,6 +44,22 @@ exports.getFinancialStats = async (req, res) => {
             { $group: { _id: null, totalPending: { $sum: '$pendingBalance' } } }
         ]);
 
+        // Calculate Tax Liability (Sum all GST collected in gatewayResponse.breakdown)
+        const taxResults = await Payment.aggregate([
+            { 
+                $match: { 
+                    status: { $in: ['completed', 'released'] },
+                    'gatewayResponse.breakdown.totalGST': { $exists: true }
+                } 
+            },
+            { 
+                $group: { 
+                    _id: null, 
+                    totalTax: { $sum: '$gatewayResponse.breakdown.totalGST' } 
+                } 
+            }
+        ]);
+
         // Mapping types to readable stats
         const getStat = (type) => jobStats.find(s => s._id === type)?.total || 0;
 
@@ -52,6 +68,7 @@ exports.getFinancialStats = async (req, res) => {
             currentEscrowedFunds: escrowResults[0]?.totalEscrow || 0,
             pendingPayouts: totalPendingResults[0]?.totalPending || 0,
             totalCommission: getStat('commission'),
+            totalTaxCollected: taxResults[0]?.totalTax || 0,
             totalRefunds: getStat('refund'),
             totalPayouts: getStat('payout'),
             totalTopups: getStat('topup')

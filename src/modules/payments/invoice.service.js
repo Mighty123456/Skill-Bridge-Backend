@@ -66,14 +66,21 @@ class InvoiceService {
 
     /**
      * Generate Invoice for Tenant (Job/Escrow payment)
-     */
     async generateTenantInvoice(payment, job, user) {
         const jobId = job?._id ? job._id.toString().slice(-6).toUpperCase() : 'N/A';
         const jobTitle = job?.job_title || 'Service';
         const workerName = job?.selected_worker_id?.name || 'SkillBridge Verified Partner';
         const locationText = job?.location?.address_text || job?.location?.address || 'On-site Service';
         const invId = (payment.transactionId || 'N/A').slice(-8).toUpperCase();
-        const amount = Number(payment.amount || 0);
+        
+        // Extract breakdown from gatewayResponse
+        const breakdown = payment.gatewayResponse?.breakdown || {};
+        const jobAmount = Number(breakdown.jobAmount || 0);
+        const protectionFee = Number(breakdown.protectionFee || 0);
+        const protectionTax = Number(breakdown.protectionTax || 0);
+        const cgst = Number(breakdown.protectionCGST || (protectionTax / 2));
+        const sgst = Number(breakdown.protectionSGST || (protectionTax / 2));
+        const totalAmount = Number(payment.amount || 0);
 
         const html = `
       <!DOCTYPE html>
@@ -96,8 +103,8 @@ class InvoiceService {
           .table td { padding: 16px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
           
           .summary-container { margin-top: 20px; display: table; width: 100%; }
-          .summary-spacer { display: table-cell; width: 60%; }
-          .summary-content { display: table-cell; width: 40%; }
+          .summary-spacer { display: table-cell; width: 55%; }
+          .summary-content { display: table-cell; width: 45%; }
           
           .summary-row { display: table; width: 100%; padding: 8px 0; border-bottom: 1px solid #f1f5f9; }
           .summary-label { display: table-cell; font-size: 14px; color: #64748b; }
@@ -108,6 +115,7 @@ class InvoiceService {
           
           .footer { margin-top: 80px; padding-top: 20px; border-top: 1px solid #e2e8f0; font-size: 11px; color: #94a3b8; text-align: center; }
           .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; background: #f0fdf4; color: #166534; font-size: 12px; font-weight: 700; margin-top: 10px; }
+          .sac-code { font-size: 10px; color: #94a3b8; margin-top: 4px; }
         </style>
       </head>
       <body>
@@ -134,9 +142,12 @@ class InvoiceService {
           </div>
           <div class="meta-box">
             <div class="meta-title">Service Provider</div>
-            <div style="font-weight: 700; font-size: 14px;">${workerName}</div>
-            <div style="font-size: 12px; color: #64748b; margin-top: 4px;">
-              Service Location: ${locationText}
+            <div style="font-weight: 700; font-size: 14px;">SkillBridge Technologies Private Limited</div>
+            <div style="font-size: 11px; color: #475569; margin-top: 2px;">GSTIN: 29AABCU1234A1Z1</div>
+            <div style="font-size: 11px; color: #64748b; margin-top: 4px;">
+              Partner: ${workerName}<br>
+              Service Location: ${locationText}<br>
+              Managed Marketplace Office: HSR Layout, Bengaluru, 560102
             </div>
           </div>
         </div>
@@ -151,12 +162,23 @@ class InvoiceService {
           <tbody>
             <tr>
               <td>
-                <div style="font-weight: 700;">Job ID: ${jobId} - ${jobTitle}</div>
+                <div style="font-weight: 700;">Job Fulfillment: ${jobTitle}</div>
                 <div style="font-size: 12px; color: #64748b; margin-top: 5px;">
-                   Includes platform protection, worker fulfillment, and escrow security for the job duration.
+                   Professional services for Job ID: ${jobId}. Includes on-site fulfillment and escrow security.
                 </div>
+                <div class="sac-code">SAC Code: 9987 - Maintenance and repair services</div>
               </td>
-              <td style="text-align: right; font-weight: 700;">₹${amount.toLocaleString('en-IN')}</td>
+              <td style="text-align: right; font-weight: 700;">₹${jobAmount.toLocaleString('en-IN')}</td>
+            </tr>
+            <tr>
+              <td>
+                <div style="font-weight: 700;">Platform Protection & Service Fee</div>
+                <div style="font-size: 12px; color: #64748b; margin-top: 5px;">
+                   Escrow management, 7-day job protection, and verified worker fee.
+                </div>
+                <div class="sac-code">SAC Code: 9983 - Professional and Technical Services</div>
+              </td>
+              <td style="text-align: right; font-weight: 700;">₹${protectionFee.toLocaleString('en-IN')}</td>
             </tr>
           </tbody>
         </table>
@@ -165,30 +187,33 @@ class InvoiceService {
           <div class="summary-spacer"></div>
           <div class="summary-content">
             <div class="summary-row">
-              <div class="summary-label">Subtotal</div>
-              <div class="summary-value">₹${amount.toLocaleString('en-IN')}</div>
+              <div class="summary-label">Subtotal (Excl. Tax)</div>
+              <div class="summary-value">₹${(jobAmount + protectionFee).toLocaleString('en-IN')}</div>
             </div>
             <div class="summary-row">
-              <div class="summary-label">Tax (Inclusive)</div>
-              <div class="summary-value">₹0.00</div>
+              <div class="summary-label">CGST (9.0%)</div>
+              <div class="summary-value">₹${cgst.toLocaleString('en-IN')}</div>
+            </div>
+            <div class="summary-row">
+              <div class="summary-label">SGST (9.0%)</div>
+              <div class="summary-value">₹${sgst.toLocaleString('en-IN')}</div>
             </div>
             <div class="summary-row grand-total">
-                <div class="summary-label total-label">Total Amount</div>
-                <div class="summary-value total-value">₹${amount.toLocaleString('en-IN')}</div>
+                <div class="summary-label total-label">Total (Incl. Tax)</div>
+                <div class="summary-value total-value">₹${totalAmount.toLocaleString('en-IN')}</div>
             </div>
           </div>
         </div>
 
         <div class="footer">
           <p><strong>This is a computer generated document. No signature required.</strong></p>
-          <p>SkillBridge Marketplace | 100% Secure Escrow Service | support@skillbridge.club</p>
+          <p>SkillBridge Marketplace | Automated Tax Invoicing System | support@skillbridge.club</p>
           <p style="margin-top: 10px;">&copy; ${new Date().getFullYear()} SkillBridge Technologies. Registered Office: Bengaluru, India.</p>
         </div>
       </body>
       </html>
     `;
 
-        return await PDFService.generatePDF(html);
     }
 
     /**
