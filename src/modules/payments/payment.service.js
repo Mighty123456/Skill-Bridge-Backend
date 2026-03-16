@@ -12,6 +12,7 @@ const getStripe = () => {
 };
 const mongoose = require('mongoose');
 const crypto = require('crypto');
+const SystemConfig = require('../admin/systemConfig.model');
 
 const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
@@ -56,8 +57,11 @@ const signPayment = async (payment, session = null) => {
  * Checks worker subscription for commission rate
  */
 exports.calculateBreakdown = async (jobAmount, workerId) => {
-    let commissionRate = COMMISSION_RATE; // Default 15%
-    const GST_RATE = 0.18; // 18% Professional GST standard
+    // Fetch Dynamic Configuration
+    const sysConfig = await SystemConfig.findOne().sort({ createdAt: -1 });
+    
+    let commissionRate = sysConfig ? (sysConfig.commissionRate / 100) : COMMISSION_RATE;
+    const GST_RATE = sysConfig ? (sysConfig.gstRate / 100) : 0.18;
 
     if (workerId) {
         const worker = await Worker.findOne({ user: workerId });

@@ -7,6 +7,16 @@ const systemConfigSchema = new mongoose.Schema(
             required: true,
             default: 12, // 12% default
         },
+        gstRate: {
+            type: Number,
+            required: true,
+            default: 18, // 18% standard GST
+        },
+        tdsRate: {
+            type: Number,
+            required: true,
+            default: 1, // 1% statutory TDS
+        },
         emergencySurcharge: {
             type: Number,
             required: true,

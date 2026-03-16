@@ -4,6 +4,7 @@ const Withdrawal = require('./withdrawal.model');
 const NotificationService = require('../notifications/notification.service');
 const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
+const SystemConfig = require('../admin/systemConfig.model');
 
 /**
  * Get or create wallet for a user
@@ -187,8 +188,14 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetail
             fee = Math.max(10, Math.round(amount * 0.02)); // 2% or min ₹10
         }
 
-        const netAmount = amount - fee;
-        if (netAmount <= 0) throw new Error('Amount too low to cover fees');
+        // Fetch Dynamic Configuration for TDS
+        const sysConfig = await SystemConfig.findOne().sort({ createdAt: -1 });
+        const TDS_RATE = sysConfig ? (sysConfig.tdsRate / 100) : 0.01;
+
+        const tds = Math.round(amount * TDS_RATE); // Statutory TDS
+        const netAmount = amount - fee - tds;
+
+        if (netAmount <= 0) throw new Error('Amount too low to cover fees and TDS');
 
         // Debit Wallet
         wallet.balance -= amount;
@@ -199,6 +206,7 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetail
             user: userId,
             amount,
             fee,
+            tds,
             netAmount,
             type,
             bankDetails,

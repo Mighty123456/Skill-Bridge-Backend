@@ -121,6 +121,7 @@ router.use('/users', require('../modules/users/user.routes'));
 router.use('/workers', require('../modules/workers/worker.routes'));
 router.use('/payments', require('../modules/payments/payment.routes'));
 router.use('/wallet', require('../modules/wallet/wallet.routes'));
+router.use('/contractors', require('../modules/contractors/contractor.routes'));
 router.use('/upload', require('../modules/upload/upload.routes')); // Generic Upload Route
 router.use('/help-center', require('../modules/help-center/help-center.routes')); // Help Center Module
 router.use('/admin/fraud-alerts', require('../modules/fraud/fraud-alert.routes')); // Fraud & Risk Alerts

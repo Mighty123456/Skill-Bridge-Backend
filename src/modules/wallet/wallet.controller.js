@@ -108,7 +108,8 @@ exports.getHistory = async (req, res, next) => {
                 jobTitle: p.job?.job_title,
                 transactionId: p.transactionId,
                 createdAt: p.createdAt,
-                paymentMethod: p.paymentMethod
+                paymentMethod: p.paymentMethod,
+                breakdown: p.gatewayResponse?.breakdown || {}
             })),
             ...withdrawals.map(w => ({
                 id: w._id,

@@ -16,6 +16,10 @@ const withdrawalSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        tds: {
+            type: Number,
+            default: 0,
+        },
         netAmount: {
             type: Number,
             required: true,

@@ -738,6 +738,7 @@ const getTenantFinancials = async (req, res) => {
       },
       wallet: {
         activeEscrow: activeEscrowData[0]?.total || 0,
+        warrantyReserve: wallet?.warrantyReserveBalance || 0,
         currency: 'INR'
       },
       stats,
@@ -797,6 +798,7 @@ const getWorkerFinancials = async (req, res) => {
       wallet: {
         balance: wallet?.balance || 0,
         pendingBalance: wallet?.pendingBalance || 0,
+        warrantyReserve: wallet?.warrantyReserveBalance || 0,
         currency: wallet?.currency || 'INR',
         pendingPayouts: wallet?.pendingPayouts || []
       },
