@@ -322,3 +322,41 @@ exports.checkAvailability = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to check availability' });
     }
 };
+
+/**
+ * Delete Task from Job/Project
+ * @route   DELETE /api/v1/contractors/schedule/task/:jobId/:taskId
+ */
+exports.deleteTask = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { jobId, taskId } = req.params;
+
+        const job = await Job.findOne({ _id: jobId, user_id: contractorId });
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const task = job.tasks.id(taskId);
+        if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+        const taskTitle = task.title;
+        job.tasks.pull(taskId);
+
+        // Phase 4 Constraint: Log schedule updates
+        JobService.appendTimeline(
+            job, 
+            job.status, 
+            'user', 
+            `Removed scheduled task: "${taskTitle}"`
+        );
+
+        await job.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Task removed successfully'
+        });
+    } catch (error) {
+        logger.error('Delete Task Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to delete task' });
+    }
+};

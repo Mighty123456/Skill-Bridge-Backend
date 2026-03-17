@@ -16,5 +16,6 @@ router.get('/schedule', contractorController.getWorkforceSchedule);
 router.get('/schedule/availability/:workerId/:date', contractorController.checkAvailability);
 router.post('/schedule/task', contractorController.addTaskToJob);
 router.put('/schedule/task/:jobId/:taskId', contractorController.updateTask);
+router.delete('/schedule/task/:jobId/:taskId', contractorController.deleteTask);
 
 module.exports = router;

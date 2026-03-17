@@ -129,7 +129,21 @@ exports.isWorkerAvailable = isWorkerAvailable; // Export for use in other module
 exports.getPortfolio = async (req, res) => {
     try {
         const { workerId } = req.params;
-        const portfolio = await Portfolio.find({ worker: workerId }).sort({ order: 1, createdAt: -1 });
+        const { sortBy, category } = req.query;
+
+        let query = { worker: workerId };
+        if (category) {
+            query.category = category;
+        }
+
+        let sortOption = { order: 1, createdAt: -1 };
+        if (sortBy === 'recent') {
+            sortOption = { completionDate: -1, createdAt: -1 };
+        } else if (sortBy === 'oldest') {
+            sortOption = { completionDate: 1, createdAt: 1 };
+        }
+
+        const portfolio = await Portfolio.find(query).sort(sortOption);
 
         return res.status(200).json({
             success: true,
@@ -562,8 +576,28 @@ exports.getNearbyWorkers = async (req, res) => {
         logger.info(`📍 Found ${nearbyUsers.length} users near location.`);
 
         // 3. Merge Data (User Location + Worker Profile)
-        let results = nearbyUsers.map(user => {
+        const getDistance = (lon1, lat1, lon2, lat2) => {
+            const R = 6371; // km
+            const dLat = (lat2 - lat1) * Math.PI / 180;
+            const dLon = (lon2 - lon1) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon / 2) * Math.sin(dLon / 2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+            return R * c;
+        };
+
+        let results = await Promise.all(nearbyUsers.map(async (user) => {
             const workerProfile = eligibleWorkers.find(w => w.user.toString() === user._id.toString());
+            
+            // Phase 2 Polish: Get brief portfolio count for trust
+            const portfolioCount = await Portfolio.countDocuments({ worker: workerProfile._id });
+
+            const distance = getDistance(
+                parseFloat(lng), parseFloat(lat),
+                user.location.coordinates[0], user.location.coordinates[1]
+            );
+
             return {
                 id: workerProfile._id,
                 userId: user._id,
@@ -574,9 +608,11 @@ exports.getNearbyWorkers = async (req, res) => {
                 reliabilityScore: workerProfile.reliabilityScore,
                 hourlyRate: workerProfile.hourlyRate,
                 location: user.location,
-                distance: 0, // In distance-sorted mode, this is implicit
+                distance: parseFloat(distance.toFixed(1)),
+                portfolioCount: portfolioCount,
+                isVerified: true // Already filtered
             };
-        });
+        }));
 
         // 4. Sorting
         const { sortBy } = req.query;
@@ -586,8 +622,10 @@ exports.getNearbyWorkers = async (req, res) => {
             results.sort((a, b) => a.hourlyRate - b.hourlyRate);
         } else if (sortBy === 'price_desc') {
             results.sort((a, b) => b.hourlyRate - a.hourlyRate);
+        } else if (sortBy === 'reliability') {
+            results.sort((a, b) => b.reliabilityScore - a.reliabilityScore);
         } else if (sortBy === 'distance') {
-            // Already sorted by distance by $near query order
+            results.sort((a, b) => a.distance - b.distance);
         }
 
         res.json({
@@ -665,3 +703,47 @@ exports.getProjectTasks = async (req, res) => {
     }
 };
 
+/**
+ * Update Status of Assigned Task (Phase 4)
+ */
+exports.updateWorkerTaskStatus = async (req, res) => {
+    try {
+        const workerId = req.user._id;
+        const { jobId, taskId } = req.params;
+        const { status } = req.body;
+
+        const Job = require('../jobs/job.model');
+        const job = await Job.findById(jobId);
+        if (!job) return res.status(404).json({ success: false, message: 'Job not found' });
+
+        const task = job.tasks.id(taskId);
+        if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+        // Authorization: Ensure task is assigned to this worker
+        if (task.assigned_worker_id?.toString() !== workerId.toString()) {
+            return res.status(403).json({ success: false, message: 'Not authorized to update this task' });
+        }
+
+        task.status = status;
+
+        // Phase 4 Constraint: Log status changes to timeline
+        const JobService = require('../jobs/job.service');
+        JobService.appendTimeline(
+            job, 
+            job.status, 
+            'worker', 
+            `Worker updated task "${task.title}" status to: ${status}`
+        );
+
+        await job.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Task status updated',
+            data: task
+        });
+    } catch (error) {
+        logger.error('Update Worker Task Status Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to update task status' });
+    }
+};

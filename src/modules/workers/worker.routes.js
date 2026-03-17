@@ -38,5 +38,6 @@ router.post('/subscribe', protect, authorize('worker'), workerController.subscri
 
 // Phase 4: Workforce Scheduling
 router.get('/project-tasks', protect, authorize('worker'), workerController.getProjectTasks);
+router.put('/project-tasks/:jobId/:taskId/status', protect, authorize('worker'), workerController.updateWorkerTaskStatus);
 
 module.exports = router;
