@@ -541,8 +541,8 @@ exports.getInvoice = async (req, res) => {
             <style>
                 body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; margin: 0; padding: 40px; background: #fff; }
                 .invoice-box { max-width: 800px; margin: auto; }
-                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #6366f1; padding-bottom: 20px; margin-bottom: 40px; }
-                .logo { font-size: 28px; font-weight: bold; color: #6366f1; }
+                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #008080; padding-bottom: 20px; margin-bottom: 40px; }
+                .logo { font-size: 28px; font-weight: bold; color: #008080; }
                 .invoice-details { text-align: right; }
                 .section { margin-bottom: 30px; }
                 .section-title { font-weight: bold; color: #666; font-size: 12px; text-transform: uppercase; margin-bottom: 10px; }
@@ -550,23 +550,23 @@ exports.getInvoice = async (req, res) => {
                 table { width: 100%; line-height: inherit; text-align: left; border-collapse: collapse; }
                 table th { background: #f8fafc; padding: 12px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px; }
                 table td { padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
-                .total-row { background: #6366f1 !important; color: white !important; font-weight: bold; }
+                .total-row { background: #008080 !important; color: white !important; font-weight: bold; }
                 .total-row td { border: none; padding: 15px 12px; font-size: 18px; color: white !important; }
                 .footer { margin-top: 60px; text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
                 .badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: bold; }
-                .badge-success { background: #dcfce7; color: #166534; }
+                .badge-success { background: #E0F7F7; color: #008080; }
             </style>
         </head>
         <body>
             <div class="invoice-box">
                 <div class="header">
                     <div>
-                        <div class="logo">SkillBridge</div>
+                        <div class="logo">Skill<span style="color: #FF6B35">Bridge</span></div>
                         <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Professional Service Marketplace</div>
                     </div>
                     <div class="invoice-details">
-                        <h1 style="margin: 0; font-size: 24px;">TAX INVOICE</h1>
-                        <div style="margin-top: 5px; color: #64748b;">#INV-${job._id.toString().slice(-6).toUpperCase()}</div>
+                        <h1 style="margin: 0; font-size: 24px; color: #008080;">TAX INVOICE</h1>
+                         <div style="margin-top: 5px; color: #64748b;">#INV-${job._id.toString().slice(-6).toUpperCase()}</div>
                         <div style="font-size: 14px; margin-top: 5px;">Date: ${invoiceDate}</div>
                     </div>
                 </div>
@@ -583,7 +583,7 @@ exports.getInvoice = async (req, res) => {
                         <div style="font-weight: bold; font-size: 16px;">${job.selected_worker_id?.name || 'Worker'}</div>
                         <div style="font-size: 14px; color: #475569; margin-top: 4px;">Verified SkillBridge Partner</div>
                         <div style="margin-top: 8px;">
-                            <span class="badge badge-success">PAID VIA ESCROW</span>
+                            <span class="badge badge-success">PAID VIA SECROW</span>
                         </div>
                     </div>
                 </div>
@@ -636,7 +636,7 @@ exports.getInvoice = async (req, res) => {
                     </table>
                 </div>
 
-                <div style="margin-top: 40px; padding: 20px; background: #eff6ff; border-radius: 12px; font-size: 13px; color: #1e40af;">
+                <div style="margin-top: 40px; padding: 20px; background: #E0F7F7; border-radius: 12px; font-size: 13px; color: #005252;">
                     <strong>Note:</strong> This document serves as proof of payment for services rendered. The total amount has been successfully settled from the tenant's wallet through the SkillBridge secure platform.
                 </div>
 
@@ -656,7 +656,7 @@ exports.getInvoice = async (req, res) => {
                 const pdfBuffer = await PDFService.generatePDF(html);
 
                 res.setHeader('Content-Type', 'application/pdf');
-                res.setHeader('Content-Disposition', `inline; filename="invoice-SB-${job._id.toString().slice(-6).toUpperCase()}.pdf"`);
+                res.setHeader('Content-Disposition', `attachment; filename="invoice-SB-${job._id.toString().slice(-6).toUpperCase()}.pdf"`);
                 res.send(pdfBuffer);
             } catch (pdfError) {
                 // Fallback to HTML if PDF generation fails
