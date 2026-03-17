@@ -3,6 +3,40 @@ const Wallet = require('../wallet/wallet.model');
 const User = require('../users/user.model');
 const Contractor = require('./contractor.model');
 const logger = require('../../config/logger');
+const JobService = require('../jobs/job.service');
+
+/**
+ * Internal Helper: Check if worker has any tasks on a specific date
+ */
+const isWorkerAvailable = async (workerId, date, excludeTaskId = null) => {
+    if (!workerId) return true;
+    
+    // Normalize date to start and end of day in UTC to ensure consistency
+    const queryDate = new Date(date);
+    const startOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 0, 0, 0, 0));
+    const endOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 23, 59, 59, 999));
+
+    const existingJobsWithConflicts = await Job.find({
+        "tasks.assigned_worker_id": workerId,
+        "tasks.due_date": { $gte: startOfDay, $lte: endOfDay }
+    });
+
+    for (const job of existingJobsWithConflicts) {
+        for (const task of job.tasks) {
+            if (task.assigned_worker_id?.toString() === workerId.toString() && 
+                task.due_date >= startOfDay && 
+                task.due_date <= endOfDay) {
+                
+                // If we are updating a task, exclude it from conflict check
+                if (excludeTaskId && task._id.toString() === excludeTaskId.toString()) {
+                    continue;
+                }
+                return false;
+            }
+        }
+    }
+    return true;
+};
 
 /**
  * Get Contractor Dashboard Stats
@@ -124,6 +158,15 @@ exports.addTaskToJob = async (req, res) => {
         const job = await Job.findOne({ _id: jobId, user_id: contractorId });
         if (!job) return res.status(404).json({ success: false, message: 'Job not found or unauthorized' });
 
+        // Phase 4 Constraint: Prevent double booking
+        const available = await isWorkerAvailable(assigned_worker_id, due_date);
+        if (!available) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Worker ${assigned_worker_name} is already booked for this date.` 
+            });
+        }
+
         const newTask = {
             title,
             description,
@@ -134,6 +177,15 @@ exports.addTaskToJob = async (req, res) => {
         };
 
         job.tasks.push(newTask);
+        
+        // Phase 4 Constraint: Log schedule updates
+        JobService.appendTimeline(
+            job, 
+            job.status, 
+            'user', 
+            `Scheduled new task: "${title}" assigned to ${assigned_worker_name} for ${new Date(due_date).toDateString()}`
+        );
+
         await job.save();
 
         res.status(201).json({
@@ -162,12 +214,35 @@ exports.updateTask = async (req, res) => {
         const task = job.tasks.id(taskId);
         if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
 
+        // Phase 4 Constraint: Check availability if date or worker changes
+        const newWorkerId = updateData.assigned_worker_id || task.assigned_worker_id;
+        const newDate = updateData.due_date || task.due_date;
+
+        if (updateData.assigned_worker_id || updateData.due_date) {
+            const available = await isWorkerAvailable(newWorkerId, newDate, taskId);
+            if (!available) {
+                return res.status(400).json({ 
+                    success: false, 
+                    message: "Worker is already booked for this date on another task." 
+                });
+            }
+        }
+
+        const oldTitle = task.title;
         if (updateData.title) task.title = updateData.title;
         if (updateData.description) task.description = updateData.description;
         if (updateData.status) task.status = updateData.status;
         if (updateData.assigned_worker_id) task.assigned_worker_id = updateData.assigned_worker_id;
         if (updateData.assigned_worker_name) task.assigned_worker_name = updateData.assigned_worker_name;
         if (updateData.due_date) task.due_date = new Date(updateData.due_date);
+
+        // Phase 4 Constraint: Log schedule updates
+        JobService.appendTimeline(
+            job, 
+            job.status, 
+            'user', 
+            `Updated task "${oldTitle}": ${updateData.status ? 'Status changed to ' + updateData.status : 'Schedule modified'}`
+        );
 
         await job.save();
 
@@ -210,10 +285,11 @@ exports.getWorkforceSchedule = async (req, res) => {
 exports.checkAvailability = async (req, res) => {
     try {
         const { workerId, date } = req.params;
-        const queryDate = new Date(date);
         
-        const startOfDay = new Date(queryDate.setHours(0,0,0,0));
-        const endOfDay = new Date(queryDate.setHours(23,59,59,999));
+        // Phase 4 Constraint: Use UTC for consistency
+        const queryDate = new Date(date);
+        const startOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 23, 59, 59, 999));
 
         const existingTasks = await Job.find({
             "tasks.assigned_worker_id": workerId,
