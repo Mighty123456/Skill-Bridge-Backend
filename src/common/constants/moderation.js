@@ -16,8 +16,6 @@ const BASE_ABUSIVE_WORDS = [
     'gando', 'gandi', 'halkat', 'fokni', 'buch', 'bhooch', 'bewakoof', 'nalayak'
 ];
 
-module.exports = { BASE_ABUSIVE_WORDS };
-
 const CONTACT_PATTERNS = {
     // Phone: Matches Indian +91, 0-prefixed, or standard 10-digit starting with 6-9. 
     // Also matches generic international formats to be safe.

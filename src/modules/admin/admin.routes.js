@@ -267,6 +267,14 @@ router.get(
   adminController.listAuditLogs
 );
 
+// Hiring Requests Monitoring
+router.get(
+  '/hiring-requests',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listHiringRequests
+);
+
 module.exports = router;
 
 

@@ -75,7 +75,13 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
     const job = chat.job;
     if (!job) throw { status: 404, message: 'Job context invalid' };
 
-    // 5. Status Checks (Archived/Blocked)
+    // 5. Job Assignment Verification (Constraint: Chat only enabled after job assignment)
+    const allowedStatuses = ['assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
+    if (!allowedStatuses.includes(job.status)) {
+        throw { status: 403, message: 'Chat is only enabled after a worker is assigned to the job. Current status: ' + job.status };
+    }
+
+    // 6. Status Checks (Archived/Blocked)
     if (chat.status === 'blocked' || chat.status === 'archived') {
         throw { status: 403, message: 'This chat is archived or blocked.' };
     }
@@ -91,10 +97,6 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
         if (hoursSinceCompletion > 24) {
             throw { status: 403, message: 'Job completed over 24 hours ago. Chat is closed. Please raise a support ticket.' };
         }
-    }
-
-    if (job.status === 'open' && job.quotation_end_time && new Date() > new Date(job.quotation_end_time)) {
-        throw { status: 403, message: 'Quotation window has ended. Chat is closed.' };
     }
 
     // 7. Dispute Lock
@@ -128,19 +130,25 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
             throw { status: 400, message: errorMsg };
         }
 
-        // 8. Contact Blocking (Anti-Circumvention)
-        const hasPhone = CONTACT_PATTERNS.PHONE.test(text);
-        CONTACT_PATTERNS.PHONE.lastIndex = 0;
-        const hasEmail = CONTACT_PATTERNS.EMAIL.test(text);
-        CONTACT_PATTERNS.EMAIL.lastIndex = 0;
-        const hasLinks = CONTACT_PATTERNS.LINKS.test(text);
-        CONTACT_PATTERNS.LINKS.lastIndex = 0;
-        const hasUPI = CONTACT_PATTERNS.UPI.test(text);
-        CONTACT_PATTERNS.UPI.lastIndex = 0;
+        // 8. Contact Blocking (Anti-Circumvention) - Constraint: No sharing pre-job completion
+        const isJobCompleted = job.status === 'completed';
+        if (!isJobCompleted) {
+            const hasPhone = CONTACT_PATTERNS.PHONE.test(text);
+            CONTACT_PATTERNS.PHONE.lastIndex = 0;
+            const hasEmail = CONTACT_PATTERNS.EMAIL.test(text);
+            CONTACT_PATTERNS.EMAIL.lastIndex = 0;
+            const hasLinks = CONTACT_PATTERNS.LINKS.test(text);
+            CONTACT_PATTERNS.LINKS.lastIndex = 0;
+            const hasUPI = CONTACT_PATTERNS.UPI.test(text);
+            CONTACT_PATTERNS.UPI.lastIndex = 0;
 
-        if (hasPhone || hasEmail || hasLinks || hasUPI) {
-            await fraudDetectionService.detectContactSharing(senderId, job._id).catch(e => logger.error(e));
-            throw { status: 400, message: 'Sharing contact details (phone, email, links, UPI) is strictly prohibited. Keep all communication on SkillBridge for your safety.' };
+            if (hasPhone || hasEmail || hasLinks || hasUPI) {
+                await fraudDetectionService.detectContactSharing(senderId, job._id).catch(e => logger.error(e));
+                throw {
+                    status: 400,
+                    message: 'Sharing contact details (phone, email, links, UPI) is prohibited before job completion. Please keep all communication on SkillBridge for your safety.'
+                };
+            }
         }
 
         // 9. Price Lock After Assignment

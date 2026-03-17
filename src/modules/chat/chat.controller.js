@@ -39,11 +39,18 @@ exports.initiateChat = async (req, res) => {
             return successResponse(res, 'Chat retrieved successfully', chat);
         }
 
-        // Validate Job exists
+        // Validate Job exists and status
         const Job = require('../jobs/job.model');
         const job = await Job.findById(jobId);
         if (!job) {
             return errorResponse(res, 'Job not found', 404);
+        }
+
+        // Constraint: Chat only enabled after job assignment
+        // Allow if status is assigned, in_progress, completed, reviewing, disputed
+        const allowedStatuses = ['assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
+        if (job.status === 'open' || job.status === 'pending') {
+            return errorResponse(res, 'Chat is only enabled after a worker is assigned to the job.', 403);
         }
 
         // Create new chat

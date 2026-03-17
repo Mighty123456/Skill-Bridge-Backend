@@ -14,6 +14,7 @@ const Message = require('../chat/message.model');
 const SystemLog = require('./systemLog.model');
 const SystemConfig = require('./systemConfig.model');
 const Rating = require('../ratings/rating.model');
+const HiringRequest = require('../hiring/hiring.model');
 const logger = require('../../config/logger');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const { ROLES } = require('../../common/constants/roles');
@@ -624,7 +625,9 @@ const listJobs = async (req, res) => {
       completionPhotos: job.completion_photos || [],
       workSummary: job.work_summary || '',
       signature: job.digital_signature || null,
-      timeline: job.timeline || []
+      timeline: job.timeline || [],
+      isContractorProject: job.is_contractor_project || false,
+      tasks: job.tasks || []
     }));
 
     return successResponse(res, 'Jobs fetched successfully', { jobs: formattedJobs });
@@ -1293,6 +1296,25 @@ const getRoleStats = async (req, res) => {
   }
 };
 
+/**
+ * List all hiring requests for admin monitoring
+ * GET /api/admin/hiring-requests
+ */
+const listHiringRequests = async (req, res) => {
+  try {
+    const requests = await HiringRequest.find()
+      .populate('contractor', 'name email profileImage')
+      .populate('worker', 'name email profileImage')
+      .populate('project', 'job_title current_status')
+      .sort({ createdAt: -1 });
+
+    return successResponse(res, 'Hiring requests fetched successfully', { requests });
+  } catch (error) {
+    logger.error(`Admin listHiringRequests error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch hiring requests', 500);
+  }
+};
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -1325,6 +1347,7 @@ module.exports = {
   deleteRating,
   listAuditLogs,
   getRoleStats,
+  listHiringRequests,
 };
 
 
