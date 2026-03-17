@@ -9,6 +9,42 @@ const logger = require('../../config/logger');
 const PaymentService = require('../payments/payment.service');
 const EmailService = require('../../common/services/email.service');
 
+// === PHASE 3: Strict Status Sequence ===
+const STATUS_SEQUENCE = [
+    'open',
+    'assigned',
+    'eta_confirmed',
+    'on_the_way',
+    'arrived',
+    'diagnosis_mode',
+    'diagnosed',
+    'in_progress',
+    'reviewing',
+    'cooling_window',
+    'completed'
+];
+
+/**
+ * Validate that a status transition is sequential.
+ * @param {string} currentStatus 
+ * @param {string} nextStatus 
+ * @returns {boolean}
+ */
+const isValidTransition = (currentStatus, nextStatus) => {
+    // Admin override or cancellation bypasses sequence
+    if (nextStatus === 'cancelled' || nextStatus === 'disputed') return true;
+    
+    const currentIndex = STATUS_SEQUENCE.indexOf(currentStatus);
+    const nextIndex = STATUS_SEQUENCE.indexOf(nextStatus);
+
+    if (currentIndex === -1 || nextIndex === -1) return false;
+
+    // Must be moving forward, allowing exactly 1 step (or same step for idempotency)
+    // Some states like 'diagnosis_mode' might loop back to 'eta_confirmed' on rejection,
+    // which is handled separately in logic.
+    return nextIndex === currentIndex + 1 || nextIndex === currentIndex;
+};
+
 // === HELPER: Sanitize PII ===
 const sanitizeNote = (text) => {
     if (!text) return '';
@@ -220,7 +256,9 @@ exports.confirmEta = async (jobId, workerId, etaTime) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    if (job.status !== 'assigned' && job.status !== 'eta_confirmed') throw new Error('Job must be in assigned state to set ETA');
+    if (!isValidTransition(job.status, 'eta_confirmed')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to eta_confirmed`);
+    }
 
     job.status = 'eta_confirmed';
     job.journey = job.journey || {};
@@ -250,7 +288,9 @@ exports.startJourney = async (jobId, workerId, location) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    if (job.status !== 'eta_confirmed') throw new Error('Must confirm ETA before starting journey');
+    if (!isValidTransition(job.status, 'on_the_way')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to on_the_way`);
+    }
 
     // Fake GPS Detection
     if (location && location.isMock) {
@@ -292,8 +332,8 @@ exports.arrive = async (jobId, workerId, location) => {
         throw new Error('Unauthorized: You are not the assigned worker.');
     }
     // Allow if on_the_way (normal flow) or assigned/eta_confirmed (fallback/legacy)
-    if (!['on_the_way', 'assigned', 'eta_confirmed'].includes(job.status)) {
-        throw new Error('Invalid job status for arrival');
+    if (!isValidTransition(job.status, 'arrived')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to arrived`);
     }
 
     // 0. Fake GPS / Mock Location Detection
@@ -487,8 +527,8 @@ exports.startJob = async (jobId, workerId, otp) => {
         throw new Error(`Security Lockout: Too many failed attempts. Try again in ${minutesLeft} minutes.`);
     }
 
-    if (!['arrived', 'diagnosed', 'diagnosis_mode'].includes(job.status)) {
-        throw new Error('You must confirm arrival and diagnosis before starting.');
+    if (!isValidTransition(job.status, 'in_progress')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to in_progress`);
     }
 
     if (!job.start_otp || job.start_otp !== otp) {
@@ -538,7 +578,9 @@ exports.submitDiagnosis = async (jobId, workerId, diagnosisData) => {
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
     // Allow if assigned, eta_confirmed, or arrived
-    if (!['assigned', 'eta_confirmed', 'arrived'].includes(job.status)) throw new Error('Invalid job status for diagnosis');
+    if (!isValidTransition(job.status, 'diagnosis_mode')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to diagnosis_mode`);
+    }
 
     // Warranty Validation
     if (diagnosisData.warranty_offered) {
@@ -758,7 +800,9 @@ exports.submitCompletion = async (jobId, workerId, files, summary, signatureFile
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
-    if (job.status !== 'in_progress') throw new Error('Job must be in progress to complete.');
+    if (!isValidTransition(job.status, 'reviewing')) {
+        throw new Error(`Invalid transition: Cannot move from ${job.status} to reviewing`);
+    }
 
     let completion_photos = [];
     if (!files || files.length === 0) {

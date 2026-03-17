@@ -159,6 +159,21 @@ const jobSchema = new mongoose.Schema(
             reassigned_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
         },
 
+        // Module 4: Workforce Scheduling (Phase 4)
+        is_contractor_project: { type: Boolean, default: false },
+        tasks: [{
+            title: { type: String, required: true },
+            description: { type: String },
+            status: { 
+                type: String, 
+                enum: ['pending', 'inProgress', 'completed', 'delayed', 'cancelled'], 
+                default: 'pending' 
+            },
+            assigned_worker_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            assigned_worker_name: { type: String },
+            due_date: { type: Date }
+        }],
+
         // Module 4: Execution & Timeline
         // Security & Constraints
         start_otp_attempts: { type: Number, default: 0 },

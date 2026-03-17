@@ -3,10 +3,17 @@ const router = express.Router();
 const workerController = require('./worker.controller');
 const { authenticate: protect } = require('../../common/middleware/auth.middleware');
 const { authorize } = require('../../common/middleware/role.middleware');
+const rateLimit = require('express-rate-limit');
 
+// Stricter rate limit for search queries (20 requests per 15 mins)
+const searchLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    message: { success: false, message: 'Too many search queries. Please wait a few minutes.' }
+});
 
 // Public / Protected Routes
-router.get('/nearby', protect, workerController.getNearbyWorkers);
+router.get('/nearby', protect, searchLimiter, workerController.getNearbyWorkers);
 router.get('/:id/passport', protect, workerController.getPassport);
 
 // Portfolio
@@ -28,5 +35,8 @@ router.post('/check-decay', protect, authorize('admin'), workerController.checkS
 
 // Subscription
 router.post('/subscribe', protect, authorize('worker'), workerController.subscribe);
+
+// Phase 4: Workforce Scheduling
+router.get('/project-tasks', protect, authorize('worker'), workerController.getProjectTasks);
 
 module.exports = router;

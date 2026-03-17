@@ -360,12 +360,12 @@ exports.getPassport = async (req, res) => {
 
         // Try finding by User ID first, then Worker ID
         worker = await Worker.findOne({ user: id })
-            .populate('user', 'name profileImage dateOfBirth address')
+            .populate('user', 'name profileImage dateOfBirth address location')
             .populate('badges');
 
         if (!worker) {
             worker = await Worker.findById(id)
-                .populate('user', 'name profileImage dateOfBirth address')
+                .populate('user', 'name profileImage dateOfBirth address location')
                 .populate('badges');
         }
 
@@ -386,9 +386,11 @@ exports.getPassport = async (req, res) => {
             name: worker.user.name,
             profileImage: worker.user.profileImage,
             address: worker.user.address,
+            location: worker.user.location,
             memberSince: worker.createdAt,
             verified: worker.verificationStatus === 'verified',
             rating: worker.rating,
+            hourlyRate: worker.hourlyRate || 0,
             experienceYears: worker.experience,
             reliabilityScore: worker.reliabilityScore || 50,
             jobsCompleted: jobsCompleted,
@@ -560,7 +562,7 @@ exports.getNearbyWorkers = async (req, res) => {
         logger.info(`📍 Found ${nearbyUsers.length} users near location.`);
 
         // 3. Merge Data (User Location + Worker Profile)
-        const results = nearbyUsers.map(user => {
+        let results = nearbyUsers.map(user => {
             const workerProfile = eligibleWorkers.find(w => w.user.toString() === user._id.toString());
             return {
                 id: workerProfile._id,
@@ -569,17 +571,24 @@ exports.getNearbyWorkers = async (req, res) => {
                 profileImage: user.profileImage,
                 skills: workerProfile.skills,
                 rating: workerProfile.rating,
-                reliabilityScore: workerProfile.reliabilityScore, // Added
+                reliabilityScore: workerProfile.reliabilityScore,
                 hourlyRate: workerProfile.hourlyRate,
                 location: user.location,
-                distance: 0, // Calculated by client or aggregation if needed
+                distance: 0, // In distance-sorted mode, this is implicit
             };
         });
 
-        // Optional: Sort by Reliability if requested, otherwise by distance (implicit in $near return order usually, but merging might break it)
-        // Since $near returns sorted by distance, nearbyUsers is sorted. 
-        // We just mapped it in order, so results should roughly maintain distance order unless specific User/Worker mismatch (which won't happen here).
-        // Let's explicitly sort if client wants (e.g. "?sort=rating") but for now this is fine.
+        // 4. Sorting
+        const { sortBy } = req.query;
+        if (sortBy === 'rating') {
+            results.sort((a, b) => b.rating - a.rating);
+        } else if (sortBy === 'price_asc') {
+            results.sort((a, b) => a.hourlyRate - b.hourlyRate);
+        } else if (sortBy === 'price_desc') {
+            results.sort((a, b) => b.hourlyRate - a.hourlyRate);
+        } else if (sortBy === 'distance') {
+            // Already sorted by distance by $near query order
+        }
 
         res.json({
             success: true,
@@ -630,3 +639,29 @@ exports.subscribe = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * Get Project Tasks Assigned to Worker (Phase 4)
+ */
+exports.getProjectTasks = async (req, res) => {
+    try {
+        const workerId = req.user._id;
+        const Job = require('../jobs/job.model');
+
+        const jobs = await Job.find({
+            $or: [
+                { selected_worker_id: workerId },
+                { "tasks.assigned_worker_id": workerId }
+            ]
+        }).populate('user_id', 'name phone profileImage');
+
+        res.status(200).json({
+            success: true,
+            data: jobs
+        });
+    } catch (error) {
+        logger.error('Get Worker Project Tasks Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch project tasks' });
+    }
+};
+

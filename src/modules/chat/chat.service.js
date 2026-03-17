@@ -145,7 +145,7 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
 
         // 9. Price Lock After Assignment
         if (['assigned', 'in_progress', 'reviewing'].includes(job.status)) {
-            const priceRegex = /(?:price|cost|pay|rate|charge|amount|rupee|rs\.?|\$|€|£)\s*:?\s*\d+/i;
+            const priceRegex = /(?:price|cost|pay|rate|charge|amount|rupee|rs\.?|₹|€|£)\s*:?\s*\d+/i;
             if (priceRegex.test(text)) {
                 throw { status: 400, message: 'Price discussion is locked. Use the formal system request for any modifications.' };
             }

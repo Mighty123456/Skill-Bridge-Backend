@@ -118,6 +118,7 @@ router.use('/ratings', require('../modules/ratings/rating.routes'));
 
 // User routes (FCM token management, profile, etc.)
 router.use('/users', require('../modules/users/user.routes'));
+router.use('/hiring', require('../modules/hiring/hiring.routes'));
 router.use('/workers', require('../modules/workers/worker.routes'));
 router.use('/payments', require('../modules/payments/payment.routes'));
 router.use('/wallet', require('../modules/wallet/wallet.routes'));
