@@ -6,8 +6,9 @@ const userSchema = new mongoose.Schema(
   {
     email: {
       type: String,
-      required: [true, 'Email is required'],
+      required: false,
       unique: true,
+      sparse: true,
       lowercase: true,
       trim: true,
       match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email address'],
@@ -36,7 +37,12 @@ const userSchema = new mongoose.Schema(
     phone: {
       type: String,
       required: [true, 'Phone number is required'],
+      unique: true,
       trim: true,
+    },
+    isPhoneVerified: {
+      type: Boolean,
+      default: false,
     },
     dateOfBirth: {
       type: Date,

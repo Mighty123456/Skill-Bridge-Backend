@@ -18,12 +18,28 @@ const FraudDetectionService = require('../fraud/fraud-detection.service');
  * Register a new user
  */
 const register = async (userData, fileBuffers = {}) => {
-  const { email, password, role, name, phone, dateOfBirth, address, services, skills, experience, hourlyRate } = userData;
+  const { 
+    email, password, role, name, phone, dateOfBirth, address, services, skills, experience, hourlyRate,
+    aadhaarNumber, panNumber, gstNumber, businessRegistrationNumber,
+    bankAccount, upiId, billingAddress, businessType, primaryServiceCategory, serviceRadius, serviceAreas
+  } = userData;
+
+  let queryEmail = email ? email.toLowerCase() : null;
 
   // Check if user already exists
-  const existingUser = await User.findOne({ email: email.toLowerCase() });
-  if (existingUser) {
-    throw new Error('User with this email already exists');
+  if (queryEmail) {
+    const existingUser = await User.findOne({ email: queryEmail });
+    if (existingUser) {
+      throw new Error('User with this email already exists');
+    }
+  }
+
+  // Check phone uniqueness specifically
+  if (phone) {
+    const existingPhone = await User.findOne({ phone });
+    if (existingPhone) {
+      throw new Error('User with this mobile number already exists');
+    }
   }
 
   // Validate role
@@ -33,7 +49,7 @@ const register = async (userData, fileBuffers = {}) => {
 
   // 2. Create base User (Auth & Profile)
   const user = await User.create({
-    email: email.toLowerCase(),
+    email: queryEmail,
     password,
     role,
     name,
@@ -153,18 +169,30 @@ const register = async (userData, fileBuffers = {}) => {
 
       const contractorData = {
         user: user._id,
+        companyName: userData.companyName || userData.businessName || '',
+        businessType: businessType || userData.businessType || 'individual',
+        primaryServiceCategory: primaryServiceCategory || userData.primaryServiceCategory || '',
         services: services || [],
         experience: experience || 0,
+        serviceRadius: serviceRadius || userData.serviceRadius || 10,
+        serviceAreas: serviceAreas || userData.serviceAreas || [],
+        aadhaarNumber: aadhaarNumber || userData.aadhaarNumber,
+        panNumber: panNumber || userData.panNumber,
+        gstNumber: gstNumber || userData.gstNumber,
+        businessRegistrationNumber: businessRegistrationNumber || userData.businessRegistrationNumber,
+        bankAccount: bankAccount || userData.bankAccount,
+        upiId: upiId || userData.upiId,
+        billingAddress: billingAddress || userData.billingAddress,
         verificationStatus: 'pending',
         city: address?.city,
         state: address?.state,
       };
 
-      // Upload Documents
+      // Upload Documents (if provided early, though UI flow implies phased)
       if (fileBuffers.governmentId) {
         try {
           logger.info('Uploading contractor government ID...');
-          const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email}`);
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.governmentId, `id_${email || phone}`);
           contractorData.governmentId = uploadResult.url;
           logger.info(`Contractor government ID uploaded: ${uploadResult.url}`);
         } catch (err) {
@@ -175,7 +203,7 @@ const register = async (userData, fileBuffers = {}) => {
       if (fileBuffers.selfie) {
         try {
           logger.info('Uploading contractor selfie...');
-          const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email}`);
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.selfie, `selfie_${email || phone}`);
           contractorData.selfie = uploadResult.url;
           user.profileImage = uploadResult.url;
           logger.info(`Contractor selfie uploaded: ${uploadResult.url}`);
@@ -213,40 +241,54 @@ const register = async (userData, fileBuffers = {}) => {
     }
   }
 
-  // Generate and send OTP for email verification
-  const otp = generateOTP();
-  await storeOTP(email.toLowerCase(), otp, 'registration');
+  // For contractors or anyone with email, generate and send OTP for verification
+  if (queryEmail) {
+    const otp = generateOTP();
+    await storeOTP(queryEmail, otp, 'registration');
 
-  // Send OTP via email
-  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'registration');
-  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
+    // Send OTP via email
+    const emailResult = await sendOTPEmail(queryEmail, otp, 'registration');
+    const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
-  // Send welcome email (non-blocking)
-  sendWelcomeEmail(user.email, user.name).catch(err => {
-    logger.error(`Failed to send welcome email: ${err.message}`);
-  });
+    // Send welcome email (non-blocking)
+    sendWelcomeEmail(queryEmail, user.name).catch(err => {
+      logger.error(`Failed to send welcome email: ${err.message}`);
+    });
 
-  logger.info(`New user registered: ${user.email} (${user.role})`);
+    logger.info(`New user registered: ${queryEmail} (${user.role})`);
 
+    return {
+      message: 'Registration successful. Please verify your email with the OTP sent to your email address.',
+      email: queryEmail,
+      ...(debugOtp ? { debugOtp } : {}),
+    };
+  }
+
+  // If phone-only registration
+  logger.info(`New user registered via phone: ${phone} (${user.role})`);
   return {
-    message: 'Registration successful. Please verify your email with the OTP sent to your email address.',
-    email: user.email,
-    ...(debugOtp ? { debugOtp } : {}),
+    message: 'Registration successful. Mobile verification required.',
+    phone: phone,
+    user: await _getPopulatedUserResponse(user),
   };
 };
 
 /**
  * Login with email and password
  */
-const login = async (email, password, deviceInfo = {}) => {
+const login = async (identifier, password, deviceInfo = {}) => {
   logger.info('Login service started');
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
   // First, try finding in User collection
-  let user = await User.findOne({ email: email.toLowerCase() }).select('+password');
+  let user = await User.findOne(query).select('+password');
   let isUser = true;
 
   // If not found in User, check Admin collection
-  if (!user) {
-    user = await Admin.findOne({ email: email.toLowerCase() }).select('+password');
+  if (!user && identifier.includes('@')) {
+    user = await Admin.findOne({ email: identifier.toLowerCase() }).select('+password');
     isUser = false;
   }
 
@@ -293,7 +335,7 @@ const login = async (email, password, deviceInfo = {}) => {
     }
 
     await user.save({ validateBeforeSave: false });
-    throw new Error('Invalid email or password');
+    throw new Error('Invalid credentials');
   }
 
   // 3. Success: Reset login attempts
@@ -313,12 +355,20 @@ const login = async (email, password, deviceInfo = {}) => {
       if (!user.devices[deviceIndex].isVerified) {
         // Existing but unverified? Treat as new verification needed
         const otp = generateOTP();
-        await storeOTP(email.toLowerCase(), otp, 'device_verification');
-        await sendOTPEmail(email.toLowerCase(), otp, 'device_verification');
+        const otpKey = user.email || user.phone;
+        await storeOTP(otpKey, otp, 'device_verification');
+        
+        if (user.email) {
+            await sendOTPEmail(user.email, otp, 'device_verification');
+        }
+
         return {
           requireDeviceVerification: true,
-          message: 'Device not verified. OTP sent to email.',
+          message: user.email 
+            ? 'Device not verified. OTP sent to email.'
+            : 'Device not verified. Please verify using OTP.',
           email: user.email,
+          phone: user.phone,
           deviceId
         };
       }
@@ -345,13 +395,20 @@ const login = async (email, password, deviceInfo = {}) => {
 
       // Send Verification OTP
       const otp = generateOTP();
-      await storeOTP(email.toLowerCase(), otp, 'device_verification');
-      await sendOTPEmail(email.toLowerCase(), otp, 'device_verification');
+      const otpKey = user.email || user.phone;
+      await storeOTP(otpKey, otp, 'device_verification');
+      
+      if (user.email) {
+          await sendOTPEmail(user.email, otp, 'device_verification');
+      }
 
       return {
         requireDeviceVerification: true,
-        message: 'New device detected. Please verify your email to authorize this device.',
+        message: user.email 
+            ? 'New device detected. Please verify your email to authorize this device.'
+            : 'New device detected. Verification required.',
         email: user.email,
+        phone: user.phone,
         deviceId: deviceId, // Return so client knows
         ...(config.NODE_ENV !== 'production' ? { debugOtp: otp } : {})
       };
@@ -397,7 +454,7 @@ const login = async (email, password, deviceInfo = {}) => {
   // Move this before toObject to ensure sessionId is there
   const userResponse = await _getPopulatedUserResponse(user);
 
-  logger.info(`User logged in: ${user.email} (${user.role})`);
+  logger.info(`User logged in: ${user.email || user.phone} (${user.role})`);
 
   return {
     user: userResponse,
@@ -447,11 +504,15 @@ const verifyDevice = async (email, deviceId, otp) => {
 /**
  * Send OTP for login
  */
-const sendLoginOTP = async (email) => {
-  const user = await User.findOne({ email: email.toLowerCase() });
+const sendLoginOTP = async (identifier) => {
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
+  const user = await User.findOne(query);
 
   if (!user) {
-    throw new Error('No account found with this email address');
+    throw new Error('No account found with this identifier');
   }
 
   if (!user.isActive) {
@@ -460,13 +521,17 @@ const sendLoginOTP = async (email) => {
 
   // Generate and store OTP
   const otp = generateOTP();
-  await storeOTP(email.toLowerCase(), otp, 'login');
+  const otpKey = user.email || user.phone;
+  await storeOTP(otpKey, otp, 'login');
 
-  // Send OTP via email
-  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'login');
+  // Send OTP via email if available
+  let emailResult = { success: false };
+  if (user.email) {
+    emailResult = await sendOTPEmail(user.email, otp, 'login');
+  }
   const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
 
-  logger.info(`Login OTP sent to: ${email}`);
+  logger.info(`Login OTP sent/generated for: ${otpKey}`);
 
   return {
     message: 'OTP sent to your email address',
@@ -477,16 +542,20 @@ const sendLoginOTP = async (email) => {
 /**
  * Login with OTP
  */
-const loginWithOTP = async (email, otp) => {
+const loginWithOTP = async (identifier, otp) => {
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
   // Verify OTP
-  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'login');
+  const isOTPValid = await verifyOTP(identifier.includes('@') ? identifier.toLowerCase() : identifier, otp, 'login');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
   }
 
   // Find user
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await User.findOne(query);
 
   if (!user) {
     throw new Error('User not found');
@@ -511,7 +580,7 @@ const loginWithOTP = async (email, otp) => {
   // Remove password from response
   const userResponse = await _getPopulatedUserResponse(user);
 
-  logger.info(`User logged in with OTP: ${user.email} (${user.role})`);
+  logger.info(`User logged in with OTP: ${user.email || user.phone} (${user.role})`);
 
   return {
     user: userResponse,
@@ -522,16 +591,20 @@ const loginWithOTP = async (email, otp) => {
 /**
  * Verify OTP (for login - returns user and token if valid)
  */
-const verifyOTPForLogin = async (email, otp) => {
+const verifyOTPForLogin = async (identifier, otp) => {
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
   // Verify OTP using the OTP service
-  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'login');
+  const isOTPValid = await verifyOTP(identifier.includes('@') ? identifier.toLowerCase() : identifier, otp, 'login');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
   }
 
   // Find user
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await User.findOne(query);
 
   if (!user) {
     throw new Error('User not found');
@@ -694,10 +767,28 @@ const _getPopulatedUserResponse = async (user) => {
     const contractorData = await Contractor.findOne({ user: user._id });
     if (contractorData) {
       const contractorObj = contractorData.toObject();
+      userObj.companyName = contractorObj.companyName || '';
+      userObj.businessType = contractorObj.businessType || 'individual';
+      userObj.primaryServiceCategory = contractorObj.primaryServiceCategory || '';
       userObj.services = contractorObj.services || [];
       userObj.experience = contractorObj.experience || 0;
+      userObj.serviceRadius = contractorObj.serviceRadius || 10;
+      userObj.serviceAreas = contractorObj.serviceAreas || [];
       userObj.rating = contractorObj.rating || 5.0;
       userObj.verificationStatus = contractorObj.verificationStatus;
+      
+      // Verification fields
+      userObj.governmentId = contractorObj.governmentId;
+      userObj.selfie = contractorObj.selfie;
+      userObj.aadhaarNumber = contractorObj.aadhaarNumber;
+      userObj.panNumber = contractorObj.panNumber;
+      userObj.gstNumber = contractorObj.gstNumber;
+      userObj.businessRegistrationNumber = contractorObj.businessRegistrationNumber;
+
+      // Financial fields
+      userObj.bankAccount = contractorObj.bankAccount || {};
+      userObj.upiId = contractorObj.upiId;
+      userObj.billingAddress = contractorObj.billingAddress || {};
     }
   }
   return userObj;
@@ -781,23 +872,28 @@ const deleteProfileImage = async (userId) => {
 /**
  * Verify registration OTP
  */
-const verifyRegistration = async (email, otp) => {
+const verifyRegistration = async (identifier, otp) => {
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
   // Verify OTP
-  const isOTPValid = await verifyOTP(email.toLowerCase(), otp, 'registration');
+  const isOTPValid = await verifyOTP(identifier.includes('@') ? identifier.toLowerCase() : identifier, otp, 'registration');
 
   if (!isOTPValid) {
     throw new Error('Invalid or expired OTP');
   }
 
   // Find user
-  const user = await User.findOne({ email: email.toLowerCase() });
+  const user = await User.findOne(query);
 
   if (!user) {
     throw new Error('User not found');
   }
 
   // Mark user as verified
-  user.isEmailVerified = true;
+  user.isEmailVerified = user.email ? true : user.isEmailVerified;
+  user.isPhoneVerified = user.phone ? true : user.isPhoneVerified;
 
   // Generate Session ID
   const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
@@ -811,7 +907,7 @@ const verifyRegistration = async (email, otp) => {
   // Remove password from response
   const userResponse = await _getPopulatedUserResponse(user);
 
-  logger.info(`User verified registration: ${user.email}`);
+  logger.info(`User verified registration: ${user.email || user.phone}`);
 
   return {
     user: userResponse,
@@ -823,26 +919,33 @@ const verifyRegistration = async (email, otp) => {
 /**
  * Resend OTP
  */
-const resendOTP = async (email) => {
-  const user = await User.findOne({ email: email.toLowerCase() });
+const resendOTP = async (identifier) => {
+  const query = identifier.includes('@') 
+    ? { email: identifier.toLowerCase() } 
+    : { phone: identifier };
+
+  const user = await User.findOne(query);
 
   if (!user) {
-    throw new Error('No account found with this email address');
+    throw new Error('No account found with this identifier');
   }
 
   // Generate and store OTP
   const otp = generateOTP();
-  await storeOTP(email.toLowerCase(), otp, 'registration');
+  const otpKey = user.email || user.phone;
+  await storeOTP(otpKey, otp, 'registration');
 
-  // Send OTP via email
-  const emailResult = await sendOTPEmail(email.toLowerCase(), otp, 'registration');
-  const debugOtp = (!emailResult.success && config.NODE_ENV !== 'production') ? otp : undefined;
+  // Send OTP via email if available
+  if (user.email) {
+    await sendOTPEmail(user.email, otp, 'registration');
+  }
 
-  logger.info(`Registration OTP resent to: ${email}`);
+  logger.info(`Registration OTP resent to: ${otpKey}`);
 
   return {
-    message: 'OTP sent to your email address',
-    ...(debugOtp ? { debugOtp } : {}),
+    message: user.email 
+        ? 'OTP sent to your email address'
+        : 'OTP generated for registration',
   };
 };
 
@@ -905,6 +1008,39 @@ const updateProfile = async (userId, updateData) => {
       await Worker.findOneAndUpdate(
         { user: userId },
         { $set: workerUpdate },
+        { new: true }
+      );
+    }
+  }
+
+  // If user is a contractor, update role-specific data if provided
+  if (user.role === ROLES.CONTRACTOR) {
+    const contractorUpdate = {};
+    const allowedContractorFields = [
+      'companyName', 'businessName', 'businessType', 'primaryServiceCategory',
+      'services', 'experience', 'serviceRadius', 'serviceAreas',
+      'aadhaarNumber', 'panNumber', 'gstNumber', 'businessRegistrationNumber',
+      'bankAccount', 'upiId', 'billingAddress'
+    ];
+
+    allowedContractorFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        // Handle alias: businessName -> companyName
+        if (field === 'businessName') {
+          contractorUpdate.companyName = updateData[field];
+        } else {
+          contractorUpdate[field] = updateData[field];
+        }
+      }
+    });
+
+    // Check audit constraints if needed (e.g. Cannot change frequently)
+    // For now, allow updates but log them
+    if (Object.keys(contractorUpdate).length > 0) {
+      logger.info(`Updating Contractor profile for ${userId}: ${Object.keys(contractorUpdate).join(', ')}`);
+      await Contractor.findOneAndUpdate(
+        { user: userId },
+        { $set: contractorUpdate },
         { new: true }
       );
     }

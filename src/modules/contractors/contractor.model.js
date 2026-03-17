@@ -22,6 +22,15 @@ const contractorSchema = new mongoose.Schema(
             type: String,
             trim: true
         },
+        businessType: {
+            type: String,
+            enum: ['individual', 'company', 'agency'],
+            default: 'individual'
+        },
+        primaryServiceCategory: {
+            type: String,
+            trim: true
+        },
         services: [{
             type: String,
             trim: true,
@@ -30,6 +39,14 @@ const contractorSchema = new mongoose.Schema(
             type: Number,
             min: 0,
         },
+        serviceRadius: {
+            type: Number,
+            default: 10, // in km
+        },
+        serviceAreas: [{
+            type: String,
+            trim: true,
+        }],
 
         // Rating
         rating: {
@@ -55,12 +72,46 @@ const contractorSchema = new mongoose.Schema(
             cancellations: { type: Number, default: 0 },
         },
 
-        // Verification Documents (URLs)
+        // Verification Documents
         governmentId: {
             type: String,
         },
         selfie: {
             type: String,
+        },
+        aadhaarNumber: {
+            type: String,
+            trim: true
+        },
+        panNumber: {
+            type: String,
+            trim: true
+        },
+        gstNumber: {
+            type: String,
+            trim: true
+        },
+        businessRegistrationNumber: {
+            type: String,
+            trim: true
+        },
+
+        // Financial Details
+        bankAccount: {
+            holderName: { type: String, trim: true },
+            accountNumber: { type: String, trim: true },
+            ifscCode: { type: String, trim: true },
+            bankName: { type: String, trim: true },
+        },
+        upiId: {
+            type: String,
+            trim: true
+        },
+        billingAddress: {
+            street: { type: String, trim: true },
+            city: { type: String, trim: true },
+            state: { type: String, trim: true },
+            pincode: { type: String, trim: true },
         },
         city: { type: String, trim: true },
         state: { type: String, trim: true },

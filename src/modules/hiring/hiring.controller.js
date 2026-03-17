@@ -1,6 +1,7 @@
 const HiringRequest = require('./hiring.model');
 const Job = require('../jobs/job.model');
 const User = require('../users/user.model');
+const Contractor = require('../contractors/contractor.model');
 const notificationService = require('../notifications/notification.service');
 const logger = require('../../config/logger');
 
@@ -13,6 +14,15 @@ exports.createHireRequest = async (req, res) => {
     try {
         const { workerId, projectId, proposedRate, message } = req.body;
         const contractorId = req.user._id;
+
+        // Verification Constraint: Unverified contractors cannot hire workers
+        const contractor = await Contractor.findOne({ user: contractorId });
+        if (!contractor || contractor.verificationStatus !== 'verified') {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Your account must be verified by SkillBridge admin before you can hire workers. Please complete your profile and verification fields.' 
+            });
+        }
 
         // Anti-Fraud: Prevent self-hiring
         if (workerId.toString() === contractorId.toString()) {
