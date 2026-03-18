@@ -35,7 +35,7 @@ exports.initiateChat = async (req, res) => {
 
             chat = await Chat.findById(chat._id)
                 .populate('participants', 'name profileImage role')
-                .populate('job', 'job_title status');
+                .populate('job', 'job_title status dispute');
             return successResponse(res, 'Chat retrieved successfully', chat);
         }
 
@@ -65,7 +65,7 @@ exports.initiateChat = async (req, res) => {
 
         const populatedChat = await Chat.findById(newChat._id)
             .populate('participants', 'name profileImage role')
-            .populate('job', 'job_title status');
+            .populate('job', 'job_title status dispute');
 
         return successResponse(res, 'Chat initiated successfully', populatedChat, 201);
     } catch (error) {
@@ -82,11 +82,18 @@ exports.getUserChats = async (req, res) => {
             participants: userId,
             deletedBy: { $ne: userId }
         })
-            .populate('participants', 'name profileImage role')
-            .populate('job', 'job_title status')
+            .populate({
+                path: 'participants',
+                select: 'name profileImage role',
+                match: { _id: { $ne: userId } } // Optimization: Only need data for the OTHER person
+            })
+            .populate('job', 'job_title status dispute')
             .sort({ lastMessageTime: -1 });
 
-        return successResponse(res, 'Chats retrieved successfully', chats);
+        // Filter out any chats where the other participant might have been deleted/null
+        const validChats = chats.filter(chat => chat.participants && chat.participants.length > 0);
+
+        return successResponse(res, 'Chats retrieved successfully', validChats);
     } catch (error) {
         console.error('Error fetching chats:', error);
         return errorResponse(res, 'Server error', 500);
