@@ -10,6 +10,9 @@ router.use(protect);
 // Contractor sends request
 router.post('/request', authorize('contractor'), hiringController.createHireRequest);
 
+// Worker views pending requests
+router.get('/requests', authorize('worker'), hiringController.getWorkerRequests);
+
 // Worker responds to request
 router.post('/respond', authorize('worker'), hiringController.respondToHireRequest);
 

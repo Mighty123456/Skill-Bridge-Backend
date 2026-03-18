@@ -4,6 +4,7 @@ const User = require('../users/user.model');
 const Worker = require('../workers/worker.model');
 const Contractor = require('../contractors/contractor.model');
 const notificationService = require('../notifications/notification.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 /**
@@ -95,20 +96,8 @@ exports.createHireRequest = async (req, res) => {
             status: 'pending'
         });
 
-        // 5. Send Notification to Worker
-        await notificationService.createNotification({
-            recipient: targetWorkerId,
-            title: '💼 New Hire Request!',
-            message: `${req.user.name} wants to hire you for '${project.job_title}' at ₹${proposedRate}/hr.`,
-            type: 'hire_request',
-            data: {
-                requestId: hiringRequest._id,
-                projectId: project._id,
-                contractorName: req.user.name,
-                proposedRate: proposedRate,
-                jobTitle: project.job_title
-            }
-        });
+        // 5. Send Notification (FCM + In-App) via Helper
+        await notifyHelper.onHireRequestReceived(targetWorkerId, project, req.user.name, proposedRate);
 
         res.status(201).json({
             success: true,
@@ -200,19 +189,8 @@ exports.respondToHireRequest = async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
-        // Notify Contractor
-        await notificationService.createNotification({
-            recipient: hiringRequest.contractor._id,
-            title: status === 'accepted' ? '✅ Hire Request Accepted!' : '❌ Hire Request Rejected',
-            message: `${req.user.name} has ${status} your hire request for '${hiringRequest.project.job_title}'.`,
-            type: 'hire_response',
-            data: {
-                requestId: hiringRequest._id,
-                projectId: hiringRequest.project._id,
-                status: status,
-                workerName: req.user.name
-            }
-        });
+        // Notify Contractor (FCM + In-App) via Helper
+        await notifyHelper.onHireRequestResponded(hiringRequest.contractor._id, hiringRequest.project, req.user.name, status);
 
         res.status(200).json({
             success: true,
@@ -225,5 +203,29 @@ exports.respondToHireRequest = async (req, res) => {
         session.endSession();
         logger.error('Respond to Hire Request Error:', error);
         res.status(500).json({ success: false, message: 'Failed to respond to hire request' });
+    }
+};
+
+/**
+ * Get Worker Hire Requests
+ * @route   GET /api/hiring/requests
+ * @access  Private (Worker)
+ */
+exports.getWorkerRequests = async (req, res) => {
+    try {
+        const workerId = req.user._id;
+        const requests = await HiringRequest.find({ worker: workerId })
+            .populate('project', 'job_title skill_required location budget')
+            .populate('contractor', 'name profileImage')
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        logger.error('Get Worker Hire Requests Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch hire requests' });
     }
 };

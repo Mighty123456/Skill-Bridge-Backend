@@ -114,6 +114,33 @@ exports.onQuotationReceived = async (tenant, job, quotationData) => {
 };
 
 // =============================================================================
+// ✅ EVENT 2.5: Hire Request Received → Notify Worker
+// =============================================================================
+exports.onHireRequestReceived = async (workerId, project, contractorName, proposedRate) => {
+    const title = '💼 New Direct Hire Offer!';
+    const body = `${contractorName} wants to hire you for "${project.job_title}" at ₹${proposedRate}/hr.`;
+
+    // FCM Push (action required – high priority)
+    await _sendPushToUser(workerId, title, body, {
+        type: 'hire_request',
+        jobId: String(project._id),
+        screen: 'hire_requests',
+        recipientRole: 'worker',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'hire_request',
+        data: { projectId: project._id },
+    });
+
+    logger.info(`[NotifyHelper] onHireRequestReceived: Worker ${workerId} notified for project ${project._id}`);
+};
+
+// =============================================================================
 // ✅ EVENT 3: Quotation Accepted → Notify Worker
 // =============================================================================
 exports.onQuotationAccepted = async (worker, job, totalCost) => {
@@ -195,6 +222,34 @@ exports.onDiagnosisReady = async (tenant, job, finalCost) => {
     });
 
     logger.info(`[NotifyHelper] onDiagnosisReady: Tenant ${tenant._id} notified for job ${job._id}`);
+};
+
+// =============================================================================
+// ✅ EVENT 5.1: Hire Request Responded → Notify Contractor
+// =============================================================================
+exports.onHireRequestResponded = async (contractorId, project, workerName, status) => {
+    const isAccepted = status === 'accepted';
+    const title = isAccepted ? '✅ Hire Offer Accepted!' : '❌ Hire Offer Rejected';
+    const body = `${workerName} has ${status} your hire request for "${project.job_title}".`;
+
+    // FCM Push
+    await _sendPushToUser(contractorId, title, body, {
+        type: 'hire_response',
+        jobId: String(project._id),
+        status: status,
+        recipientRole: 'contractor',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: contractorId,
+        title,
+        message: body,
+        type: 'hire_response',
+        data: { projectId: project._id, status },
+    });
+
+    logger.info(`[NotifyHelper] onHireRequestResponded: Contractor ${contractorId} notified of ${status} for project ${project._id}`);
 };
 
 // =============================================================================
