@@ -383,3 +383,30 @@ exports.deleteMessage = async (req, res) => {
         return errorResponse(res, 'Server error', 500);
     }
 };
+
+// Delete Chat (Clear from user's list)
+exports.deleteChat = async (req, res) => {
+    try {
+        const { chatId } = req.params;
+        const userId = req.userId || req.user.id;
+
+        const chat = await Chat.findById(chatId);
+        if (!chat) return errorResponse(res, 'Chat not found', 404);
+
+        if (!chat.participants.map(p => p.toString()).includes(userId.toString())) {
+            return errorResponse(res, 'Unauthorized', 403);
+        }
+
+        // Professional Constraint: Soft delete from list (auditable)
+        if (!chat.deletedBy) chat.deletedBy = [];
+        if (!chat.deletedBy.map(id => id.toString()).includes(userId.toString())) {
+            chat.deletedBy.push(userId);
+            await chat.save();
+        }
+
+        return successResponse(res, 'Chat list entry removed');
+    } catch (error) {
+        console.error('Error deleting chat:', error);
+        return errorResponse(res, 'Server error', 500);
+    }
+};
