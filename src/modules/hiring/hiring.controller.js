@@ -14,8 +14,20 @@ const logger = require('../../config/logger');
  */
 exports.createHireRequest = async (req, res) => {
     try {
-        const { workerId, projectId, proposedRate, message } = req.body;
+        const { workerId, workerIds, projectId, proposedRate, message } = req.body;
         const contractorId = req.user._id;
+
+        // Determine targets to support both bulk and single requests
+        let targetList = [];
+        if (workerIds && Array.isArray(workerIds)) {
+             targetList = workerIds;
+        } else if (workerId) {
+             targetList = [workerId];
+        }
+
+        if (targetList.length === 0) {
+             return res.status(400).json({ success: false, message: 'Please provide at least one worker ID.' });
+        }
 
         // Verification Constraint: Unverified contractors cannot hire workers
         const contractor = await Contractor.findOne({ user: contractorId });
@@ -24,11 +36,6 @@ exports.createHireRequest = async (req, res) => {
                 success: false, 
                 message: 'Your account must be verified by SkillBridge admin before you can hire workers. Please complete your profile and verification fields.' 
             });
-        }
-
-        // Anti-Fraud: Prevent self-hiring
-        if (workerId.toString() === contractorId.toString()) {
-            return res.status(400).json({ success: false, message: 'Self-hiring is strictly prohibited.' });
         }
 
         // 1. Validate Project (must belong to contractor and be open)
@@ -41,68 +48,93 @@ exports.createHireRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Only open projects can be used to hire workers' });
         }
 
-        // 2. Validate Worker (must exist as a User and have a Worker profile)
-        let workerUser = await User.findById(workerId);
-        let workerProfile;
-
-        if (workerUser) {
-            workerProfile = await Worker.findOne({ user: workerUser._id });
-        } else {
-            // If not found by User ID, try finding by Worker ID
-            workerProfile = await Worker.findById(workerId).populate('user');
-            if (workerProfile) {
-                workerUser = workerProfile.user;
-            }
-        }
-
-        if (!workerUser || !workerProfile) {
-            return res.status(404).json({ success: false, message: 'Worker not found' });
-        }
-
-        // Use the actual User ID for the rest of the logic
-        const targetWorkerId = workerUser._id;
-
-        // Hiring Constraint: Overlapping Jobs Check
-        // We check if worker is available for project's preferred start time
         const { isWorkerAvailable } = require('../workers/worker.controller');
-        if (project.preferred_start_time) {
-            const available = await isWorkerAvailable(targetWorkerId, project.preferred_start_time);
-            if (!available) {
-                return res.status(400).json({ 
-                    success: false, 
-                    message: 'Worker has another job assigned at this time. Please choose another worker or time.' 
+
+        let createdRequests = [];
+        let errors = [];
+
+        for (const currentWorkerId of targetList) {
+             try {
+                // Anti-Fraud: Prevent self-hiring
+                if (currentWorkerId.toString() === contractorId.toString()) {
+                    errors.push({ workerId: currentWorkerId, reason: 'Self-hiring is strictly prohibited.' });
+                    continue;
+                }
+
+                // 2. Validate Worker (must exist as a User and have a Worker profile)
+                let workerUser = await User.findById(currentWorkerId);
+                let workerProfile;
+
+                if (workerUser) {
+                    workerProfile = await Worker.findOne({ user: workerUser._id });
+                } else {
+                    workerProfile = await Worker.findById(currentWorkerId).populate('user');
+                    if (workerProfile) {
+                        workerUser = workerProfile.user;
+                    }
+                }
+
+                if (!workerUser || !workerProfile) {
+                    errors.push({ workerId: currentWorkerId, reason: 'Worker not found' });
+                    continue;
+                }
+
+                const targetWorkerIdObj = workerUser._id;
+
+                // Hiring Constraint: Overlapping Jobs Check
+                if (project.preferred_start_time) {
+                    const available = await isWorkerAvailable(targetWorkerIdObj, project.preferred_start_time);
+                    if (!available) {
+                        errors.push({ workerId: currentWorkerId, reason: 'Worker has another job assigned at this time.' });
+                        continue;
+                    }
+                }
+
+                // 3. Prevent duplicate active requests for same project-worker pair
+                const existingRequest = await HiringRequest.findOne({
+                    worker: targetWorkerIdObj,
+                    project: projectId,
+                    status: 'pending'
                 });
-            }
+
+                if (existingRequest) {
+                    errors.push({ workerId: currentWorkerId, reason: 'A pending hire request already exists for this worker.' });
+                    continue;
+                }
+
+                // 4. Create Request
+                const hiringRequest = await HiringRequest.create({
+                    contractor: contractorId,
+                    worker: targetWorkerIdObj,
+                    project: projectId,
+                    proposedRate,
+                    message,
+                    status: 'pending'
+                });
+
+                // 5. Send Notification (FCM + In-App) via Helper
+                await notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, proposedRate);
+
+                createdRequests.push(hiringRequest);
+             } catch (err) {
+                 logger.error(`Error processing bulk hire request for ${currentWorkerId}:`, err);
+                 errors.push({ workerId: currentWorkerId, reason: 'Internal error processing request.' });
+             }
         }
 
-        // 3. Prevent duplicate active requests for same project-worker pair
-        const existingRequest = await HiringRequest.findOne({
-            worker: targetWorkerId,
-            project: projectId,
-            status: 'pending'
-        });
-
-        if (existingRequest) {
-            return res.status(400).json({ success: false, message: 'A pending hire request already exists for this worker on this project' });
+        if (createdRequests.length === 0) {
+             return res.status(400).json({
+                 success: false,
+                 message: 'Failed to send any hire requests.',
+                 errors
+             });
         }
-
-        // 4. Create Request
-        const hiringRequest = await HiringRequest.create({
-            contractor: contractorId,
-            worker: targetWorkerId,
-            project: projectId,
-            proposedRate,
-            message,
-            status: 'pending'
-        });
-
-        // 5. Send Notification (FCM + In-App) via Helper
-        await notifyHelper.onHireRequestReceived(targetWorkerId, project, req.user.name, proposedRate);
 
         res.status(201).json({
             success: true,
-            message: 'Hire request sent successfully',
-            data: hiringRequest
+            message: `Hire requests sent successfully to ${createdRequests.length} worker(s).`,
+            data: createdRequests,
+            errors: errors.length > 0 ? errors : undefined
         });
 
     } catch (error) {
