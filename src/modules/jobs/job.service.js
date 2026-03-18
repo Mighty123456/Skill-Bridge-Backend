@@ -520,7 +520,7 @@ exports.updateLocation = async (jobId, workerId, lat, lng, isMock) => {
 /**
  * B4. Start Job (OTP Verification)
  */
-exports.startJob = async (jobId, workerId, otp) => {
+exports.startJob = async (jobId, workerId, otp, isContractorRequest = false) => {
     const job = await Job.findById(jobId).select('+start_otp');
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
@@ -531,24 +531,28 @@ exports.startJob = async (jobId, workerId, otp) => {
         throw new Error(`Security Lockout: Too many failed attempts. Try again in ${minutesLeft} minutes.`);
     }
 
-    if (!isValidTransition(job.status, 'in_progress')) {
-        throw new Error(`Invalid transition: Cannot move from ${job.status} to in_progress`);
-    }
+    const isContractorProject = job.is_contractor_project || isContractorRequest;
 
-    if (!job.start_otp || job.start_otp !== otp) {
-        // 2. Security: Increment Attempts & Lock
-        job.start_otp_attempts = (job.start_otp_attempts || 0) + 1;
-
-        if (job.start_otp_attempts >= 3) {
-            job.start_otp_lockout_until = new Date(Date.now() + 5 * 60000); // 5 mins lockout
-            job.start_otp_attempts = 0; // Reset counter for next cycle
-            appendTimeline(job, job.status, 'system', 'Security Alert: OTP Lockout triggered due to 3 failed attempts.', { type: 'security_alert' });
-            await job.save();
-            throw new Error('Invalid OTP. Account locked for 5 minutes due to multiple failed attempts.');
+    if (!isContractorProject) {
+        if (!isValidTransition(job.status, 'in_progress')) {
+            throw new Error(`Invalid transition: Cannot move from ${job.status} to in_progress`);
         }
 
-        await job.save();
-        throw new Error(`Invalid OTP. Please ask the customer for the code. (${3 - job.start_otp_attempts} attempts remaining)`);
+        if (!job.start_otp || job.start_otp !== otp) {
+            // 2. Security: Increment Attempts & Lock
+            job.start_otp_attempts = (job.start_otp_attempts || 0) + 1;
+
+            if (job.start_otp_attempts >= 3) {
+                job.start_otp_lockout_until = new Date(Date.now() + 5 * 60000); // 5 mins lockout
+                job.start_otp_attempts = 0; // Reset counter for next cycle
+                appendTimeline(job, job.status, 'system', 'Security Alert: OTP Lockout triggered due to 3 failed attempts.', { type: 'security_alert' });
+                await job.save();
+                throw new Error('Invalid OTP. Account locked for 5 minutes due to multiple failed attempts.');
+            }
+
+            await job.save();
+            throw new Error(`Invalid OTP. Please ask the customer for the code. (${3 - job.start_otp_attempts} attempts remaining)`);
+        }
     }
 
     // Success: Reset counters

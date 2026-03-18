@@ -312,8 +312,8 @@ exports.reportDelay = async (req, res) => {
 exports.startJob = async (req, res) => {
     try {
         const { id } = req.params;
-        const { otp } = req.body;
-        const job = await JobService.startJob(id, req.user._id, otp);
+        const { otp, is_contractor_project } = req.body;
+        const job = await JobService.startJob(id, req.user._id, otp, is_contractor_project);
         res.json({ success: true, message: 'Job Started', data: job });
     } catch (error) {
         logger.error('Start Job Error:', error);
