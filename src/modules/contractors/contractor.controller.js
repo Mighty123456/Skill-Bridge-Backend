@@ -165,10 +165,13 @@ exports.getContractorWorkers = async (req, res) => {
         }).populate('user', 'name email phone profileImage isOnline location isVerified');
 
         // Map to flat structure expected by mobile frontend
+        // id is used for identifying the person in project assignments & chats (User ID)
+        // workerProfileId is used for profile-specific lookups (Ratings, Badges)
         const workers = workerProfiles.map(profile => {
             const user = profile.user || {};
             return {
-                id: profile._id,
+                id: user._id, // User ID is the primary ID for hiring/chatting
+                workerProfileId: profile._id, // Keep Profile ID for ratings etc
                 userId: user._id,
                 name: user.name,
                 email: user.email,
