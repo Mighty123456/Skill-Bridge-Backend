@@ -132,7 +132,7 @@ exports.respondToHireRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid status response' });
         }
 
-        const hiringRequest = await HiringRequest.findOne({ _id: requestId, worker: workerId })
+        const hiringRequest = await HiringRequest.findById(requestId)
             .populate('project')
             .populate('contractor', 'name')
             .session(session);
@@ -141,6 +141,17 @@ exports.respondToHireRequest = async (req, res) => {
             await session.abortTransaction();
             session.endSession();
             return res.status(404).json({ success: false, message: 'Hire request not found' });
+        }
+
+        // Security: Ensure this worker is the one authorized to respond
+        const workerProfile = await Worker.findOne({ user: workerId });
+        const isAuthorized = hiringRequest.worker.toString() === workerId.toString() || 
+                           (workerProfile && hiringRequest.worker.toString() === workerProfile._id.toString());
+
+        if (!isAuthorized) {
+            await session.abortTransaction();
+            session.endSession();
+            return res.status(403).json({ success: false, message: 'Not authorized to respond to this request' });
         }
 
         if (hiringRequest.status !== 'pending') {
@@ -213,8 +224,15 @@ exports.respondToHireRequest = async (req, res) => {
  */
 exports.getWorkerRequests = async (req, res) => {
     try {
-        const workerId = req.user._id;
-        const requests = await HiringRequest.find({ worker: workerId })
+        const userId = req.user._id;
+        const workerProfile = await Worker.findOne({ user: userId });
+        
+        const requests = await HiringRequest.find({ 
+            $or: [
+                { worker: userId },
+                { worker: workerProfile ? workerProfile._id : null }
+            ]
+        })
             .populate('project', 'job_title skill_required location budget')
             .populate('contractor', 'name profileImage')
             .sort({ createdAt: -1 });
