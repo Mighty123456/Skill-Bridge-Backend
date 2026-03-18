@@ -175,18 +175,21 @@ exports.getUserChats = async (req, res) => {
         const userId = req.user.id;
         const chats = await Chat.find({
             participants: userId,
-            deletedBy: { $ne: userId },
-            lastMessage: { $ne: '' } // Professional separation: only show active conversations
+            deletedBy: { $ne: userId }
         })
             .populate({
                 path: 'participants',
                 select: 'name profileImage role',
-                match: { _id: { $ne: userId } } // Optimization: Only need data for the OTHER person
+                match: { _id: { $ne: userId } }
             })
-            .populate('job', 'job_title status dispute')
+            .populate({
+                path: 'job',
+                select: 'job_title status dispute'
+            })
             .sort({ lastMessageTime: -1 });
 
-        // Filter out any chats where the other participant might have been deleted/null
+        // A chat is only "valid" if it has participants other than the current user (standard professional chat logic)
+        // Group chats will have multiple other participants.
         const validChats = chats.filter(chat => chat.participants && chat.participants.length > 0);
 
         return successResponse(res, 'Chats retrieved successfully', validChats);
