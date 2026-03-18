@@ -172,15 +172,16 @@ exports.initiateProjectGroupChat = async (req, res) => {
 // Get User Chats
 exports.getUserChats = async (req, res) => {
     try {
-        const userId = req.user.id;
+        const userId = req.userId || req.user.id;
+        console.log(`[Chat] Fetching chats for user: ${userId}`);
+
         const chats = await Chat.find({
             participants: userId,
             deletedBy: { $ne: userId }
         })
             .populate({
                 path: 'participants',
-                select: 'name profileImage role',
-                match: { _id: { $ne: userId } }
+                select: 'name profileImage role businessName'
             })
             .populate({
                 path: 'job',
@@ -188,11 +189,9 @@ exports.getUserChats = async (req, res) => {
             })
             .sort({ lastMessageTime: -1 });
 
-        // A chat is only "valid" if it has participants other than the current user (standard professional chat logic)
-        // Group chats will have multiple other participants.
-        const validChats = chats.filter(chat => chat.participants && chat.participants.length > 0);
+        console.log(`[Chat] Found ${chats.length} chats for user ${userId}`);
 
-        return successResponse(res, 'Chats retrieved successfully', validChats);
+        return successResponse(res, 'Chats retrieved successfully', chats);
     } catch (error) {
         console.error('Error fetching chats:', error);
         return errorResponse(res, 'Server error', 500);
