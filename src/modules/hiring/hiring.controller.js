@@ -39,17 +39,32 @@ exports.createHireRequest = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Only open projects can be used to hire workers' });
         }
 
-        // 2. Validate Worker (must exist)
-        const worker = await User.findById(workerId);
-        if (!worker) {
+        // 2. Validate Worker (must exist as a User and have a Worker profile)
+        let workerUser = await User.findById(workerId);
+        let workerProfile;
+
+        if (workerUser) {
+            workerProfile = await Worker.findOne({ user: workerUser._id });
+        } else {
+            // If not found by User ID, try finding by Worker ID
+            workerProfile = await Worker.findById(workerId).populate('user');
+            if (workerProfile) {
+                workerUser = workerProfile.user;
+            }
+        }
+
+        if (!workerUser || !workerProfile) {
             return res.status(404).json({ success: false, message: 'Worker not found' });
         }
+
+        // Use the actual User ID for the rest of the logic
+        const targetWorkerId = workerUser._id;
 
         // Hiring Constraint: Overlapping Jobs Check
         // We check if worker is available for project's preferred start time
         const { isWorkerAvailable } = require('../workers/worker.controller');
         if (project.preferred_start_time) {
-            const available = await isWorkerAvailable(workerId, project.preferred_start_time);
+            const available = await isWorkerAvailable(targetWorkerId, project.preferred_start_time);
             if (!available) {
                 return res.status(400).json({ 
                     success: false, 
@@ -60,7 +75,7 @@ exports.createHireRequest = async (req, res) => {
 
         // 3. Prevent duplicate active requests for same project-worker pair
         const existingRequest = await HiringRequest.findOne({
-            worker: workerId,
+            worker: targetWorkerId,
             project: projectId,
             status: 'pending'
         });
@@ -72,7 +87,7 @@ exports.createHireRequest = async (req, res) => {
         // 4. Create Request
         const hiringRequest = await HiringRequest.create({
             contractor: contractorId,
-            worker: workerId,
+            worker: targetWorkerId,
             project: projectId,
             proposedRate,
             message,
@@ -81,7 +96,7 @@ exports.createHireRequest = async (req, res) => {
 
         // 5. Send Notification to Worker
         await notificationService.createNotification({
-            recipient: workerId,
+            recipient: targetWorkerId,
             title: '💼 New Hire Request!',
             message: `${req.user.name} wants to hire you for '${project.job_title}' at ₹${proposedRate}/hr.`,
             type: 'hire_request',

@@ -11,6 +11,9 @@ router.use(authorize('contractor'));
 router.get('/dashboard/stats', contractorController.getDashboardStats);
 router.get('/workers', contractorController.getContractorWorkers);
 
+// Phase 3: Contractor Projects (own jobs with is_contractor_project = true)
+router.get('/projects', contractorController.getContractorProjects);
+
 // Phase 4: Workforce Scheduling
 router.get('/schedule', contractorController.getWorkforceSchedule);
 router.get('/schedule/availability/:workerId/:date', contractorController.checkAvailability);
@@ -19,3 +22,4 @@ router.put('/schedule/task/:jobId/:taskId', contractorController.updateTask);
 router.delete('/schedule/task/:jobId/:taskId', contractorController.deleteTask);
 
 module.exports = router;
+

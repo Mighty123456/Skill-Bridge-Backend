@@ -2,8 +2,56 @@ const Job = require('../jobs/job.model');
 const Wallet = require('../wallet/wallet.model');
 const User = require('../users/user.model');
 const Contractor = require('./contractor.model');
-const logger = require('../../config/logger');
 const JobService = require('../jobs/job.service');
+const logger = require('../../config/logger');
+
+/**
+ * Get Contractor Projects (is_contractor_project = true)
+ * @route   GET /api/v1/contractors/projects
+ * @access  Private (Contractor)
+ */
+exports.getContractorProjects = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { status, archived, all } = req.query;
+
+        const query = {
+            user_id: contractorId,
+            is_contractor_project: true,
+        };
+
+        if (all === 'true') {
+            // No status filter - return all projects
+        } else if (archived === 'true') {
+            query.status = { $in: ['completed', 'cancelled'] };
+        } else if (status) {
+            // Support comma-separated status values
+            const statusList = status.split(',');
+            query.status = statusList.length > 1 ? { $in: statusList } : statusList[0];
+        } else {
+            // Default: all non-archived
+            query.status = { $nin: ['completed', 'cancelled'] };
+        }
+
+        const jobs = await Job.find(query)
+            .sort({ created_at: -1 })
+            .populate('selected_worker_id', 'name phone profileImage');
+
+        res.status(200).json({
+            success: true,
+            count: jobs.length,
+            data: jobs
+        });
+    } catch (error) {
+        logger.error('Get Contractor Projects Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch contractor projects'
+        });
+    }
+};
+
+
 
 /**
  * Internal Helper: Check if worker has any tasks on a specific date
