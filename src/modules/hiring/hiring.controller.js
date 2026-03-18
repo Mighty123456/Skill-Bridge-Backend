@@ -1,6 +1,7 @@
 const HiringRequest = require('./hiring.model');
 const Job = require('../jobs/job.model');
 const User = require('../users/user.model');
+const Worker = require('../workers/worker.model');
 const Contractor = require('../contractors/contractor.model');
 const notificationService = require('../notifications/notification.service');
 const logger = require('../../config/logger');
