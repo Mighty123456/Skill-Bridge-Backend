@@ -74,6 +74,101 @@ exports.initiateChat = async (req, res) => {
     }
 };
 
+// Initiate Project Group Chat (Phase 5)
+exports.initiateProjectGroupChat = async (req, res) => {
+    try {
+        const { jobId } = req.body;
+        const senderId = req.user.id; // Contractor
+
+        if (!jobId) {
+            return errorResponse(res, 'Job ID is required', 400);
+        }
+
+        const Job = require('../jobs/job.model');
+        const job = await Job.findById(jobId);
+        if (!job) {
+            return errorResponse(res, 'Job not found', 404);
+        }
+
+        // Constraint: Chat only enabled after job assignment (Phase 5 Constraint)
+        const allowedStatuses = ['assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
+        if (!allowedStatuses.includes(job.status)) {
+            return errorResponse(res, 'Group chat is only enabled after workers are assigned to the project.', 403);
+        }
+
+        // 1. Identify all participants: Contractor + All assigned workers across all tasks
+        const participantsSet = new Set();
+        participantsSet.add(senderId.toString());
+
+        if (job.selected_worker_id) {
+            participantsSet.add(job.selected_worker_id.toString());
+        }
+
+        if (job.tasks && job.tasks.length > 0) {
+            job.tasks.forEach(task => {
+                if (task.assigned_worker_id) {
+                    participantsSet.add(task.assigned_worker_id.toString());
+                }
+            });
+        }
+
+        const participantIds = Array.from(participantsSet);
+
+        // Constraint: Must have at least one worker to start a group chat
+        if (participantIds.length < 2) {
+            return errorResponse(res, 'No workers assigned to this project yet. Assign workers to start a group chat.', 400);
+        }
+
+        // A group chat must have at least the contractor but usually needs workers to be "group-worthy"
+        // Though technically it can be a group of 1 contractor + 1 worker too if requested as group type.
+        
+        // 2. Check if group chat already exists for this job
+        let chat = await Chat.findOne({
+            job: jobId,
+            type: 'group'
+        });
+
+        if (chat) {
+            // Update participants if they changed (new workers assigned)
+            chat.participants = participantIds;
+            chat.status = 'active';
+
+            // Ensure all participants have an entry in unreadCounts
+            participantIds.forEach(pId => {
+                if (!chat.unreadCounts.has(pId)) {
+                    chat.unreadCounts.set(pId, 0);
+                }
+            });
+
+            await chat.save();
+            chat = await Chat.findById(chat._id)
+                .populate('participants', 'name profileImage role')
+                .populate('job', 'job_title status dispute');
+            return successResponse(res, 'Group chat retrieved successfully', chat);
+        }
+
+        // 3. Create new group chat
+        const unreadCounts = {};
+        participantIds.forEach(pId => { unreadCounts[pId] = 0; });
+
+        const newChat = await Chat.create({
+            participants: participantIds,
+            job: jobId,
+            type: 'group',
+            unreadCounts: unreadCounts
+        });
+
+        const populatedChat = await Chat.findById(newChat._id)
+            .populate('participants', 'name profileImage role')
+            .populate('job', 'job_title status dispute');
+
+        return successResponse(res, 'Project group chat created successfully', populatedChat, 201);
+    } catch (error) {
+        console.error('Error initiating group chat:', error);
+        return errorResponse(res, 'Server error', 500);
+    }
+};
+
 // Get User Chats
 exports.getUserChats = async (req, res) => {
     try {

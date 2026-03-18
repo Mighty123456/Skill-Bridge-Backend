@@ -5,6 +5,7 @@ const { authenticate: protect } = require('../../common/middleware/auth.middlewa
 
 // Routes
 router.post('/initiate', protect, chatController.initiateChat);
+router.post('/initiate-group', protect, chatController.initiateProjectGroupChat);
 router.get('/', protect, chatController.getUserChats);
 router.post('/message', protect, chatController.sendMessage);
 router.get('/:chatId/messages', protect, chatController.getMessages);

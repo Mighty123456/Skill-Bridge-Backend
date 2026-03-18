@@ -17,6 +17,11 @@ const chatSchema = new mongoose.Schema({
         enum: ['active', 'archived', 'blocked'],
         default: 'active'
     },
+    type: {
+        type: String,
+        enum: ['direct', 'group'],
+        default: 'direct'
+    },
     lastMessage: {
         type: String,
         default: ''

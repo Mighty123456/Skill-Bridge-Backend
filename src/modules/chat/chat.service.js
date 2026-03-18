@@ -247,8 +247,10 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
     });
     await chat.save();
 
-    // Trigger FCM Background Notification (Async)
-    if (recipientId) {
+    // Trigger FCM Background Notifications for all other participants (Async)
+    const otherParticipants = chat.participants.filter(p => p.toString() !== senderId.toString());
+    
+    otherParticipants.forEach(recipientId => {
         const messagePreview = text || (media && media.length > 0 ? (media[0].fileType === 'image' ? 'Sent an image' : 'Sent a file') : 'New message');
         notifyHelper.onNewChatMessage(
             recipientId,
@@ -257,8 +259,8 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
             chatId,
             senderId,
             job._id
-        ).catch(err => logger.error(`FCM Push failed: ${err.message}`));
-    }
+        ).catch(err => logger.error(`FCM Push failed for ${recipientId}: ${err.message}`));
+    });
 
     // Create System Message if warning triggered
     let systemMessage = null;
