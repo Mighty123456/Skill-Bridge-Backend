@@ -5,6 +5,7 @@ const Notification = require('../notifications/notification.model');
 const Portfolio = require('./portfolio.model');
 const Availability = require('./availability.model');
 const EtaTracking = require('./etaTracking.model');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 /**
@@ -736,6 +737,9 @@ exports.updateWorkerTaskStatus = async (req, res) => {
         );
 
         await job.save();
+
+        // Notify Contractor of task update
+        await notifyHelper.onProjectTaskStatusUpdated(job.user_id, req.user.name, task.title, status);
 
         res.status(200).json({
             success: true,

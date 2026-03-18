@@ -141,6 +141,31 @@ exports.onHireRequestReceived = async (workerId, project, contractorName, propos
 };
 
 // =============================================================================
+// ✅ EVENT 2.6: Project Task Assigned → Notify Worker
+// =============================================================================
+exports.onProjectTaskAssigned = async (workerId, jobTitle, taskTitle, dueDate) => {
+    const title = '📝 New Project Task';
+    const body = `Scheduled: "${taskTitle}" for project "${jobTitle}", due ${new Date(dueDate).toDateString()}.`;
+
+    // FCM Push
+    await _sendPushToUser(workerId, title, body, {
+        type: 'task_assigned',
+        screen: 'tasks',
+        recipientRole: 'worker',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'task_assigned',
+    });
+
+    logger.info(`[NotifyHelper] onProjectTaskAssigned: Worker ${workerId} notified for task ${taskTitle}`);
+};
+
+// =============================================================================
 // ✅ EVENT 3: Quotation Accepted → Notify Worker
 // =============================================================================
 exports.onQuotationAccepted = async (worker, job, totalCost) => {
@@ -250,6 +275,31 @@ exports.onHireRequestResponded = async (contractorId, project, workerName, statu
     });
 
     logger.info(`[NotifyHelper] onHireRequestResponded: Contractor ${contractorId} notified of ${status} for project ${project._id}`);
+};
+
+// =============================================================================
+// ✅ EVENT 5.2: Project Task Status Updated → Notify Contractor
+// =============================================================================
+exports.onProjectTaskStatusUpdated = async (contractorId, workerName, taskTitle, status) => {
+    const title = '📈 Task Progress Update';
+    const body = `${workerName} has updated the status of "${taskTitle}" to: ${status.toUpperCase()}.`;
+
+    // FCM Push
+    await _sendPushToUser(contractorId, title, body, {
+        type: 'task_update',
+        status: status,
+        recipientRole: 'contractor',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: contractorId,
+        title,
+        message: body,
+        type: 'task_update',
+    });
+
+    logger.info(`[NotifyHelper] onProjectTaskStatusUpdated: Contractor ${contractorId} notified of status ${status}`);
 };
 
 // =============================================================================
@@ -476,6 +526,52 @@ exports.onTicketUpdated = async (user, ticketId, updateMessage) => {
     });
 
     logger.info(`[NotifyHelper] onTicketUpdated: User ${user._id} notified for ticket ${ticketId}`);
+};
+
+// =============================================================================
+// ✅ EVENT 15: General Task Assigned → Notify Recipient (Tenant/Worker)
+// =============================================================================
+exports.onTaskAssigned = async (recipientId, job, taskName, role) => {
+    const title = '📝 Task Notification';
+    const body = `Task update for "${job.job_title}": "${taskName}".`;
+
+    await _sendPushToUser(recipientId, title, body, {
+        type: 'info',
+        jobId: String(job._id),
+        recipientRole: role,
+    });
+
+    await notificationService.createNotification({
+        recipient: recipientId, title, message: body,
+        type: 'info', data: { jobId: job._id },
+    });
+
+    logger.info(`[NotifyHelper] onTaskAssigned: ${role} ${recipientId} notified for job ${job._id}`);
+};
+
+// =============================================================================
+// ✅ EVENT 17: Review Received → Notify Worker
+// =============================================================================
+exports.onReviewReceived = async (workerId, rating, comment) => {
+    const title = '🌟 You received a new review!';
+    const body = `You got a ${rating}-star rating: "${comment || 'No comment provided.'}"`;
+
+    // FCM Push
+    await _sendPushToUser(workerId, title, body, {
+        type: 'new_review',
+        rating: String(rating),
+        recipientRole: 'worker',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'new_review',
+    });
+
+    logger.info(`[NotifyHelper] onReviewReceived: Worker ${workerId} notified of new review`);
 };
 
 // =============================================================================

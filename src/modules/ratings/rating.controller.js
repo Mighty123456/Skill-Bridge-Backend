@@ -1,4 +1,5 @@
 const ratingService = require('./rating.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 /**
@@ -32,6 +33,9 @@ exports.submitRating = async (req, res) => {
         };
 
         const newRating = await ratingService.submitRating(ratingData);
+
+        // Notify worker of new review
+        await notifyHelper.onReviewReceived(workerId, rating, comment);
 
         res.status(201).json({
             success: true,

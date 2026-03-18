@@ -3,6 +3,7 @@ const Wallet = require('../wallet/wallet.model');
 const User = require('../users/user.model');
 const Contractor = require('./contractor.model');
 const JobService = require('../jobs/job.service');
+const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
 
 /**
@@ -236,6 +237,11 @@ exports.addTaskToJob = async (req, res) => {
 
         await job.save();
 
+        // Notify Worker if assigned
+        if (assigned_worker_id) {
+            await notifyHelper.onProjectTaskAssigned(assigned_worker_id, job.job_title, title, due_date);
+        }
+
         res.status(201).json({
             success: true,
             data: job.tasks[job.tasks.length - 1]
@@ -293,6 +299,11 @@ exports.updateTask = async (req, res) => {
         );
 
         await job.save();
+
+        // Notify Worker if assignment changed or updated
+        if (assigned_worker_id) {
+            await notifyHelper.onProjectTaskAssigned(assigned_worker_id, job.job_title, title || task.title, due_date || task.due_date);
+        }
 
         res.status(200).json({
             success: true,
