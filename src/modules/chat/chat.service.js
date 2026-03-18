@@ -277,3 +277,30 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
 
     return { message, systemMessage, chat };
 };
+/**
+ * Send a non-editable system message into a chat (Constraint 9)
+ */
+exports.sendSystemMessage = async (chatId, content) => {
+    try {
+        const Message = require('./message.model');
+        const message = await Message.create({
+            chatId,
+            isSystemMessage: true,
+            text: content
+        });
+
+        // Broadcast via socket
+        try {
+            const { getIo } = require('../../socket/socket');
+            const io = getIo();
+            io.to(chatId.toString()).emit('receive_message', message.toObject());
+        } catch (e) {
+            logger.warn(`System message socket broadcast failed: ${e.message}`);
+        }
+
+        return message;
+    } catch (error) {
+        logger.error('Error sending system message:', error);
+        return null;
+    }
+};

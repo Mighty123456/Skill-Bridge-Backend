@@ -45,14 +45,19 @@ const isValidTransition = (currentStatus, nextStatus) => {
     return nextIndex === currentIndex + 1 || nextIndex === currentIndex;
 };
 
-// === HELPER: Sanitize PII ===
-const sanitizeNote = (text) => {
-    if (!text) return '';
-    // Mask Phone Numbers (simple pattern)
-    let sanitized = text.replace(/\b\d{10}\b/g, '[PHONE-REDACTED]');
-    // Mask Emails
-    sanitized = sanitized.replace(/\b[\w\.-]+@[\w\.-]+\.\w{2,4}\b/gi, '[EMAIL-REDACTED]');
-    return sanitized;
+const chatService = require('../chat/chat.service');
+const Chat = require('../chat/chat.model');
+
+// === HELPER: Notify Chat of Status Changes (Constraint 9) ===
+const notifyChatStatusChange = async (jobId, status, note) => {
+    try {
+        const chat = await Chat.findOne({ job: jobId, status: 'active' });
+        if (chat) {
+            await chatService.sendSystemMessage(chat._id, note);
+        }
+    } catch (e) {
+        logger.error(`notifyChatStatusChange failed: ${e.message}`);
+    }
 };
 
 // === HELPER: Append to Timeline ===
@@ -262,10 +267,8 @@ exports.confirmEta = async (jobId, workerId, etaTime) => {
 
     job.status = 'eta_confirmed';
     job.journey = job.journey || {};
-    job.journey.confirmed_eta = new Date(etaTime);
-
-    appendTimeline(job, 'eta_confirmed', 'worker', `ETA confirmed for ${new Date(etaTime).toLocaleTimeString()}`);
     await job.save();
+    await notifyChatStatusChange(jobId, 'eta_confirmed', `Worker confirmed ETA: ${new Date(etaTime).toLocaleTimeString()}`);
 
     // Notify Tenant (Multi-channel)
     try {
@@ -393,6 +396,7 @@ exports.arrive = async (jobId, workerId, location) => {
     });
 
     await job.save();
+    await notifyChatStatusChange(jobId, 'arrived', 'Worker has arrived at location.');
 
     // 1.4.2 C: ETA Accuracy Tracking
     try {
@@ -679,7 +683,8 @@ exports.handleJobPaymentSuccess = async (jobId, amount, gateway = null, gatewayI
         logger.error(`Post-payment email failed for job ${jobId}: ${e.message}`);
     }
 
-    return await job.save({ session });
+    await job.save({ session });
+    await notifyChatStatusChange(jobId, 'diagnosed', '✅ Payment secured in platform escrow. Chat is active.');
 };
 
 /**

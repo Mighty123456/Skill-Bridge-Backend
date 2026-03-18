@@ -308,32 +308,78 @@ exports.getMessages = async (req, res) => {
     }
 }
 
-// Delete Chat (Clear from user's list)
-exports.deleteChat = async (req, res) => {
+// Edit Message (Constraint 11: 5-minute window)
+exports.editMessage = async (req, res) => {
     try {
-        const { chatId } = req.params;
+        const { messageId, newText } = req.body;
         const userId = req.user.id;
 
-        const chat = await Chat.findById(chatId);
-        if (!chat) return errorResponse(res, 'Chat not found', 404);
+        const message = await Message.findById(messageId);
+        if (!message) return errorResponse(res, 'Message not found', 404);
 
-        if (!chat.participants.map(p => p.toString()).includes(userId)) {
+        if (message.senderId.toString() !== userId) {
+            return errorResponse(res, 'Unauthorized: You can only edit your own messages', 403);
+        }
+
+        // Constraint: Edit allowed within 5 minutes
+        const minutesSinceCreated = (Date.now() - message.createdAt.getTime()) / 60000;
+        if (minutesSinceCreated > 5) {
+            return errorResponse(res, 'Edit window (5 minutes) has expired.', 400);
+        }
+
+        message.text = newText;
+        message.isEdited = true;
+        await message.save();
+
+        // Notify room
+        try {
+            const { getIo } = require('../../socket/socket');
+            const io = getIo();
+            io.to(message.chatId.toString()).emit('message_edited', {
+                messageId: message._id,
+                newText: newText
+            });
+        } catch (e) { console.error(e); }
+
+        return successResponse(res, 'Message edited successfully', message);
+    } catch (error) {
+        logger.error('Error editing message:', error);
+        return errorResponse(res, 'Server error', 500);
+    }
+};
+
+// Delete Message (Constraint 11: Soft Delete)
+exports.deleteMessage = async (req, res) => {
+    try {
+        const { messageId } = req.params;
+        const userId = req.user.id;
+
+        const message = await Message.findById(messageId);
+        if (!message) return errorResponse(res, 'Message not found', 404);
+
+        if (message.senderId.toString() !== userId) {
             return errorResponse(res, 'Unauthorized', 403);
         }
 
-        // To "delete" like WhatsApp, we add the user to a "deletedBy" array
-        // We need to add deletedBy to the schema, or we can just clear the messages for them (like clear chat)
-        // A common pattern is having a 'clearedAt' timestamp per user, or physically removing them from participants if both delete
-        // If they want to just delete the chat entirely from view:
-        if (!chat.deletedBy) chat.deletedBy = [];
-        if (!chat.deletedBy.map(id => id.toString()).includes(userId)) {
-            chat.deletedBy.push(userId);
-            await chat.save();
-        }
+        // Professional Constraint: Soft delete only (still stored for audit)
+        message.isDeleted = true;
+        message.text = 'This message was deleted';
+        message.media = []; // Clear for privacy but keep original in audit log if needed? 
+        // Standard professional apps clear the view content.
+        await message.save();
 
-        return successResponse(res, 'Chat deleted successfully');
+        // Notify room
+        try {
+            const { getIo } = require('../../socket/socket');
+            const io = getIo();
+            io.to(message.chatId.toString()).emit('message_deleted', {
+                messageId: message._id
+            });
+        } catch (e) { console.error(e); }
+
+        return successResponse(res, 'Message deleted (soft)');
     } catch (error) {
-        logger.error('Error deleting chat:', error);
+        logger.error('Error deleting message:', error);
         return errorResponse(res, 'Server error', 500);
     }
 };

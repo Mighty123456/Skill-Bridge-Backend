@@ -43,6 +43,18 @@ const messageSchema = new mongoose.Schema({
     isEncrypted: {
         type: Boolean,
         default: false
+    },
+    isEdited: {
+        type: Boolean,
+        default: false
+    },
+    isDeleted: {
+        type: Boolean,
+        default: false
+    },
+    isOptimistic: {
+        type: Boolean,
+        default: false
     }
 }, {
     timestamps: true
