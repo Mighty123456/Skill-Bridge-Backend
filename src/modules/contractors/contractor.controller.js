@@ -354,11 +354,14 @@ exports.checkAvailability = async (req, res) => {
         const endOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 23, 59, 59, 999));
 
         const existingTasks = await Job.find({
-            "tasks.assigned_worker_id": workerId,
-            "tasks.due_date": { $gte: startOfDay, $lte: endOfDay }
+            tasks: {
+                $elemMatch: {
+                    assigned_worker_id: workerId,
+                    due_date: { $gte: startOfDay, $lte: endOfDay }
+                }
+            }
         });
 
-        // Filter the specific task(s) for that day (since multiple might exist across jobs)
         const dayTasks = [];
         existingTasks.forEach(job => {
             job.tasks.forEach(task => {
@@ -367,6 +370,7 @@ exports.checkAvailability = async (req, res) => {
                     task.due_date <= endOfDay) {
                     dayTasks.push({
                         jobId: job._id,
+                        taskId: task._id,
                         jobTitle: job.job_title,
                         taskTitle: task.title
                     });
