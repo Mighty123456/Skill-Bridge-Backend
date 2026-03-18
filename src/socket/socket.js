@@ -38,6 +38,9 @@ const initializeSocket = (server) => {
 
         connectedUsers.add(userId);
 
+        // ✅ Persist Online Status
+        User.findByIdAndUpdate(userId, { isOnline: true }).exec();
+
         // Broadcast that user is online
         io.emit('user_status_change', { userId, status: 'online' });
 
@@ -167,9 +170,9 @@ const initializeSocket = (server) => {
 
         socket.on('send_message', async (data) => {
             try {
-                const { chatId, text, recipientId, encrypted, media } = data;
+                const { chatId, text, encrypted, media } = data;
 
-                let { message, systemMessage } = await chatService.processAndSendMessage({
+                let { message, systemMessage, chat } = await chatService.processAndSendMessage({
                     chatId,
                     senderId: userId,
                     text,
@@ -179,19 +182,15 @@ const initializeSocket = (server) => {
 
                 const chatIdStr = chatId.toString();
 
-                // ✅ Auto-Deliver if recipient is currently online in sockets
-                if (recipientId && connectedUsers.has(recipientId.toString())) {
-                    if (!message.deliveredTo.includes(recipientId)) {
-                        message.deliveredTo.push(recipientId);
-                        await message.save();
-
-                        // Fire messages_delivered back to sender immediately
+                // ✅ Real-time Delivery Logic: Emit 'messages_delivered' to everyone online right now
+                message.deliveredTo.forEach(recId => {
+                    if (recId.toString() !== userId.toString()) {
                         io.to(chatIdStr).emit('messages_delivered', {
                             chatId: chatIdStr,
-                            deliveredTo: recipientId
+                            deliveredTo: recId
                         });
                     }
-                }
+                });
 
                 // Emit to Room (Sender + Recipient)
                 io.to(chatIdStr).emit('receive_message', message.toObject());
@@ -210,6 +209,9 @@ const initializeSocket = (server) => {
         socket.on('disconnect', () => {
             connectedUsers.delete(userId);
             logger.info(`Socket disconnected: ${socket.id} (User: ${userId})`);
+
+            // ✅ Persist Offline Status
+            User.findByIdAndUpdate(userId, { isOnline: false }).exec();
 
             // Broadcast that user is offline with last seen
             io.emit('user_status_change', {

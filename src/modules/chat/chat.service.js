@@ -206,14 +206,15 @@ exports.processAndSendMessage = async ({ chatId, senderId, text, media, isEncryp
     }
 
     // Save Message
-    const recipientId = chat.participants.find(p => p.toString() !== senderId);
+    const recipientIds = chat.participants.filter(p => p.toString() !== senderId.toString());
 
-    // Check if recipient is online (simple check)
-    const recipient = await User.findById(recipientId);
-    let deliveredTo = [];
-    if (recipient && recipient.isOnline) {
-        deliveredTo.push(recipientId);
-    }
+    // Check which recipients are online for immediate delivery tracking
+    const recipientsOnline = await User.find({
+        _id: { $in: recipientIds },
+        isOnline: true
+    }).select('_id');
+    
+    let deliveredTo = recipientsOnline.map(u => u._id);
 
     const message = await Message.create({
         chatId,
