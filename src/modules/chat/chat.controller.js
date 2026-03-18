@@ -173,25 +173,28 @@ exports.initiateProjectGroupChat = async (req, res) => {
 exports.getUserChats = async (req, res) => {
     try {
         const userId = req.userId || req.user.id;
-        console.log(`[Chat] Fetching chats for user: ${userId}`);
-
         const chats = await Chat.find({
             participants: userId,
             deletedBy: { $ne: userId }
         })
             .populate({
                 path: 'participants',
-                select: 'name profileImage role businessName'
+                select: 'name profileImage role businessName isOnline'
             })
             .populate({
                 path: 'job',
-                select: 'job_title status dispute'
+                select: 'job_title status'
             })
             .sort({ lastMessageTime: -1 });
 
-        console.log(`[Chat] Found ${chats.length} chats for user ${userId}`);
+        // Professional Filter: Remove chats where the other person was deleted/not found during population
+        const validChats = chats.filter(chat => {
+            // Must have at least one other participant that is successfully populated (is an object with a name)
+            const others = chat.participants.filter(p => p && p._id && p._id.toString() !== userId && p.name);
+            return chat.type === 'group' || others.length > 0;
+        });
 
-        return successResponse(res, 'Chats retrieved successfully', chats);
+        return successResponse(res, 'Chats retrieved successfully', validChats);
     } catch (error) {
         console.error('Error fetching chats:', error);
         return errorResponse(res, 'Server error', 500);
