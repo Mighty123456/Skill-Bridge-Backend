@@ -57,6 +57,9 @@ const jobSchema = new mongoose.Schema(
             type: Number,
             default: 24,
         },
+        budget: {
+            type: Number
+        },
         preferred_start_time: {
             type: Date,
         },

@@ -23,7 +23,18 @@ exports.cancelJob = async (req, res) => {
 
 exports.createJob = async (req, res) => {
     try {
-        let { job_title, job_description, material_requirements, skill_required, location, urgency_level, quotation_window_hours } = req.body;
+        let { 
+            job_title, 
+            job_description, 
+            material_requirements, 
+            skill_required, 
+            location, 
+            urgency_level, 
+            quotation_window_hours,
+            budget,
+            is_contractor_project,
+            preferred_start_time
+        } = req.body;
 
         // Handle stringified JSON from Multipart requests
         if (typeof location === 'string') {
@@ -55,7 +66,10 @@ exports.createJob = async (req, res) => {
             location,
             urgency_level,
             quotation_window_hours,
-            issue_photos
+            issue_photos,
+            budget,
+            is_contractor_project,
+            preferred_start_time
         };
 
         // Delegate content creation and constraints to Service

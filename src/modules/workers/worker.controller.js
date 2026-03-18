@@ -528,7 +528,7 @@ exports.getNearbyWorkers = async (req, res) => {
         workerQuery.verificationStatus = 'verified';
 
         if (skill && skill !== 'All') {
-            workerQuery.skills = { $in: [skill] };
+            workerQuery.skills = { $regex: skill, $options: 'i' };
         }
 
         // Advanced Filters

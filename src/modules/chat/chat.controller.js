@@ -80,7 +80,8 @@ exports.getUserChats = async (req, res) => {
         const userId = req.user.id;
         const chats = await Chat.find({
             participants: userId,
-            deletedBy: { $ne: userId }
+            deletedBy: { $ne: userId },
+            lastMessage: { $ne: '' } // Professional separation: only show active conversations
         })
             .populate({
                 path: 'participants',
