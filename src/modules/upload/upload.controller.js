@@ -29,6 +29,33 @@ exports.uploadFile = async (req, res) => {
 };
 
 /**
+ * Upload a raw document/file (e.g. PDF)
+ */
+exports.uploadDocument = async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ success: false, message: 'No file uploaded' });
+        }
+
+        const folder = req.body.folder || 'skillbridge/documents';
+        const result = await cloudinaryService.uploadFile(req.file.buffer, folder);
+
+        res.status(200).json({
+            success: true,
+            message: 'Document uploaded successfully',
+            data: {
+                url: result.url,
+                publicId: result.publicId,
+                format: result.format
+            }
+        });
+    } catch (error) {
+        logger.error(`Document Upload Controller Error: ${error.message}`);
+        res.status(500).json({ success: false, message: 'Document upload failed' });
+    }
+};
+
+/**
  * Delete a file
  */
 exports.deleteFile = async (req, res) => {

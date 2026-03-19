@@ -31,6 +31,7 @@ const upload = multer({
 
 // Protect all upload routes
 router.post('/', protect, upload.single('file'), uploadController.uploadFile);
+router.post('/document', protect, upload.single('file'), uploadController.uploadDocument);
 router.delete('/', protect, uploadController.deleteFile); // Expects { "url": "..." }
 
 module.exports = router;
