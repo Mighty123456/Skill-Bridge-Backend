@@ -13,6 +13,7 @@ router.get('/workers', contractorController.getContractorWorkers);
 
 // Phase 3: Contractor Projects (own jobs with is_contractor_project = true)
 router.get('/projects', contractorController.getContractorProjects);
+router.patch('/projects/:id/status', contractorController.updateProjectStatus);
 
 // Phase 4: Workforce Scheduling
 router.get('/schedule', contractorController.getWorkforceSchedule);

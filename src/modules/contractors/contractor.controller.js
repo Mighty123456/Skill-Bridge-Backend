@@ -250,6 +250,10 @@ exports.addTaskToJob = async (req, res) => {
 
         job.tasks.push(newTask);
         
+        // Phase 12 Enhancement: Auto-transition status when first worker assigned
+        if (job.status === 'open' && assigned_worker_id) {
+            job.status = 'assigned';
+        }
         // Phase 4 Constraint: Log schedule updates
         JobService.appendTimeline(
             job, 
@@ -324,11 +328,21 @@ exports.updateTask = async (req, res) => {
             `Updated task "${oldTitle}": ${updateData.status ? 'Status changed to ' + updateData.status : 'Schedule modified'}`
         );
 
+        // Phase 12 Enhancement: Auto-transition status when worker is assigned
+        if (job.status === 'open' && (updateData.assigned_worker_id || task.assigned_worker_id)) {
+            job.status = 'assigned';
+        }
+
         await job.save();
 
         // Notify Worker if assignment changed or updated
-        if (assigned_worker_id) {
-            await notifyHelper.onProjectTaskAssigned(assigned_worker_id, job.job_title, title || task.title, due_date || task.due_date);
+        if (updateData.assigned_worker_id) {
+            await notifyHelper.onProjectTaskAssigned(
+                updateData.assigned_worker_id, 
+                job.job_title, 
+                updateData.title || task.title, 
+                updateData.due_date || task.due_date
+            );
         }
 
         res.status(200).json({
@@ -458,5 +472,38 @@ exports.deleteTask = async (req, res) => {
     } catch (error) {
         logger.error('Delete Task Error:', error);
         res.status(500).json({ success: false, message: 'Failed to delete task' });
+    }
+};
+
+/**
+ * Update Project Status (Archive/Finalize)
+ * @route   PATCH /api/v1/contractors/projects/:id/status
+ * @access  Private (Contractor)
+ */
+exports.updateProjectStatus = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status } = req.body;
+        const contractorId = req.user._id;
+
+        const job = await Job.findOne({ _id: id, user_id: contractorId });
+        if (!job) {
+            return res.status(404).json({ success: false, message: 'Project not found' });
+        }
+
+        job.status = status;
+        await job.save();
+
+        res.status(200).json({
+            success: true,
+            message: `Project status updated to ${status}`,
+            data: job
+        });
+    } catch (error) {
+        logger.error('Update Project Status Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update project status'
+        });
     }
 };

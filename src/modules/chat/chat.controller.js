@@ -47,9 +47,9 @@ exports.initiateChat = async (req, res) => {
         }
 
         // Constraint: Chat only enabled after job assignment
-        // Allow if status is assigned, in_progress, completed, reviewing, disputed
+        // Contractor projects allow chatting at ANY project phase if worker is involved
         const allowedStatuses = ['assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
-        if (job.status === 'open' || job.status === 'pending') {
+        if ((job.status === 'open' || job.status === 'pending') && !job.is_contractor_project) {
             return errorResponse(res, 'Chat is only enabled after a worker is assigned to the job.', 403);
         }
 
@@ -91,7 +91,8 @@ exports.initiateProjectGroupChat = async (req, res) => {
         }
 
         // Constraint: Chat only enabled after job assignment (Phase 5 Constraint)
-        const allowedStatuses = ['assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
+        // For Contractor Projects, we allow it in 'open' status if workers are assigned
+        const allowedStatuses = ['open', 'assigned', 'in_progress', 'completed', 'reviewing', 'disputed'];
         if (!allowedStatuses.includes(job.status)) {
             return errorResponse(res, 'Group chat is only enabled after workers are assigned to the project.', 403);
         }
