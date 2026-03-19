@@ -55,32 +55,47 @@ exports.getContractorProjects = async (req, res) => {
 
 
 /**
- * Internal Helper: Check if worker has any tasks on a specific date
+ * Internal Helper: Check if worker has any tasks overlapping a specific date range
  */
-const isWorkerAvailable = async (workerId, date, excludeTaskId = null) => {
+const isWorkerAvailable = async (workerId, startDate, endDate, excludeTaskId = null) => {
     if (!workerId) return true;
     
     // Normalize date to start and end of day in UTC to ensure consistency
-    const queryDate = new Date(date);
-    const startOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 0, 0, 0, 0));
-    const endOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 23, 59, 59, 999));
+    const sDate = new Date(startDate);
+    const eDate = new Date(endDate || startDate);
+    
+    const queryStart = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth(), sDate.getUTCDate(), 0, 0, 0, 0));
+    const queryEnd = new Date(Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 23, 59, 59, 999));
 
     const existingJobsWithConflicts = await Job.find({
         "tasks.assigned_worker_id": workerId,
-        "tasks.due_date": { $gte: startOfDay, $lte: endOfDay }
+        $or: [
+            { "tasks.due_date": { $gte: queryStart, $lte: queryEnd } },
+            { 
+               "tasks.start_date": { $lte: queryEnd },
+               "tasks.end_date": { $gte: queryStart }
+            }
+        ]
     });
 
     for (const job of existingJobsWithConflicts) {
         for (const task of job.tasks) {
-            if (task.assigned_worker_id?.toString() === workerId.toString() && 
-                task.due_date >= startOfDay && 
-                task.due_date <= endOfDay) {
+            if (task.assigned_worker_id?.toString() === workerId.toString()) {
                 
                 // If we are updating a task, exclude it from conflict check
                 if (excludeTaskId && task._id.toString() === excludeTaskId.toString()) {
                     continue;
                 }
-                return false;
+
+                // Check overlap logic
+                const tStart = task.start_date || task.due_date;
+                const tEnd = task.end_date || task.due_date;
+
+                if (tStart && tEnd) {
+                    if (tStart <= queryEnd && tEnd >= queryStart) {
+                        return false;
+                    }
+                }
             }
         }
     }
@@ -205,17 +220,20 @@ exports.getContractorWorkers = async (req, res) => {
 exports.addTaskToJob = async (req, res) => {
     try {
         const contractorId = req.user._id;
-        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date } = req.body;
+        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date, start_date, end_date } = req.body;
 
         const job = await Job.findOne({ _id: jobId, user_id: contractorId });
         if (!job) return res.status(404).json({ success: false, message: 'Job not found or unauthorized' });
 
+        const sDate = start_date || due_date;
+        const eDate = end_date || due_date;
+
         // Phase 4 Constraint: Prevent double booking
-        const available = await isWorkerAvailable(assigned_worker_id, due_date);
+        const available = await isWorkerAvailable(assigned_worker_id, sDate, eDate);
         if (!available) {
             return res.status(400).json({ 
                 success: false, 
-                message: `Worker ${assigned_worker_name} is already booked for this date.` 
+                message: `Worker ${assigned_worker_name} is already booked during this time.` 
             });
         }
 
@@ -225,7 +243,9 @@ exports.addTaskToJob = async (req, res) => {
             status: 'pending',
             assigned_worker_id,
             assigned_worker_name,
-            due_date: new Date(due_date)
+            due_date: new Date(due_date || eDate),
+            start_date: sDate ? new Date(sDate) : undefined,
+            end_date: eDate ? new Date(eDate) : undefined
         };
 
         job.tasks.push(newTask);
@@ -273,10 +293,11 @@ exports.updateTask = async (req, res) => {
 
         // Phase 4 Constraint: Check availability if date or worker changes
         const newWorkerId = updateData.assigned_worker_id || task.assigned_worker_id;
-        const newDate = updateData.due_date || task.due_date;
+        const newStartDate = updateData.start_date || updateData.due_date || task.start_date || task.due_date;
+        const newEndDate = updateData.end_date || updateData.due_date || task.end_date || task.due_date;
 
-        if (updateData.assigned_worker_id || updateData.due_date) {
-            const available = await isWorkerAvailable(newWorkerId, newDate, taskId);
+        if (updateData.assigned_worker_id || updateData.due_date || updateData.start_date || updateData.end_date) {
+            const available = await isWorkerAvailable(newWorkerId, newStartDate, newEndDate, taskId);
             if (!available) {
                 return res.status(400).json({ 
                     success: false, 
@@ -292,6 +313,8 @@ exports.updateTask = async (req, res) => {
         if (updateData.assigned_worker_id) task.assigned_worker_id = updateData.assigned_worker_id;
         if (updateData.assigned_worker_name) task.assigned_worker_name = updateData.assigned_worker_name;
         if (updateData.due_date) task.due_date = new Date(updateData.due_date);
+        if (updateData.start_date) task.start_date = new Date(updateData.start_date);
+        if (updateData.end_date) task.end_date = new Date(updateData.end_date);
 
         // Phase 4 Constraint: Log schedule updates
         JobService.appendTimeline(
@@ -347,17 +370,26 @@ exports.getWorkforceSchedule = async (req, res) => {
 exports.checkAvailability = async (req, res) => {
     try {
         const { workerId, date } = req.params;
+        const endDateStr = req.query.endDate || date;
         
         // Phase 4 Constraint: Use UTC for consistency
-        const queryDate = new Date(date);
-        const startOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 0, 0, 0, 0));
-        const endOfDay = new Date(Date.UTC(queryDate.getUTCFullYear(), queryDate.getUTCMonth(), queryDate.getUTCDate(), 23, 59, 59, 999));
+        const sDate = new Date(date);
+        const eDate = new Date(endDateStr);
+
+        const startOfDay = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth(), sDate.getUTCDate(), 0, 0, 0, 0));
+        const endOfDay = new Date(Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 23, 59, 59, 999));
 
         const existingTasks = await Job.find({
             tasks: {
                 $elemMatch: {
                     assigned_worker_id: workerId,
-                    due_date: { $gte: startOfDay, $lte: endOfDay }
+                    $or: [
+                        { due_date: { $gte: startOfDay, $lte: endOfDay } },
+                        { 
+                           start_date: { $lte: endOfDay },
+                           end_date: { $gte: startOfDay }
+                        }
+                    ]
                 }
             }
         });
@@ -365,15 +397,17 @@ exports.checkAvailability = async (req, res) => {
         const dayTasks = [];
         existingTasks.forEach(job => {
             job.tasks.forEach(task => {
-                if (task.assigned_worker_id?.toString() === workerId && 
-                    task.due_date >= startOfDay && 
-                    task.due_date <= endOfDay) {
-                    dayTasks.push({
-                        jobId: job._id,
-                        taskId: task._id,
-                        jobTitle: job.job_title,
-                        taskTitle: task.title
-                    });
+                if (task.assigned_worker_id?.toString() === workerId) {
+                    const tStart = task.start_date || task.due_date;
+                    const tEnd = task.end_date || task.due_date;
+                    if (tStart && tEnd && tStart <= endOfDay && tEnd >= startOfDay) {
+                        dayTasks.push({
+                            jobId: job._id,
+                            taskId: task._id,
+                            jobTitle: job.job_title,
+                            taskTitle: task.title
+                        });
+                    }
                 }
             });
         });
