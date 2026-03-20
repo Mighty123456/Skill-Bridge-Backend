@@ -48,6 +48,14 @@ router.patch(
   adminController.updateProfessionalStatus,
 );
 
+// Update professional reliability score
+router.patch(
+  '/professionals/:id/reliability',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.updateProfessionalReliabilityScore,
+);
+
 // List all users (User, Worker, Contractor)
 router.get(
   '/users',

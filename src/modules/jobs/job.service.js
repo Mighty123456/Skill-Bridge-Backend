@@ -109,6 +109,7 @@ exports.createJob = async (jobData, user) => {
         quotation_start_time,
         quotation_end_time,
         is_emergency: jobData.urgency_level === 'emergency',
+        is_contractor_project: user.role === 'contractor' || jobData.is_contractor_project,
         status: 'open',
         location: {
             type: 'Point',

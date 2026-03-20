@@ -176,7 +176,9 @@ const jobSchema = new mongoose.Schema(
             assigned_worker_name: { type: String },
             due_date: { type: Date },
             start_date: { type: Date },
-            end_date: { type: Date }
+            end_date: { type: Date },
+            completion_photos: [{ type: String }],
+            notes: { type: String }
         }],
 
         // Module 4: Execution & Timeline

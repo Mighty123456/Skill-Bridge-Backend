@@ -94,12 +94,19 @@ const listProfessionals = async (req, res) => {
           profileImage: u.profileImage,
           type: 'contractor',
           companyName: c.companyName,
+          businessType: c.businessType,
           primarySkill: 'Contractor',
           experience: c.experience,
           city: c.city || u.address?.city || null,
           state: u.address?.state || null,
           governmentId: c.governmentId,
           selfie: c.selfie,
+          gstNumber: c.gstNumber,
+          panNumber: c.panNumber,
+          businessRegistrationNumber: c.businessRegistrationNumber,
+          gstDoc: c.gstDoc,
+          registrationDoc: c.registrationDoc,
+          panDoc: c.panDoc,
           status: c.verificationStatus,
           reliabilityScore: c.reliabilityScore,
           createdAt: c.createdAt,
@@ -183,6 +190,50 @@ const updateProfessionalStatus = async (req, res) => {
   } catch (error) {
     logger.error(`Admin updateProfessionalStatus error: ${error.message}`);
     return errorResponse(res, 'Failed to update status', 500);
+  }
+};
+
+/**
+ * Manually update professional reliability score (Calibration)
+ * PATCH /api/admin/professionals/:id/reliability
+ */
+const updateProfessionalReliabilityScore = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { score, reason } = req.body;
+
+    if (score < 0 || score > 100) {
+      return errorResponse(res, 'Score must be between 0 and 100', 400);
+    }
+
+    let professional = await Worker.findById(id);
+    if (!professional) {
+      professional = await Contractor.findById(id);
+    }
+
+    if (!professional) {
+      return errorResponse(res, 'Professional not found', 404);
+    }
+
+    const oldScore = professional.reliabilityScore;
+    professional.reliabilityScore = score;
+    
+    // Add to history or just log it
+    await professional.save();
+
+    await logAdminAction(
+      req.userId, 
+      'calibrate_reliability', 
+      id, 
+      'professional', 
+      `Calibrated reliability score from ${oldScore} to ${score}. Reason: ${reason || 'Not provided'}`, 
+      req.ip
+    );
+
+    return successResponse(res, 'Reliability score calibrated successfully', { score });
+  } catch (error) {
+    logger.error(`Admin updateProfessionalReliabilityScore error: ${error.message}`);
+    return errorResponse(res, 'Failed to update reliability score', 500);
   }
 };
 
@@ -342,7 +393,8 @@ const getDashboardStats = async (req, res) => {
       escrowData,
       revenueTrendsRaw,
       jobTrendsRaw,
-      recentTransactionsRaw
+      recentTransactionsRaw,
+      hiringStatsRawResult
     ] = await Promise.all([
       Worker.countDocuments({ verificationStatus: 'pending' }),
       Worker.countDocuments({ verificationStatus: 'verified' }),
@@ -398,8 +450,22 @@ const getDashboardStats = async (req, res) => {
         .sort({ createdAt: -1 })
         .limit(6)
         .populate('user', 'name profileImage')
-        .lean()
+        .lean(),
+      // Hiring Stats
+      HiringRequest.aggregate([
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            accepted: { $sum: { $cond: [{ $eq: ['$status', 'accepted'] }, 1, 0] } },
+            rejected: { $sum: { $cond: [{ $eq: ['$status', 'rejected'] }, 1, 0] } },
+          }
+        }
+      ]),
     ]);
+
+    const hiringStatsRaw = hiringStatsRawResult[0] || { total: 0, accepted: 0, rejected: 0 };
+    const hiringConversionRate = hiringStatsRaw.total > 0 ? (hiringStatsRaw.accepted / hiringStatsRaw.total) * 100 : 0;
 
     const totalRevenue = revenueData[0]?.total || 0;
     const escrowBalance = escrowData[0]?.total || 0;
@@ -421,6 +487,11 @@ const getDashboardStats = async (req, res) => {
       totalRevenue: platformStats.totalRevenue || totalRevenue,
       escrowBalance,
       transactionCount: platformStats.transactionCount || 0,
+      hiringStats: {
+        total: hiringStatsRaw.total,
+        conversionRate: Math.round(hiringConversionRate),
+        rejectionRate: Math.round(hiringStatsRaw.total > 0 ? (hiringStatsRaw.rejected / hiringStatsRaw.total) * 100 : 0)
+      },
       trends: {
         revenue: revenueTrendsRaw || [],
         jobs: jobTrendsRaw || []
@@ -599,35 +670,52 @@ const listJobs = async (req, res) => {
       .populate('selected_worker_id', 'name email phone')
       .sort({ created_at: -1 });
 
-    const formattedJobs = jobs.map(job => ({
-      id: job._id,
-      jobTitle: job.job_title,
-      skill: job.skill_required,
-      userName: job.user_id?.name || 'Unknown',
-      userEmail: job.user_id?.email || '',
-      location: job.location?.address_text || 'Unknown',
-      coordinates: job.location?.coordinates || [0, 0], // [lng, lat]
-      urgency: job.urgency_level,
-      isEmergency: job.is_emergency,
-      status: job.status,
-      selectedWorker: job.selected_worker_id?.name || null,
-      selectedWorkerEmail: job.selected_worker_id?.email || null,
-      workerLocation: job.journey?.worker_location || null,
-      startedAt: job.started_at || job.journey?.started_at || null,
-      completedAt: job.completed_at || null,
-      createdAt: job.created_at,
-      updatedAt: job.updated_at,
-      // Enhanced details
-      description: job.job_description || 'No description provided',
-      issuePhotos: job.issue_photos || [],
-      diagnosisReport: job.diagnosis_report || null,
-      materialRequests: job.material_requests || [],
-      completionPhotos: job.completion_photos || [],
-      workSummary: job.work_summary || '',
-      signature: job.digital_signature || null,
-      timeline: job.timeline || [],
-      isContractorProject: job.is_contractor_project || false,
-      tasks: job.tasks || []
+    const formattedJobs = await Promise.all(jobs.map(async (job) => {
+      const tasksEnriched = await Promise.all((job.tasks || []).map(async (task) => {
+        const taskObj = task.toObject();
+        if (task.assigned_worker_id) {
+          const workerUser = await User.findById(task.assigned_worker_id).select('profileImage phone');
+          if (workerUser) {
+            taskObj.assigned_worker_image = workerUser.profileImage;
+            taskObj.assigned_worker_phone = workerUser.phone;
+          }
+        }
+        return taskObj;
+      }));
+
+      return {
+        id: job._id,
+        jobTitle: job.job_title,
+        skill: job.skill_required,
+        userName: job.user_id?.name || 'Unknown',
+        userEmail: job.user_id?.email || '',
+        userPhone: job.user_id?.phone || '',
+        location: job.location?.address_text || 'Unknown',
+        coordinates: job.location?.coordinates || [0, 0],
+        urgency: job.urgency_level,
+        isEmergency: job.is_emergency,
+        status: job.status,
+        selectedWorker: job.selected_worker_id?.name || null,
+        selectedWorkerEmail: job.selected_worker_id?.email || null,
+        selectedWorkerPhone: job.selected_worker_id?.phone || null,
+        workerLocation: job.journey?.worker_location || null,
+        startedAt: job.started_at || job.journey?.started_at || null,
+        completedAt: job.completed_at || null,
+        createdAt: job.created_at,
+        updatedAt: job.updated_at,
+        description: job.job_description || 'No description provided',
+        materialRequirements: job.material_requirements || null,
+        issuePhotos: job.issue_photos || [],
+        diagnosisReport: job.diagnosis_report || null,
+        materialRequests: job.material_requests || [],
+        completionPhotos: job.completion_photos || [],
+        workSummary: job.work_summary || '',
+        signature: job.digital_signature || null,
+        timeline: job.timeline || [],
+        isContractorProject: job.is_contractor_project || false,
+        payment_released: job.payment_released || false,
+        tasks: tasksEnriched
+      };
     }));
 
     return successResponse(res, 'Jobs fetched successfully', { jobs: formattedJobs });
@@ -732,6 +820,26 @@ const getTenantFinancials = async (req, res) => {
       { $group: { _id: null, total: { $sum: '$amount' } } }
     ]);
 
+    // New: Contractor specific stats
+    let contractorStats = null;
+    if (user.role === 'contractor') {
+      const contractor = await Contractor.findOne({ user: tenantId });
+      if (contractor) {
+        const [activeProjects, completedProjects, workerEngagements] = await Promise.all([
+          Job.countDocuments({ user_id: tenantId, status: 'active' }),
+          Job.countDocuments({ user_id: tenantId, status: 'completed' }),
+          HiringRequest.countDocuments({ contractor: contractor._id, status: 'accepted' })
+        ]);
+
+        contractorStats = {
+          totalProjects: activeProjects + completedProjects,
+          activeProjects,
+          completedProjects,
+          workerEngagement: workerEngagements
+        };
+      }
+    }
+
     return successResponse(res, 'Tenant financials fetched', {
       tenant: {
         id: user._id,
@@ -745,6 +853,7 @@ const getTenantFinancials = async (req, res) => {
         currency: 'INR'
       },
       stats,
+      contractorStats,
       history: transactionHistory.map(p => ({
         id: p._id,
         type: p.type,
@@ -778,7 +887,7 @@ const getWorkerFinancials = async (req, res) => {
     const [wallet, earningsData, history] = await Promise.all([
       Wallet.findOne({ user: userId }),
       Payment.aggregate([
-        { $match: { worker: userId, type: 'payout', status: 'completed' } },
+        { $match: { worker: new mongoose.Types.ObjectId(userId), type: 'payout', status: 'completed' } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       Payment.find({
@@ -807,6 +916,7 @@ const getWorkerFinancials = async (req, res) => {
       },
       stats: {
         totalEarnings: earningsData[0]?.total || 0,
+        totalSpent: earningsData[0]?.total || 0,
         payoutCount: earningsData[0]?.count || 0
       },
       history: history.map(p => ({
@@ -1090,228 +1200,196 @@ const listLegalAuditLogs = async (req, res) => {
   }
 };
 
-/**
- * Admin: List all active job chats
- */
 const listAllChats = async (req, res) => {
   try {
     const { status, jobId } = req.query;
     const filter = {};
     if (status) filter.status = status;
     if (jobId) filter.job = jobId;
-
     const chats = await Chat.find(filter)
-      .populate('participants', 'name email role profileImage chatStrikes chatMutedUntil')
-      .populate('job', 'job_title status user_id selected_worker_id')
-      .sort({ lastMessageTime: -1 })
-      .limit(100)
-      .lean();
-
-    const chatsDecrypted = chats.map((c) => ({
-      ...c,
-      lastMessage: c.lastMessage ? decryptChatMessage(c.lastMessage) : c.lastMessage
-    }));
-
-    return successResponse(res, 'All chats fetched', { chats: chatsDecrypted });
+      .populate('participants', 'name email role profileImage')
+      .populate('job', 'job_title status')
+      .sort({ lastMessageTime: -1 });
+    return successResponse(res, 'All chats fetched', { chats });
   } catch (error) {
-    logger.error(`Admin listAllChats error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch chats', 500);
   }
 };
 
-/**
- * Admin: View messages for any chat
- */
 const getChatMessages = async (req, res) => {
   try {
     const { chatId } = req.params;
-    const messages = await Message.find({ chatId }).sort({ createdAt: 1 }).lean();
-    const messagesDecrypted = messages.map((m) => ({
-      ...m,
-      text: m.text ? decryptChatMessage(m.text) : m.text
-    }));
-    return successResponse(res, 'Messages fetched', { messages: messagesDecrypted });
+    const messages = await Message.find({ chat: chatId }).populate('sender', 'name role').sort({ createdAt: 1 });
+    return successResponse(res, 'Messages fetched', { messages });
   } catch (error) {
-    logger.error(`Admin getChatMessages error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch messages', 500);
   }
 };
 
-/**
- * System Config Management
- */
 const getSystemConfig = async (req, res) => {
   try {
+    const SystemConfig = require('./systemConfig.model');
     let config = await SystemConfig.findOne().sort({ createdAt: -1 });
-    if (!config) {
-      config = await SystemConfig.create({}); // Create default if none exists
-    }
-    return successResponse(res, 'System configuration fetched', { config });
+    if (!config) config = await SystemConfig.create({});
+    return successResponse(res, 'Config fetched', { config });
   } catch (error) {
-    return errorResponse(res, 'Failed to fetch system config', 500);
+    return errorResponse(res, 'Failed to fetch config', 500);
   }
 };
 
 const updateSystemConfig = async (req, res) => {
   try {
+    const SystemConfig = require('./systemConfig.model');
     const updates = req.body;
     let config = await SystemConfig.findOne().sort({ createdAt: -1 });
-    if (!config) {
-      config = new SystemConfig(updates);
-    } else {
-      Object.assign(config, updates);
-    }
-    config.lastChangedBy = req.userId;
+    if (!config) config = new SystemConfig(updates); else Object.assign(config, updates);
     await config.save();
-
-    await logAdminAction(req.userId, 'update_config', 'system', 'system', 'Updated platform systemic parameters', req.ip);
-
-    return successResponse(res, 'System configuration updated', { config });
+    return successResponse(res, 'Config updated', { config });
   } catch (error) {
-    return errorResponse(res, 'Failed to update system config', 500);
+    return errorResponse(res, 'Failed to update config', 500);
   }
 };
 
-/**
- * Ratings Moderation
- */
 const listRatings = async (req, res) => {
   try {
-    const { isFlagged } = req.query;
-    const filter = {};
-    if (isFlagged === 'true') filter.isFlagged = true;
-
-    const ratings = await Rating.find(filter)
+    const Rating = require('../ratings/rating.model');
+    const ratings = await Rating.find()
       .populate('client', 'name email profileImage')
       .populate({
         path: 'worker',
-        populate: { path: 'user', select: 'name email profileImage' }
+        populate: { path: 'user', select: 'name profileImage' }
       })
       .sort({ createdAt: -1 });
 
     const formatted = ratings.map(r => ({
       id: r._id,
-      jobId: r.job,
       client: r.client,
       workerName: r.worker?.user?.name || 'Unknown',
       rating: r.rating,
-      comment: r.comment,
+      comment: r.comment || '',
       isFlagged: r.isFlagged,
       createdAt: r.createdAt
     }));
 
-    return successResponse(res, 'Ratings fetched', { ratings: formatted });
+    return successResponse(res, 'Ratings fetched successfully', { ratings: formatted });
   } catch (error) {
+    logger.error(`Admin listRatings error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch ratings', 500);
   }
 };
 
 const flagRating = async (req, res) => {
   try {
-    const { id } = req.params;
-    const { isFlagged } = req.body;
-    const rating = await Rating.findByIdAndUpdate(id, { isFlagged }, { new: true });
-    if (!rating) return errorResponse(res, 'Rating not found', 404);
-
-    await logAdminAction(req.userId, 'flag_rating', id, 'rating', `${isFlagged ? 'Flagged' : 'Unflagged'} rating entry`, req.ip);
-
-    return successResponse(res, 'Rating status updated', { rating });
+    const Rating = require('../ratings/rating.model');
+    const rating = await Rating.findByIdAndUpdate(req.params.id, { isFlagged: req.body.isFlagged }, { new: true });
+    return successResponse(res, 'Rating flagged', { rating });
   } catch (error) {
-    return errorResponse(res, 'Failed to updated rating status', 500);
+    return errorResponse(res, 'Failed to flag rating', 500);
   }
 };
 
 const deleteRating = async (req, res) => {
   try {
-    const { id } = req.params;
-    const rating = await Rating.findByIdAndDelete(id);
-    if (!rating) return errorResponse(res, 'Rating not found', 404);
-
-    await logAdminAction(req.userId, 'delete_rating', id, 'rating', 'Permanently removed rating from the system', req.ip);
-
-    return successResponse(res, 'Rating deleted successfully');
+    const Rating = require('../ratings/rating.model');
+    await Rating.findByIdAndDelete(req.params.id);
+    return successResponse(res, 'Rating deleted');
   } catch (error) {
     return errorResponse(res, 'Failed to delete rating', 500);
   }
 };
 
-/**
- * Audit Logs
- */
 const listAuditLogs = async (req, res) => {
   try {
-    const { type, limit = 100 } = req.query;
-    const filter = {};
-    if (type && type !== 'all') {
-      // Try to match either action or targetType
-      filter.$or = [
-        { action: type },
-        { targetType: type }
-      ];
-    }
-
-    const logs = await SystemLog.find(filter)
-      .populate('adminId', 'name email')
-      .sort({ createdAt: -1 })
-      .limit(parseInt(limit));
-
+    const SystemLog = require('./systemLog.model');
+    const logs = await SystemLog.find().populate('adminId', 'name').sort({ createdAt: -1 }).limit(100);
     return successResponse(res, 'Audit logs fetched', { logs });
   } catch (error) {
     return errorResponse(res, 'Failed to fetch audit logs', 500);
   }
 };
 
-/**
- * Get user counts by role for Role Management
- * GET /api/admin/roles/stats
- */
 const getRoleStats = async (req, res) => {
   try {
-    const stats = await User.aggregate([
-      {
-        $group: {
-          _id: '$role',
-          count: { $sum: 1 }
-        }
-      }
-    ]);
-
-    // Format as an object for easier consumption { admin: 2, user: 15, ... }
+    const stats = await User.aggregate([{ $group: { _id: '$role', count: { $sum: 1 } } }]);
     const roleCounts = {};
-    Object.values(ROLES).forEach(role => {
-      roleCounts[role] = 0;
-    });
-
-    stats.forEach(s => {
-      if (s._id) roleCounts[s._id] = s.count;
-    });
-
-    return successResponse(res, 'Role statistics fetched', { 
-      stats: roleCounts,
-      total: Object.values(roleCounts).reduce((a, b) => a + b, 0)
-    });
+    stats.forEach(s => { if (s._id) roleCounts[s._id] = s.count; });
+    return successResponse(res, 'Stats fetched', { stats: roleCounts });
   } catch (error) {
-    logger.error(`Admin getRoleStats error: ${error.message}`);
-    return errorResponse(res, 'Failed to fetch role statistics', 500);
+    return errorResponse(res, 'Failed to fetch stats', 500);
   }
 };
 
-/**
- * List all hiring requests for admin monitoring
- * GET /api/admin/hiring-requests
- */
+const getJobChat = async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const chat = await Chat.findOne({ job: jobId });
+    if (!chat) return successResponse(res, 'No chat', { chat: null, messages: [] });
+    const messages = await Message.find({ chat: chat._id }).populate('sender', 'name role').sort({ createdAt: 1 });
+    return successResponse(res, 'Chat fetched', { chat, messages });
+  } catch (error) {
+    return errorResponse(res, 'Failed to fetch chat', 500);
+  }
+};
+
 const listHiringRequests = async (req, res) => {
   try {
-    const requests = await HiringRequest.find()
-      .populate('contractor', 'name email profileImage')
-      .populate('worker', 'name email profileImage')
-      .populate('project', 'job_title current_status')
-      .sort({ createdAt: -1 });
-
-    return successResponse(res, 'Hiring requests fetched successfully', { requests });
+    const HiringRequest = require('../hiring/hiringRequest.model');
+    const requests = await HiringRequest.find().populate('contractor', 'name').populate('worker', 'name').populate('project', 'job_title').sort({ createdAt: -1 });
+    return successResponse(res, 'Hiring requests fetched', { requests });
   } catch (error) {
-    logger.error(`Admin listHiringRequests error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch hiring requests', 500);
+  }
+};
+
+const getEscrowSummary = async (req, res) => {
+  try {
+    const [pendingReleases, activeWarranties, payouts] = await Promise.all([
+      // 1. Pending Releases (Completed but not yet released to worker)
+      Job.find({ status: 'completed', payment_released: false })
+        .populate('user_id', 'name role')
+        .populate('selected_worker_id', 'name role')
+        .select('job_title diagnosis_report is_contractor_project created_at'),
+      
+      // 2. Active Warranty Reserves (Funds Locked)
+      Job.find({ warranty_reserve_locked: { $gt: 0 }, payment_released: true })
+        .populate('user_id', 'name')
+        .populate('selected_worker_id', 'name')
+        .select('job_title warranty_reserve_locked diagnosis_report completed_at'),
+
+      // 3. Recent Payouts/Settlements
+      Payment.find({ type: 'payout', status: 'completed' })
+        .populate('user', 'name')
+        .populate('worker', 'name')
+        .sort({ createdAt: -1 })
+        .limit(20)
+    ]);
+
+    const formattedPending = pendingReleases.map(job => ({
+      id: job._id,
+      title: job.job_title,
+      amount: job.diagnosis_report?.final_total_cost || 0,
+      workerName: job.selected_worker_id?.name || 'Unknown',
+      clientName: job.user_id?.name || 'Unknown',
+      isContractor: job.is_contractor_project,
+      createdAt: job.created_at
+    }));
+
+    const formattedWarranties = activeWarranties.map(job => ({
+      id: job._id,
+      title: job.job_title,
+      reserveAmount: job.warranty_reserve_locked,
+      workerName: job.selected_worker_id?.name || 'Unknown',
+      expiryDate: new Date(new Date(job.completed_at).getTime() + (job.diagnosis_report?.warranty_duration_days || 0) * 24 * 60 * 60 * 1000)
+    }));
+
+    return successResponse(res, 'Escrow summary fetched', {
+      pending: formattedPending,
+      warranties: formattedWarranties,
+      recentPayouts: payouts
+    });
+  } catch (error) {
+    logger.error(`Admin getEscrowSummary error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch escrow summary', 500);
   }
 };
 
@@ -1347,7 +1425,8 @@ module.exports = {
   deleteRating,
   listAuditLogs,
   getRoleStats,
-  listHiringRequests,
+  getJobChat,
+  updateProfessionalReliabilityScore,
+  getEscrowSummary,
+  listHiringRequests
 };
-
-

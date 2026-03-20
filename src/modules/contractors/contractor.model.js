@@ -95,6 +95,11 @@ const contractorSchema = new mongoose.Schema(
             type: String,
             trim: true
         },
+        
+        // Document URLs/Paths
+        gstDoc: { type: String },
+        registrationDoc: { type: String },
+        panDoc: { type: String },
 
         // Financial Details
         bankAccount: {
