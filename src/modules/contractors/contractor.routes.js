@@ -9,6 +9,7 @@ router.use(protect);
 router.use(authorize('contractor'));
 
 router.get('/dashboard/stats', contractorController.getDashboardStats);
+router.get('/reports/analytics', contractorController.getDetailedReports);
 router.get('/workers', contractorController.getContractorWorkers);
 
 // Phase 3: Contractor Projects (own jobs with is_contractor_project = true)

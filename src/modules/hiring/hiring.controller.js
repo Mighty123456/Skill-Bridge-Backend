@@ -44,8 +44,13 @@ exports.createHireRequest = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Project not found or unauthorized' });
         }
 
-        if (project.status !== 'open') {
+        if (project.status !== 'open' && !project.is_contractor_project) {
             return res.status(400).json({ success: false, message: 'Only open projects can be used to hire workers' });
+        }
+        
+        // Detailed check for contractor projects
+        if (project.is_contractor_project && ['completed', 'cancelled', 'disputed'].includes(project.status)) {
+            return res.status(400).json({ success: false, message: 'Cannot hire for a project that is already completed or cancelled' });
         }
 
         const { isWorkerAvailable } = require('../workers/worker.controller');
@@ -200,18 +205,26 @@ exports.respondToHireRequest = async (req, res) => {
         // If accepted, update the Job record
         if (status === 'accepted') {
             const project = await Job.findById(hiringRequest.project._id).session(session);
-            if (!project || project.status !== 'open') {
+            const isProjectHiring = project && (project.status === 'open' || (project.is_contractor_project && ['assigned', 'in_progress', 'eta_confirmed'].includes(project.status)));
+            
+            if (!isProjectHiring) {
                 await session.abortTransaction();
                 session.endSession();
                 return res.status(400).json({ 
                     success: false, 
-                    message: 'Project is no longer open for hiring or has already been assigned.' 
+                    message: 'Project is no longer open for hiring or has already been finalized.' 
                 });
             }
 
             // PHASE 3: Strict state transition check
             project.status = 'assigned';
-            project.selected_worker_id = workerId;
+            
+            // For contractor projects, we may have multiple workers, so we don't necessarily 
+            // overwrite selected_worker_id if it's already set, but we usually set the first one as primary.
+            if (!project.selected_worker_id) {
+                project.selected_worker_id = workerId;
+            }
+
             project.timeline.push({
                 status: 'assigned',
                 timestamp: new Date(),
@@ -220,12 +233,15 @@ exports.respondToHireRequest = async (req, res) => {
             });
             await project.save({ session });
 
-            // Cancel any other pending hire requests for this project
-            await HiringRequest.updateMany(
-                { project: project._id, status: 'pending', _id: { $ne: requestId } },
-                { status: 'expired' },
-                { session }
-            );
+            // Only cancel other requests if it's NOT a contractor project
+            // Contractor projects support multiple workers.
+            if (!project.is_contractor_project) {
+                await HiringRequest.updateMany(
+                    { project: project._id, status: 'pending', _id: { $ne: requestId } },
+                    { status: 'expired' },
+                    { session }
+                );
+            }
         }
 
         // Commit transaction before notifications (side effects)

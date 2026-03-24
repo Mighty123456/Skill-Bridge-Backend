@@ -799,6 +799,84 @@ exports.onBroadcast = async (users, title, body, type = 'system') => {
 };
 
 // =============================================================================
+// ✅ EVENT 20: Contract Proposal Received → Notify Worker
+// =============================================================================
+exports.onContractReceived = async (workerId, contractTitle, contractorName) => {
+    const title = '📜 New Contract Proposal';
+    const body = `${contractorName} has sent you a long-term contract proposal: "${contractTitle}". Please review the terms.`;
+
+    // FCM Push
+    await _sendPushToUser(workerId, title, body, {
+        type: 'contract_received',
+        screen: 'contracts',
+        recipientRole: 'worker',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'contract_received',
+    });
+
+    logger.info(`[NotifyHelper] onContractReceived: Worker ${workerId} notified for contract ${contractTitle}`);
+};
+
+// =============================================================================
+// ✅ EVENT 21: Contract Responded → Notify Contractor
+// =============================================================================
+exports.onContractResponded = async (contractorId, contractTitle, workerName, status) => {
+    const isAccepted = status === 'active';
+    const title = isAccepted ? '✅ Contract Signed!' : '❌ Contract Proposal Rejected';
+    const body = `${workerName} has ${isAccepted ? 'accepted and signed' : 'rejected'} your contract proposal for "${contractTitle}".`;
+
+    // FCM Push
+    await _sendPushToUser(contractorId, title, body, {
+        type: 'contract_response',
+        screen: 'contracts',
+        status: status,
+        recipientRole: 'contractor',
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: contractorId,
+        title,
+        message: body,
+        type: 'contract_response',
+        data: { contractTitle, status },
+    });
+
+    logger.info(`[NotifyHelper] onContractResponded: Contractor ${contractorId} notified of ${status} for ${contractTitle}`);
+};
+
+// =============================================================================
+// ✅ EVENT 22: Contract Terminated → Notify Other Party
+// =============================================================================
+exports.onContractTerminated = async (recipientId, contractTitle, terminatedByName) => {
+    const title = '⚠️ Contract Terminated';
+    const body = `The contract "${contractTitle}" has been terminated by ${terminatedByName}.`;
+
+    // FCM Push
+    await _sendPushToUser(recipientId, title, body, {
+        type: 'contract_terminated',
+        screen: 'contracts',
+        recipientRole: 'contractor', // Or worker, handled by _sendPushToUser
+    });
+
+    // In-App DB
+    await notificationService.createNotification({
+        recipient: recipientId,
+        title,
+        message: body,
+        type: 'contract_terminated',
+    });
+
+    logger.info(`[NotifyHelper] onContractTerminated: User ${recipientId} notified of termination of ${contractTitle}`);
+};
+
+// =============================================================================
 // ✅ EVENT 15: Wallet Transaction (Topup, Released Funds) -> Notify User
 // =============================================================================
 exports.onWalletTransaction = async (userId, title, body, data) => {

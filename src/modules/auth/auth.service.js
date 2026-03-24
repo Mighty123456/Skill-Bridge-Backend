@@ -13,6 +13,7 @@ const { ROLES } = require('../../common/constants/roles');
 const Wallet = require('../wallet/wallet.model');
 const WalletService = require('../wallet/wallet.service');
 const FraudDetectionService = require('../fraud/fraud-detection.service');
+const { isRealEmailProvider } = require('../../common/utils/email-validator');
 
 /**
  * Register a new user
@@ -28,6 +29,11 @@ const register = async (userData, fileBuffers = {}) => {
 
   // Check if user already exists
   if (queryEmail) {
+    // 1. Block disposable/fake email domains
+    if (!(await isRealEmailProvider(queryEmail))) {
+      throw new Error('This email provider is not allowed. Please use a real email address (Gmail, Outlook, etc.).');
+    }
+
     const existingUser = await User.findOne({ email: queryEmail });
     if (existingUser) {
       throw new Error('User with this email already exists');
@@ -56,7 +62,7 @@ const register = async (userData, fileBuffers = {}) => {
     phone,
     dateOfBirth,
     address: address || {},
-    status: 'active', // Default status
+    status: 'pending_verification', // New users must verify first
     devices: userData.deviceId ? [{
       deviceId: userData.deviceId,
       deviceName: userData.deviceName || 'Registration Device',
@@ -895,6 +901,12 @@ const verifyRegistration = async (identifier, otp) => {
   user.isEmailVerified = user.email ? true : user.isEmailVerified;
   user.isPhoneVerified = user.phone ? true : user.isPhoneVerified;
 
+  // Activation: Change status from 'pending_verification' to 'active'
+  if (user.status === 'pending_verification') {
+    user.status = 'active';
+    user.isActive = true;
+  }
+
   // Generate Session ID
   const sessionId = Math.random().toString(36).substring(2) + Date.now().toString(36);
   user.currentSessionId = sessionId;
@@ -930,9 +942,17 @@ const resendOTP = async (identifier) => {
     throw new Error('No account found with this identifier');
   }
 
+  const otpKey = user.email || user.phone;
+
+  // 1. Anti-Spam: Check for cooldown (1 minute)
+  const existingOtp = await Otp.findOne({ email: otpKey, purpose: 'registration' });
+  if (existingOtp && (new Date() - existingOtp.updatedAt < 60000)) {
+    const secondsLeft = Math.ceil((60000 - (new Date() - existingOtp.updatedAt)) / 1000);
+    throw new Error(`Please wait ${secondsLeft} seconds before requesting a new OTP.`);
+  }
+
   // Generate and store OTP
   const otp = generateOTP();
-  const otpKey = user.email || user.phone;
   await storeOTP(otpKey, otp, 'registration');
 
   // Send OTP via email if available

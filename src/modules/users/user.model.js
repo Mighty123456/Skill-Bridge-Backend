@@ -75,13 +75,13 @@ const userSchema = new mongoose.Schema(
     // Account status
     status: {
       type: String,
-      enum: ['active', 'suspended', 'under_review', 'deactivated'],
-      default: 'active',
+      enum: ['active', 'suspended', 'under_review', 'deactivated', 'pending_verification'],
+      default: 'pending_verification',
     },
     // Legacy boolean flag (synced with status)
     isActive: {
       type: Boolean,
-      default: true,
+      default: false,
     },
     // Legacy boolean flag for worker verification (kept for backwards compatibility)
     isVerified: {

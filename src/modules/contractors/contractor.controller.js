@@ -103,6 +103,133 @@ const isWorkerAvailable = async (workerId, startDate, endDate, excludeTaskId = n
 };
 
 /**
+ * Get Detailed Reports & Analytics for Contractor
+ * @route   GET /api/v1/contractors/reports/analytics
+ * @access  Private (Contractor)
+ */
+exports.getDetailedReports = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const Payment = require('../payments/payment.model');
+        const Job = require('../jobs/job.model');
+        const mongoose = require('mongoose');
+
+        // 1. Monthly Spending Trend (Last 6 Months)
+        const sixMonthsAgo = new Date();
+        sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+        const spendingTrend = await Payment.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(contractorId),
+                    type: { $in: ['escrow', 'payout', 'topup'] },
+                    status: 'completed',
+                    createdAt: { $gte: sixMonthsAgo }
+                }
+            },
+            {
+                $group: {
+                    _id: {
+                        year: { $year: "$createdAt" },
+                        month: { $month: "$createdAt" }
+                    },
+                    total: { $sum: "$amount" }
+                }
+            },
+            { $sort: { "_id.year": 1, "_id.month": 1 } }
+        ]);
+
+        // 2. Project Status Distribution
+        const statusDistribution = await Job.aggregate([
+            { $match: { user_id: new mongoose.Types.ObjectId(contractorId) } },
+            {
+                $group: {
+                    _id: "$status",
+                    count: { $sum: 1 }
+                }
+            }
+        ]);
+
+        // 3. Top Workers by Spending
+        const topWorkers = await Payment.aggregate([
+            {
+                $match: {
+                    user: new mongoose.Types.ObjectId(contractorId),
+                    worker: { $ne: null },
+                    status: 'completed'
+                }
+            },
+            {
+                $group: {
+                    _id: "$worker",
+                    totalSpent: { $sum: "$amount" },
+                    jobCount: { $sum: 1 }
+                }
+            },
+            { $sort: { totalSpent: -1 } },
+            { $limit: 5 },
+            {
+                $lookup: {
+                    from: 'users',
+                    localField: '_id',
+                    foreignField: '_id',
+                    as: 'workerInfo'
+                }
+            },
+            { $unwind: "$workerInfo" },
+            {
+                $project: {
+                    workerId: "$_id",
+                    name: "$workerInfo.name",
+                    profileImage: "$workerInfo.profileImage",
+                    totalSpent: 1,
+                    jobCount: 1
+                }
+            }
+        ]);
+
+        // 4. Category-wise Budget Allocation
+        const categorySpending = await Job.aggregate([
+            { $match: { user_id: new mongoose.Types.ObjectId(contractorId) } },
+            {
+                $group: {
+                    _id: "$category",
+                    totalBudget: { $sum: "$budget" },
+                    projectCount: { $sum: 1 }
+                }
+            },
+            { $sort: { totalBudget: -1 } }
+        ]);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                financialTrend: spendingTrend.map(item => ({
+                    month: `${item._id.month}/${item._id.year}`,
+                    amount: item.total
+                })),
+                statusDistribution: statusDistribution.reduce((acc, curr) => {
+                    acc[curr._id] = curr.count;
+                    return acc;
+                }, {}),
+                topWorkers,
+                categorySpending: categorySpending.map(item => ({
+                    category: item._id || 'Uncategorized',
+                    amount: item.totalBudget,
+                    count: item.projectCount
+                }))
+            }
+        });
+    } catch (error) {
+        logger.error('Get Detailed Reports Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate statistics report'
+        });
+    }
+};
+
+/**
  * Get Contractor Dashboard Stats
  * @route   GET /api/v1/contractors/dashboard/stats
  * @access  Private (Contractor)
