@@ -15,6 +15,8 @@ const SystemLog = require('./systemLog.model');
 const SystemConfig = require('./systemConfig.model');
 const Rating = require('../ratings/rating.model');
 const HiringRequest = require('../hiring/hiring.model');
+const WorkforcePool = require('../contractors/workforce-pool.model');
+const Contract = require('../contracts/contract.model');
 const logger = require('../../config/logger');
 const { successResponse, errorResponse } = require('../../common/utils/response');
 const { ROLES } = require('../../common/constants/roles');
@@ -714,6 +716,7 @@ const listJobs = async (req, res) => {
         timeline: job.timeline || [],
         isContractorProject: job.is_contractor_project || false,
         payment_released: job.payment_released || false,
+        preferredStartTime: job.preferred_start_time || null,
         tasks: tasksEnriched
       };
     }));
@@ -1393,6 +1396,294 @@ const getEscrowSummary = async (req, res) => {
   }
 };
 
+/**
+ * Get Workforce Pool for a specific contractor
+ * GET /api/admin/contractors/:id/pool
+ */
+const getContractorPool = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Find the contractor first (either by contractor ID or User ID)
+    let contractor = await Contractor.findById(id);
+    if (!contractor) {
+      contractor = await Contractor.findOne({ user: id });
+    }
+    
+    if (!contractor) return errorResponse(res, 'Contractor not found', 404);
+
+    const pool = await WorkforcePool.find({ contractor: contractor.user })
+      .populate('worker', 'name email phone profileImage isOnline location')
+      .populate({
+        path: 'workerProfile',
+        select: 'skills experience rating totalJobsCompleted verificationStatus'
+      })
+      .sort({ addedAt: -1 });
+
+    return successResponse(res, 'Workforce pool fetched successfully', {
+      count: pool.length,
+      pool: pool
+        .filter(entry => entry.worker) // Filter out deleted users
+        .map(entry => ({
+          id: entry._id,
+          workerId: entry.worker?._id,
+          name: entry.worker?.name,
+          profileImage: entry.worker?.profileImage,
+          email: entry.worker?.email,
+          phone: entry.worker?.phone,
+          skills: entry.workerProfile?.skills || [],
+          experience: entry.workerProfile?.experience || 0,
+          rating: entry.workerProfile?.rating || 0,
+          isOnline: entry.worker?.isOnline,
+          verificationStatus: entry.workerProfile?.verificationStatus,
+          addedAt: entry.addedAt,
+          notes: entry.notes,
+          tags: entry.tags
+        }))
+    });
+  } catch (error) {
+    logger.error(`Admin getContractorPool error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch workforce pool', 500);
+  }
+};
+
+/**
+ * List all workforce pools summaries for admin
+ * GET /api/admin/contractors/pools
+ */
+const listAllWorkforcePools = async (req, res) => {
+  try {
+    const pools = await WorkforcePool.aggregate([
+      { $group: { _id: '$contractor', count: { $sum: 1 } } }
+    ]);
+    
+    const contractorIds = pools.map(p => p._id);
+    const contractors = await User.find({ _id: { $in: contractorIds } }).select('name email phone profileImage');
+    
+    const formatted = pools.map(p => {
+      const contractor = contractors.find(c => c._id.equals(p._id));
+      return {
+        contractorId: p._id,
+        name: contractor?.name || 'Unknown',
+        email: contractor?.email,
+        phone: contractor?.phone,
+        profileImage: contractor?.profileImage,
+        memberCount: p.count
+      };
+    });
+
+    return successResponse(res, 'Workforce pools summarized successfully', { count: formatted.length, pools: formatted });
+  } catch (error) {
+    logger.error(`Admin listAllWorkforcePools error: ${error.message}`);
+    return errorResponse(res, 'Failed to summarize workforce pools', 500);
+  }
+};
+
+/**
+ * List all contracts for admin (Agreement Vault)
+ * GET /api/admin/contracts
+ */
+const listAllContracts = async (req, res) => {
+  try {
+    const { status } = req.query;
+    const filter = {};
+    if (status) filter.status = status;
+
+    const contracts = await Contract.find(filter)
+      .populate('contractor_id', 'name email phone profileImage')
+      .populate('worker_id', 'name email phone profileImage')
+      .sort({ createdAt: -1 });
+
+    const formatted = contracts.map(c => ({
+      id: c._id,
+      title: c.title,
+      contractor: c.contractor_id,
+      worker: c.worker_id,
+      status: c.status,
+      agreementType: c.agreement_type,
+      totalValue: c.total_value,
+      monthlyRate: c.monthly_rate,
+      startDate: c.start_date,
+      endDate: c.end_date,
+      signedAt: c.signed_at,
+      createdAt: c.createdAt
+    }));
+
+    return successResponse(res, 'Contracts fetched successfully', { count: formatted.length, contracts: formatted });
+  } catch (error) {
+    logger.error(`Admin listAllContracts error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch contracts', 500);
+  }
+};
+
+/**
+ * Get full contract details for admin audit
+ * GET /api/admin/contracts/:id
+ */
+const getContractById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const contract = await Contract.findById(id)
+      .populate('contractor_id', 'name email phone profileImage')
+      .populate('worker_id', 'name email phone profileImage');
+
+    if (!contract) return errorResponse(res, 'Contract not found', 404);
+
+    return successResponse(res, 'Contract details fetched', { contract });
+  } catch (error) {
+    logger.error(`Admin getContractById error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch contract details', 500);
+  }
+};
+
+/**
+ * Force release escrow payment to worker
+ * POST /api/admin/jobs/:id/force-release
+ */
+const forceReleasePayment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+    
+    const job = await Job.findById(id);
+    if (!job) return errorResponse(res, 'Job not found', 404);
+    if (job.payment_released) return errorResponse(res, 'Payment already released', 400);
+
+    const payout = await paymentService.releasePayment(id);
+    
+    // Add to timeline
+    job.timeline.push({
+      status: job.status,
+      note: `ADMIN FORCE RELEASE: ${reason || 'Admin intervention to resolve dispute/delay.'}`,
+      actor: 'admin',
+      timestamp: new Date()
+    });
+    await job.save();
+
+    return successResponse(res, 'Payment released successfully via admin intervention', payout);
+  } catch (error) {
+    logger.error(`Admin forceReleasePayment error: ${error.message}`);
+    return errorResponse(res, error.message || 'Failed to release payment', 500);
+  }
+};
+
+/**
+ * Force cancel job and refund tenant
+ * POST /api/admin/jobs/:id/cancel-refund
+ */
+const cancelAndRefundJob = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    const job = await Job.findById(id);
+    if (!job) return errorResponse(res, 'Job not found', 404);
+    if (job.status === 'completed' || job.payment_released) {
+      return errorResponse(res, 'Cannot refund a completed or released job', 400);
+    }
+
+    const refund = await paymentService.refundPayment(id);
+    
+    job.status = 'cancelled';
+    job.timeline.push({
+      status: 'cancelled',
+      note: `ADMIN FORCE REFUND: ${reason || 'Admin intervention due to non-performance or dispute.'}`,
+      actor: 'admin',
+      timestamp: new Date()
+    });
+    await job.save();
+
+    return successResponse(res, 'Job cancelled and refund initiated successfully', refund);
+  } catch (error) {
+    logger.error(`Admin cancelAndRefundJob error: ${error.message}`);
+    return errorResponse(res, error.message || 'Failed to refund job', 500);
+  }
+};
+
+/**
+ * Global operations calendar data for admin
+ * GET /api/admin/calendar/overview
+ */
+const getCalendarOverview = async (req, res) => {
+  try {
+    const [jobs, contracts] = await Promise.all([
+      Job.find({ status: { $ne: 'cancelled' } })
+        .populate('user_id', 'name')
+        .populate('selected_worker_id', 'name profileImage')
+        .select('job_title status started_at created_at preferred_start_time tasks'),
+      Contract.find({ status: 'active' })
+        .populate('contractor_id', 'name')
+        .populate('worker_id', 'name')
+        .select('title status start_date end_date contractor_id worker_id')
+    ]);
+
+    const events = [];
+
+    // 1. Process Jobs
+    jobs.forEach(job => {
+      const targetDate = job.started_at || job.preferred_start_time || job.created_at;
+      if (targetDate) {
+        events.push({
+          id: `job-${job._id}`,
+          title: job.job_title,
+          type: 'job_milestone',
+          status: job.status,
+          date: targetDate,
+          meta: {
+            client: job.user_id?.name,
+            worker: job.selected_worker_id?.name
+          }
+        });
+      }
+
+      // 2. Process Sub-Tasks
+      if (job.tasks && job.tasks.length > 0) {
+        job.tasks.forEach(task => {
+          if (task.due_date) {
+            events.push({
+              id: `task-${task._id}`,
+              title: task.title,
+              type: 'task_deadline',
+              status: task.status,
+              date: task.due_date,
+              meta: {
+                parentJob: job.job_title,
+                assignedTo: task.assigned_worker_name
+              }
+            });
+          }
+        });
+      }
+    });
+
+    // 3. Process Contracts
+    contracts.forEach(contract => {
+      events.push({
+        id: `contract-end-${contract._id}`,
+        title: `Contract End: ${contract.title}`,
+        type: 'contract_expiry',
+        status: contract.status,
+        date: contract.end_date,
+        meta: {
+          contractor: contract.contractor_id?.name,
+          worker: contract.worker_id?.name
+        }
+      });
+    });
+
+    return successResponse(res, 'Calendar data fetched successfully', {
+      count: events.length,
+      events: events.sort((a, b) => new Date(a.date) - new Date(b.date))
+    });
+  } catch (error) {
+    logger.error(`Admin getCalendarOverview error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch calendar data', 500);
+  }
+};
+
+
+
+
 module.exports = {
   listProfessionals,
   updateProfessionalStatus,
@@ -1428,5 +1719,12 @@ module.exports = {
   getJobChat,
   updateProfessionalReliabilityScore,
   getEscrowSummary,
-  listHiringRequests
+  listHiringRequests,
+  getContractorPool,
+  listAllWorkforcePools,
+  listAllContracts,
+  forceReleasePayment,
+  cancelAndRefundJob,
+  getCalendarOverview,
+  getContractById
 };

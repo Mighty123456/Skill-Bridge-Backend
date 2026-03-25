@@ -2,6 +2,7 @@ const Job = require('../jobs/job.model');
 const Wallet = require('../wallet/wallet.model');
 const User = require('../users/user.model');
 const Contractor = require('./contractor.model');
+const WorkforcePool = require('./workforce-pool.model');
 const JobService = require('../jobs/job.service');
 const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
@@ -634,3 +635,96 @@ exports.updateProjectStatus = async (req, res) => {
         });
     }
 };
+
+/**
+ * Add Worker to Pool
+ * @route   POST /api/v1/contractors/pool/add
+ * @access  Private (Contractor)
+ */
+exports.addToPool = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { workerId, notes, tags } = req.body;
+
+        if (!workerId) return res.status(400).json({ success: false, message: 'Worker ID is required' });
+
+        // Find worker profile
+        const Worker = require('../workers/worker.model');
+        const workerProfile = await Worker.findOne({ user: workerId });
+        if (!workerProfile) return res.status(404).json({ success: false, message: 'Worker profile not found' });
+
+        // Create or update pool entry
+        const poolEntry = await WorkforcePool.findOneAndUpdate(
+            { contractor: contractorId, worker: workerId },
+            { 
+                contractor: contractorId, 
+                worker: workerId, 
+                workerProfile: workerProfile._id,
+                notes, 
+                tags,
+                addedAt: new Date() 
+            },
+            { upsert: true, new: true }
+        );
+
+        res.status(200).json({
+            success: true,
+            message: 'Worker added to your workforce pool',
+            data: poolEntry
+        });
+    } catch (error) {
+        logger.error('Add To Pool Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to add worker to pool' });
+    }
+};
+
+/**
+ * Remove Worker from Pool
+ * @route   DELETE /api/v1/contractors/pool/:workerId
+ * @access  Private (Contractor)
+ */
+exports.removeFromPool = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { workerId } = req.params;
+
+        await WorkforcePool.findOneAndDelete({ contractor: contractorId, worker: workerId });
+
+        res.status(200).json({
+            success: true,
+            message: 'Worker removed from your workforce pool'
+        });
+    } catch (error) {
+        logger.error('Remove From Pool Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to remove worker from pool' });
+    }
+};
+
+/**
+ * Get My Workforce Pool
+ * @route   GET /api/v1/contractors/pool
+ * @access  Private (Contractor)
+ */
+exports.getPool = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        
+        const pool = await WorkforcePool.find({ contractor: contractorId })
+            .populate('worker', 'name email phone profileImage isOnline location')
+            .populate({
+                path: 'workerProfile',
+                select: 'skills experience rating totalJobsCompleted verificationStatus'
+            })
+            .sort({ addedAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            count: pool.length,
+            data: pool
+        });
+    } catch (error) {
+        logger.error('Get Pool Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch workforce pool' });
+    }
+};
+

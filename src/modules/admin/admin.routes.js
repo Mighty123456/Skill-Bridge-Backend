@@ -141,6 +141,21 @@ router.get(
   adminController.listJobs
 );
 
+// Force Escalation & Escrow Actions
+router.post(
+  '/jobs/:id/force-release',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.forceReleasePayment
+);
+
+router.post(
+  '/jobs/:id/cancel-refund',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.cancelAndRefundJob
+);
+
 // List all quotations
 router.get(
   '/quotations',
@@ -283,6 +298,43 @@ router.get(
   adminController.listHiringRequests
 );
 
+// Agreement Vault (Contracts)
+router.get(
+  '/contracts',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listAllContracts
+);
+
+router.get(
+  '/contracts/:id',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getContractById
+);
+
+
+// Workforce Pool Monitoring
+router.get(
+  '/contractors/pools',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.listAllWorkforcePools
+);
+
+router.get(
+  '/contractors/:id/pool',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getContractorPool
+);
+
+// Operations Calendar Oversight
+router.get(
+  '/calendar/overview',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getCalendarOverview
+);
+
 module.exports = router;
-
-

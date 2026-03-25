@@ -11,6 +11,9 @@ router.use(authorize('contractor'));
 router.get('/dashboard/stats', contractorController.getDashboardStats);
 router.get('/reports/analytics', contractorController.getDetailedReports);
 router.get('/workers', contractorController.getContractorWorkers);
+router.get('/pool', contractorController.getPool);
+router.post('/pool/add', contractorController.addToPool);
+router.delete('/pool/:workerId', contractorController.removeFromPool);
 
 // Phase 3: Contractor Projects (own jobs with is_contractor_project = true)
 router.get('/projects', contractorController.getContractorProjects);
