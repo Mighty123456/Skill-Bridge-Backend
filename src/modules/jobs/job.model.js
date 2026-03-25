@@ -113,6 +113,8 @@ const jobSchema = new mongoose.Schema(
 
         // C. Diagnosis Mode
         diagnosis_report: {
+            diagnosis: String,
+            estimated_time: String,
             materials: [{ name: String, estimated_cost: Number }],
             final_labor_cost: Number,
             final_total_cost: Number,

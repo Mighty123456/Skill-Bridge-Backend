@@ -28,8 +28,6 @@ const { logAdminAction } = require('../../common/utils/admin-logger');
 
 
 
-
-
 /**
  * List professionals for admin, with optional verificationStatus filter.
  * GET /api/admin/professionals?status=pending|verified|rejected
@@ -79,6 +77,7 @@ const listProfessionals = async (req, res) => {
           badges: w.badges,
           status: w.verificationStatus,
           reliabilityScore: w.reliabilityScore,
+          statusHistory: w.statusHistory,
           createdAt: w.createdAt,
         };
       });
@@ -111,6 +110,7 @@ const listProfessionals = async (req, res) => {
           panDoc: c.panDoc,
           status: c.verificationStatus,
           reliabilityScore: c.reliabilityScore,
+          statusHistory: c.statusHistory,
           createdAt: c.createdAt,
         };
       });
@@ -315,6 +315,12 @@ const listUsers = async (req, res) => {
               experience: contractor.experience,
               governmentId: contractor.governmentId,
               selfie: contractor.selfie,
+              gstNumber: contractor.gstNumber,
+              panNumber: contractor.panNumber,
+              businessRegistrationNumber: contractor.businessRegistrationNumber,
+              gstDoc: contractor.gstDoc,
+              registrationDoc: contractor.registrationDoc,
+              panDoc: contractor.panDoc,
               verificationStatus: contractor.verificationStatus,
               city: user.address?.city,
               state: user.address?.state
