@@ -406,21 +406,19 @@ exports.arrive = async (jobId, workerId, location) => {
     await job.save();
     notifyChatStatusChange(jobId, 'arrived', 'Worker has arrived at location.');
 
-    // 1.4.2 C: ETA Accuracy Tracking
-    try {
-        await EtaTracking.create({
-            worker: workerId,
-            job: jobId,
-            status: 'arrived',
-            promisedArrival: promisedTime,
-            actualArrival: arrivalTime,
-            delayMinutes: delayMinutes,
-            isLate: is_late,
-            accuracyPercentage: is_late ? Math.max(0, 100 - (delayMinutes * 2)) : 100
-        });
-    } catch (e) {
+    // 1.4.2 C: ETA Accuracy Tracking - Non-blocking
+    EtaTracking.create({
+        worker: workerId,
+        job: jobId,
+        status: 'arrived',
+        promisedArrival: promisedTime,
+        actualArrival: arrivalTime,
+        delayMinutes: delayMinutes,
+        isLate: is_late,
+        accuracyPercentage: is_late ? Math.max(0, 100 - (delayMinutes * 2)) : 100
+    }).catch(e => {
         logger.error('Failed to create ETA Tracking record', e);
-    }
+    });
 
     // Penalty or Bonus based on punctuality
     const worker = await Worker.findOne({ user: workerId });
