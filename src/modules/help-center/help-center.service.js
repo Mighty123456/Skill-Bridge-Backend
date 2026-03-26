@@ -535,6 +535,14 @@ class HelpCenterService {
               job.dispute.resolved_at = new Date();
               job.dispute.resolution_note = notes || 'Resolved via Support Ticket investigation.';
               
+              // CRITICAL: If we are restoring to cooling_window, we MUST clear the blocker
+              // so the finalizeJob scheduler can eventually release the payout.
+              if (restoredStatus === 'cooling_window' && job.cooling_period) {
+                job.cooling_period.dispute_raised = false;
+                // Give it one more day of cooling from resolution time to be safe
+                job.cooling_period.ends_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
+              }
+
               job.timeline.push({
                 status: restoredStatus,
                 timestamp: new Date(),
@@ -543,7 +551,7 @@ class HelpCenterService {
               });
               
               await job.save();
-              logger.info(`Job ${ticket.jobId} dispute auto-resolved. Restored from disputed to ${restoredStatus}`);
+              logger.info(`Job ${ticket.jobId} dispute auto-resolved. Restored from disputed to ${restoredStatus}. Payment unblocked.`);
             }
           } catch (jobErr) {
             logger.error(`Failed to auto-resolve job dispute: ${jobErr.message}`);
@@ -564,7 +572,7 @@ class HelpCenterService {
         await ticket.populate('resolvedBy', 'name email');
       }
 
-      // Notify user (Multi-Channel)
+      // Notify stakeholders (Multi-Channel)
       try {
         const user = await User.findById(ticket.userId);
         if (user) {
@@ -572,8 +580,20 @@ class HelpCenterService {
             userId: user._id,
             ticketId: ticket._id,
             status: ticket.status,
-            message: `Your support ticket status has been updated to ${status.replace(/_/g, ' ')}.`
+            message: `Your Ticket #${ticket._id.toString().substring(0,8)} status updated to ${status.replace(/_/g, ' ')}.`
           });
+        }
+
+        // Pro: If job related, notify the worker too about the resolution
+        if (ticket.jobId && status === 'resolved') {
+          const job = await Job.findById(ticket.jobId);
+          if (job && job.selected_worker_id) {
+            await notifyHelper.onDisputeResolved({
+              userId: job.selected_worker_id,
+              jobId: job._id,
+              notes: notes || 'The dispute has been resolved by our support team.'
+            });
+          }
         }
       } catch (notifyErr) {
         logger.error(`Ticket status notification failed: ${notifyErr.message}`);
