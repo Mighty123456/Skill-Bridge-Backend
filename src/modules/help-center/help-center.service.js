@@ -517,7 +517,7 @@ class HelpCenterService {
 
       ticket.status = status;
 
-      if (status === 'resolved') {
+      if (status === 'resolved' || status === 'closed') {
         ticket.resolvedAt = new Date();
         ticket.resolvedBy = adminId;
         ticket.resolutionNotes = notes;
@@ -525,33 +525,43 @@ class HelpCenterService {
         // Professional Automation: If there's a related job, resolve its dispute too
         if (ticket.jobId) {
           try {
-            const job = await Job.findById(ticket.jobId);
-            if (job) {
-              const restoredStatus = job.dispute?.previous_status || 'in_progress';
+            // Fix: Handle cases where jobId might be populated (object) or just an ID (string)
+            const actualJobId = ticket.jobId._id || ticket.jobId;
+            const job = await Job.findById(actualJobId);
+            
+            if (job && job.dispute) {
+              const restoredStatus = job.dispute.previous_status || 'in_progress';
               
-              job.status = restoredStatus;
-              job.dispute.status = 'resolved';
-              job.dispute.is_disputed = false;
-              job.dispute.resolved_at = new Date();
-              job.dispute.resolution_note = notes || 'Resolved via Support Ticket investigation.';
-              
-              // CRITICAL: If we are restoring to cooling_window, we MUST clear the blocker
-              // so the finalizeJob scheduler can eventually release the payout.
-              if (restoredStatus === 'cooling_window' && job.cooling_period) {
-                job.cooling_period.dispute_raised = false;
-                // Give it one more day of cooling from resolution time to be safe
-                job.cooling_period.ends_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
-              }
+              // Only update if it's currently disputed to avoid double-processing
+              if (job.status === 'disputed' || job.dispute.is_disputed) {
+                job.status = restoredStatus;
+                job.dispute.status = status === 'resolved' ? 'resolved' : 'closed';
+                job.dispute.is_disputed = false;
+                job.dispute.resolved_at = new Date();
+                job.dispute.resolution_note = notes || `Ticket #${ticket._id.toString().substring(0, 8)} marked as ${status}.`;
+                
+                // CRITICAL: If we are restoring to cooling_window, we MUST clear the blocker
+                // so the finalizeJob scheduler can eventually release the payout.
+                if (restoredStatus === 'cooling_window' && job.cooling_period) {
+                  job.cooling_period.dispute_raised = false;
+                  // Give it one more day of cooling from resolution time to be safe
+                  job.cooling_period.ends_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
+                }
 
-              job.timeline.push({
-                status: restoredStatus,
-                timestamp: new Date(),
-                actor: 'admin',
-                note: `Job dispute resolved. Restored to status: ${restoredStatus}. Support Ticket #${ticket._id.toString().substring(0, 8)} resolved.`
-              });
-              
-              await job.save();
-              logger.info(`Job ${ticket.jobId} dispute auto-resolved. Restored from disputed to ${restoredStatus}. Payment unblocked.`);
+                job.timeline.push({
+                  status: restoredStatus,
+                  timestamp: new Date(),
+                  actor: 'admin',
+                  note: `Job dispute ${status}. Restored to status: ${restoredStatus}. Support Ticket #${ticket._id.toString().substring(0, 8)} concluded.`
+                });
+                
+                // Explicitly mark as modified for deep-nested safety
+                job.markModified('dispute');
+                if (job.cooling_period) job.markModified('cooling_period');
+                
+                await job.save();
+                logger.info(`Job ${actualJobId} dispute auto-${status}. Restored from disputed to ${restoredStatus}. Payment unblocked.`);
+              }
             }
           } catch (jobErr) {
             logger.error(`Failed to auto-resolve job dispute: ${jobErr.message}`);

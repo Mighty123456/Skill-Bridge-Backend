@@ -984,6 +984,30 @@ exports.onDisputeRaised = async ({ jobId, workerId, ticketId, reason }) => {
 };
 
 // =============================================================================
+// ✅ EVENT 19.5: Ticket Resolved / Dispute Cleared → Notify Worker
+// =============================================================================
+exports.onDisputeResolved = async ({ userId, jobId, notes }) => {
+    const title = '✨ Dispute Resolved';
+    const body = `The dispute for Job #${jobId.toString().substring(0, 8)} has been cleared. Payout tracking has resumed.`;
+
+    await _sendPushToUser(userId, title, body, {
+        type: 'info',
+        jobId: String(jobId),
+        recipientRole: 'worker'
+    });
+
+    await notificationService.createNotification({
+        recipient: userId,
+        title,
+        message: notes || body,
+        type: 'info',
+        data: { jobId: String(jobId) }
+    });
+
+    logger.info(`[NotifyHelper] onDisputeResolved: Worker ${userId} notified for job ${jobId}`);
+};
+
+// =============================================================================
 // ✅ EVENT 20: Ticket Status Updated → Notify Requester
 // =============================================================================
 exports.onTicketUpdated = async ({ userId, ticketId, status, message }) => {
