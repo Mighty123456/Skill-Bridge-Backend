@@ -8,6 +8,8 @@ const { calculateDistance } = require('../../common/utils/geo');
 const logger = require('../../config/logger');
 const PaymentService = require('../payments/payment.service');
 const EmailService = require('../../common/services/email.service');
+const EtaTracking = require('../workers/etaTracking.model');
+
 
 // === PHASE 3: Strict Status Sequence ===
 const STATUS_SEQUENCE = [
@@ -316,16 +318,15 @@ exports.startJourney = async (jobId, workerId, location) => {
     appendTimeline(job, 'on_the_way', 'worker', 'Worker started journey');
     await job.save();
 
-    // FCM Push + In-App: notify tenant via helper
-    try {
-        const tenant = await User.findById(job.user_id).select('name email fcmTokens');
+    // FCM Push + In-App: notify tenant via helper - Non-blocking
+    User.findById(job.user_id).select('name email fcmTokens').then(async (tenant) => {
         const workerUser = await User.findById(workerId).select('name');
         if (tenant) {
-            await notifyHelper.onJobStarted(tenant, job, workerUser?.name || 'Your worker');
+            notifyHelper.onJobStarted(tenant, job, workerUser?.name || 'Your worker').catch(e => {
+                logger.error(`startJourney notify failed: ${e.message}`);
+            });
         }
-    } catch (e) {
-        logger.error(`startJourney notify failed: ${e.message}`);
-    }
+    }).catch(e => logger.error(`startJourney notify fetch failed: ${e.message}`));
 
     return job;
 };
@@ -403,7 +404,7 @@ exports.arrive = async (jobId, workerId, location) => {
     });
 
     await job.save();
-    await notifyChatStatusChange(jobId, 'arrived', 'Worker has arrived at location.');
+    notifyChatStatusChange(jobId, 'arrived', 'Worker has arrived at location.');
 
     // 1.4.2 C: ETA Accuracy Tracking
     try {
@@ -434,17 +435,17 @@ exports.arrive = async (jobId, workerId, location) => {
             worker.reliabilityStats.punctuality = (worker.reliabilityStats.punctuality || 0) + 1;
             logger.info(`Worker ${workerId} received punctuality bonus. New Score: ${worker.reliabilityScore}`);
         }
+        await worker.save();
     }
 
-    // Notify User (Multi-channel)
-    try {
-        const tenant = await User.findById(job.user_id);
+    // Notify User (Multi-channel) - Non-blocking
+    User.findById(job.user_id).then(tenant => {
         if (tenant) {
-            await notifyHelper.onWorkerArrived(tenant, job);
+            notifyHelper.onWorkerArrived(tenant, job).catch(e => {
+                logger.error(`arrive notify failed: ${e.message}`);
+            });
         }
-    } catch (e) {
-        logger.error(`arrive notify failed: ${e.message}`);
-    }
+    }).catch(e => logger.error(`arrive notify user fetch failed: ${e.message}`));
 
     return job;
 };
@@ -471,15 +472,14 @@ exports.reportDelay = async (jobId, workerId, reason, delayMinutes) => {
     appendTimeline(job, 'on_the_way', 'worker', `reported delay: ${reason}. Extra ${delayMinutes} mins.`);
     await job.save();
 
-    // Notify User (Multi-channel)
-    try {
-        const tenant = await User.findById(job.user_id);
+    // Notify User (Multi-channel) - Non-blocking
+    User.findById(job.user_id).then(tenant => {
         if (tenant) {
-            await notifyHelper.onWorkerDelayed(tenant, job, reason);
+            notifyHelper.onWorkerDelayed(tenant, job, reason).catch(e => {
+                logger.error(`reportDelay notify failed: ${e.message}`);
+            });
         }
-    } catch (e) {
-        logger.error(`reportDelay notify failed: ${e.message}`);
-    }
+    }).catch(e => logger.error(`reportDelay notify fetch failed: ${e.message}`));
 
     return job;
 };
