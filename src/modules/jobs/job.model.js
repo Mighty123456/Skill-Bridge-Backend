@@ -206,7 +206,8 @@ const jobSchema = new mongoose.Schema(
             resolved_at: { type: Date },
             status: { type: String, enum: ['open', 'resolved', 'closed'], default: 'open' },
             decision: { type: String, enum: ['release_payment', 'refund_client', 'partial_refund', 'closed'] },
-            resolution_note: { type: String, trim: true }
+            resolution_note: { type: String, trim: true },
+            previous_status: { type: String }
         },
 
         payment_released: { type: Boolean, default: false },

@@ -103,24 +103,29 @@ class HelpCenterService {
 
         // Professional Safety: Mark job as disputed to prevent payout while ticket is open
         try {
-          await Job.findByIdAndUpdate(ticketData.jobId, {
-            $set: {
-              'dispute.is_disputed': true,
-              'dispute.status': 'open',
-              'dispute.reason': ticketData.description.substring(0, 100),
-              'dispute.opened_at': new Date(),
-              status: 'disputed' // Move job to disputed state
-            },
-            $push: {
-              timeline: {
-                status: 'disputed',
-                timestamp: new Date(),
-                actor: 'system',
-                note: `Job payout frozen. Dispute raised via Support Ticket #${ticket._id.toString().substring(0, 8)}.`
-              }
-            }
-          });
-          logger.info(`Job ${ticketData.jobId} flagged as disputed due to ticket ${ticket._id}`);
+          const job = await Job.findById(ticketData.jobId);
+          if (job) {
+            const oldStatus = job.status;
+            
+            job.status = 'disputed';
+            job.dispute = {
+              is_disputed: true,
+              status: 'open',
+              reason: ticketData.description.substring(0, 100),
+              opened_at: new Date(),
+              previous_status: oldStatus
+            };
+            
+            job.timeline.push({
+              status: 'disputed',
+              timestamp: new Date(),
+              actor: 'system',
+              note: `Job payout frozen. Dispute raised via Support Ticket #${ticket._id.toString().substring(0, 8)}.`
+            });
+            
+            await job.save();
+            logger.info(`Job ${ticketData.jobId} flagged as disputed (previously ${oldStatus}) due to ticket ${ticket._id}`);
+          }
         } catch (jobErr) {
           logger.error(`Failed to flag job as disputed: ${jobErr.message}`);
         }
@@ -520,23 +525,26 @@ class HelpCenterService {
         // Professional Automation: If there's a related job, resolve its dispute too
         if (ticket.jobId) {
           try {
-            await Job.findByIdAndUpdate(ticket.jobId, {
-              $set: {
-                'dispute.status': 'resolved',
-                'dispute.is_disputed': false,
-                'dispute.resolved_at': new Date(),
-                'dispute.resolution_note': notes || 'Resolved via Support Ticket investigation.'
-              },
-              $push: {
-                timeline: {
-                  status: 'resolved',
-                  timestamp: new Date(),
-                  actor: 'admin',
-                  note: `Job dispute resolved. Support Ticket #${ticket._id.toString().substring(0, 8)} resolved by admin.`
-                }
-              }
-            });
-            logger.info(`Job ${ticket.jobId} dispute auto-resolved via ticket ${ticket._id}`);
+            const job = await Job.findById(ticket.jobId);
+            if (job) {
+              const restoredStatus = job.dispute?.previous_status || 'in_progress';
+              
+              job.status = restoredStatus;
+              job.dispute.status = 'resolved';
+              job.dispute.is_disputed = false;
+              job.dispute.resolved_at = new Date();
+              job.dispute.resolution_note = notes || 'Resolved via Support Ticket investigation.';
+              
+              job.timeline.push({
+                status: restoredStatus,
+                timestamp: new Date(),
+                actor: 'admin',
+                note: `Job dispute resolved. Restored to status: ${restoredStatus}. Support Ticket #${ticket._id.toString().substring(0, 8)} resolved.`
+              });
+              
+              await job.save();
+              logger.info(`Job ${ticket.jobId} dispute auto-resolved. Restored from disputed to ${restoredStatus}`);
+            }
           } catch (jobErr) {
             logger.error(`Failed to auto-resolve job dispute: ${jobErr.message}`);
           }
