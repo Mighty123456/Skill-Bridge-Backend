@@ -1209,9 +1209,11 @@ exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 
     if (!job.dispute.is_disputed) throw new Error('Job is not disputed');
 
     job.dispute.status = 'resolved';
+    job.dispute.is_disputed = false;
     job.dispute.resolved_at = new Date();
     job.dispute.decision = decision;
     job.dispute.resolution_note = notes;
+    job.markModified('dispute');
 
     let notificationTitle = 'Dispute Resolved';
 
