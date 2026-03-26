@@ -379,8 +379,9 @@ exports.arrive = async (jobId, workerId, location) => {
     let delayMinutes = 0;
     const arrivalTime = new Date();
 
-    // Use confirmed ETA if available, else preferred_start, else update+1h
-    const promisedTime = job.journey?.confirmed_eta || job.preferred_start_time || new Date(job.updatedAt.getTime() + 60 * 60 * 1000);
+    // Use confirmed ETA if available, else preferred_start, else created+1h as a safe fallback
+    const fallbackTime = job.updated_at || job.created_at || new Date();
+    const promisedTime = job.journey?.confirmed_eta || job.preferred_start_time || new Date(fallbackTime.getTime() + 60 * 60 * 1000);
 
     if (arrivalTime > promisedTime) {
         const diffMs = arrivalTime - promisedTime;
