@@ -955,3 +955,53 @@ exports.onStripeOnboarded = async (userId) => {
 
     logger.info(`[NotifyHelper] onStripeOnboarded: Worker ${userId} notified.`);
 };
+
+// =============================================================================
+// ✅ EVENT 19: Ticket Created/Dispute Raised → Notify Relevant Parties
+// =============================================================================
+exports.onDisputeRaised = async ({ jobId, workerId, ticketId, reason }) => {
+    const title = '🛑 Payout Temporarily Frozen';
+    const body = `A dispute has been raised regarding Job #${jobId.toString().substring(0, 8)}. Payout is on hold during review.`;
+
+    // FCM Push to worker
+    await _sendPushToUser(workerId, title, body, {
+        type: 'dispute',
+        jobId: String(jobId),
+        ticketId: String(ticketId),
+        recipientRole: 'worker'
+    });
+
+    // In-App Notification
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'dispute',
+        data: { jobId: String(jobId), ticketId: String(ticketId) }
+    });
+
+    logger.info(`[NotifyHelper] onDisputeRaised: Worker ${workerId} notified for job ${jobId}`);
+};
+
+// =============================================================================
+// ✅ EVENT 20: Ticket Status Updated → Notify Requester
+// =============================================================================
+exports.onTicketUpdated = async ({ userId, ticketId, status, message }) => {
+    const title = `🎟️ Ticket ${status.toUpperCase().replaceAll('_', ' ')}`;
+    const body = message || `Your support ticket #${ticketId.toString().substring(0, 8)} has been updated.`;
+
+    await _sendPushToUser(userId, title, body, {
+        type: 'support',
+        ticketId: String(ticketId),
+        recipientRole: 'tenant'
+    });
+
+    await notificationService.createNotification({
+        recipient: userId,
+        title,
+        message: body,
+        type: 'support',
+        data: { ticketId: String(ticketId) }
+    });
+};
+

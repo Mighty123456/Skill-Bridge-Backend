@@ -100,6 +100,30 @@ class HelpCenterService {
         if (autoData) {
           ticket.autoAttachedData = autoData;
         }
+
+        // Professional Safety: Mark job as disputed to prevent payout while ticket is open
+        try {
+          await Job.findByIdAndUpdate(ticketData.jobId, {
+            $set: {
+              'dispute.is_disputed': true,
+              'dispute.status': 'open',
+              'dispute.reason': ticketData.description.substring(0, 100),
+              'dispute.opened_at': new Date(),
+              status: 'disputed' // Move job to disputed state
+            },
+            $push: {
+              timeline: {
+                status: 'disputed',
+                timestamp: new Date(),
+                actor: 'system',
+                note: `Job payout frozen. Dispute raised via Support Ticket #${ticket._id.toString().substring(0, 8)}.`
+              }
+            }
+          });
+          logger.info(`Job ${ticketData.jobId} flagged as disputed due to ticket ${ticket._id}`);
+        } catch (jobErr) {
+          logger.error(`Failed to flag job as disputed: ${jobErr.message}`);
+        }
       }
 
       await ticket.save();
@@ -113,7 +137,25 @@ class HelpCenterService {
       try {
         const user = await User.findById(userId);
         if (user) {
-          await notifyHelper.onTicketUpdated(user, ticket._id, `Your support ticket "${ticket.title}" has been created.`);
+          await notifyHelper.onTicketUpdated({
+            userId: user._id,
+            ticketId: ticket._id,
+            status: 'open',
+            message: `Your support ticket "${ticket.title}" has been created.`
+          });
+        }
+
+        // Professional Flow: Notify the worker that payout is on hold
+        if (ticketData.jobId) {
+          const job = await Job.findById(ticketData.jobId);
+          if (job && job.selected_worker_id) {
+            await notifyHelper.onDisputeRaised({
+              jobId: job._id,
+              workerId: job.selected_worker_id,
+              ticketId: ticket._id,
+              reason: ticketData.description
+            });
+          }
         }
       } catch (notifyErr) {
         logger.error(`Ticket creation notification failed: ${notifyErr.message}`);
