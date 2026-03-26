@@ -516,6 +516,31 @@ class HelpCenterService {
         ticket.resolvedAt = new Date();
         ticket.resolvedBy = adminId;
         ticket.resolutionNotes = notes;
+
+        // Professional Automation: If there's a related job, resolve its dispute too
+        if (ticket.jobId) {
+          try {
+            await Job.findByIdAndUpdate(ticket.jobId, {
+              $set: {
+                'dispute.status': 'resolved',
+                'dispute.is_disputed': false,
+                'dispute.resolved_at': new Date(),
+                'dispute.resolution_note': notes || 'Resolved via Support Ticket investigation.'
+              },
+              $push: {
+                timeline: {
+                  status: 'resolved',
+                  timestamp: new Date(),
+                  actor: 'admin',
+                  note: `Job dispute resolved. Support Ticket #${ticket._id.toString().substring(0, 8)} resolved by admin.`
+                }
+              }
+            });
+            logger.info(`Job ${ticket.jobId} dispute auto-resolved via ticket ${ticket._id}`);
+          } catch (jobErr) {
+            logger.error(`Failed to auto-resolve job dispute: ${jobErr.message}`);
+          }
+        }
       }
 
       ticket.updates.push({
@@ -526,11 +551,21 @@ class HelpCenterService {
 
       await ticket.save();
 
+      // Re-populate resolvedBy for the UI to show the admin's name
+      if (status === 'resolved') {
+        await ticket.populate('resolvedBy', 'name email');
+      }
+
       // Notify user (Multi-Channel)
       try {
         const user = await User.findById(ticket.userId);
         if (user) {
-          await notifyHelper.onTicketUpdated(user, ticket._id, `Your ticket status has been updated to ${status}`);
+          await notifyHelper.onTicketUpdated({
+            userId: user._id,
+            ticketId: ticket._id,
+            status: ticket.status,
+            message: `Your support ticket status has been updated to ${status.replace(/_/g, ' ')}.`
+          });
         }
       } catch (notifyErr) {
         logger.error(`Ticket status notification failed: ${notifyErr.message}`);
@@ -572,7 +607,12 @@ class HelpCenterService {
       try {
         const user = await User.findById(ticket.userId);
         if (user) {
-          await notifyHelper.onTicketUpdated(user, ticket._id, `Support team has replied to your ticket: "${ticket.title}"`);
+          await notifyHelper.onTicketUpdated({
+            userId: user._id,
+            ticketId: ticket._id,
+            status: ticket.status,
+            message: `Support team has replied to your ticket: "${ticket.title}"`
+          });
         }
       } catch (notifyErr) {
         logger.error(`Ticket reply notification failed: ${notifyErr.message}`);
