@@ -258,7 +258,7 @@ exports.getWorkerFeed = async (userId, filters = {}) => {
  * B. ETA Confirmation Layer
  * Worker confirms arrival.
  */
-const EtaTracking = require('../workers/etaTracking.model');
+
 
 // ...
 
