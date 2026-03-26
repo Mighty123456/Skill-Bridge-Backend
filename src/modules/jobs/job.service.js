@@ -404,6 +404,11 @@ exports.arrive = async (jobId, workerId, location) => {
     });
 
     await job.save();
+
+    // === ALL BELOW IS NON-BLOCKING (fire-and-forget) ===
+    // Response is sent immediately after job.save() above.
+
+    // Chat status notification - Non-blocking
     notifyChatStatusChange(jobId, 'arrived', 'Worker has arrived at location.');
 
     // 1.4.2 C: ETA Accuracy Tracking - Non-blocking
@@ -420,21 +425,21 @@ exports.arrive = async (jobId, workerId, location) => {
         logger.error('Failed to create ETA Tracking record', e);
     });
 
-    // Penalty or Bonus based on punctuality
-    const worker = await Worker.findOne({ user: workerId });
-    if (worker) {
-        if (is_late) {
-            worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 5); // Reduced penalty
-            logger.info(`Worker ${workerId} penalised for late arrival. New Score: ${worker.reliabilityScore}`);
-        } else {
-            // Punctuality Bonus: +2 points for being on time or early
-            worker.reliabilityScore = Math.min(100, worker.reliabilityScore + 2);
-            worker.reliabilityStats = worker.reliabilityStats || {};
-            worker.reliabilityStats.punctuality = (worker.reliabilityStats.punctuality || 0) + 1;
-            logger.info(`Worker ${workerId} received punctuality bonus. New Score: ${worker.reliabilityScore}`);
+    // Penalty or Bonus based on punctuality - Non-blocking
+    Worker.findOne({ user: workerId }).then(async (worker) => {
+        if (worker) {
+            if (is_late) {
+                worker.reliabilityScore = Math.max(0, worker.reliabilityScore - 5);
+                logger.info(`Worker ${workerId} penalised for late arrival. New Score: ${worker.reliabilityScore}`);
+            } else {
+                worker.reliabilityScore = Math.min(100, worker.reliabilityScore + 2);
+                worker.reliabilityStats = worker.reliabilityStats || {};
+                worker.reliabilityStats.punctuality = (worker.reliabilityStats.punctuality || 0) + 1;
+                logger.info(`Worker ${workerId} received punctuality bonus. New Score: ${worker.reliabilityScore}`);
+            }
+            await worker.save();
         }
-        await worker.save();
-    }
+    }).catch(e => logger.error(`arrive reliability update failed: ${e.message}`));
 
     // Notify User (Multi-channel) - Non-blocking
     User.findById(job.user_id).then(tenant => {
