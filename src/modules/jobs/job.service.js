@@ -48,6 +48,12 @@ const isValidTransition = (currentStatus, nextStatus) => {
 const chatService = require('../chat/chat.service');
 const Chat = require('../chat/chat.model');
 
+// === HELPER: Sanitize Note ===
+const sanitizeNote = (note) => {
+    if (!note || typeof note !== 'string') return '';
+    return note.trim();
+};
+
 // === HELPER: Notify Chat of Status Changes (Constraint 9) ===
 const notifyChatStatusChange = async (jobId, status, note) => {
     try {
