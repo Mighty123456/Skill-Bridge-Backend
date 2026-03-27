@@ -730,8 +730,8 @@ exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
     } else {
         job.diagnosis_report.status = 'rejected';
         job.diagnosis_report.rejection_reason = rejectionReason;
-        job.status = 'eta_confirmed';
-        appendTimeline(job, 'eta_confirmed', 'user', `Diagnosis rejected: ${rejectionReason}`);
+        job.status = 'arrived';
+        appendTimeline(job, 'arrived', 'user', `Diagnosis rejected: ${rejectionReason}`);
         return await job.save();
     }
 };
@@ -1161,13 +1161,15 @@ exports.raiseDispute = async (jobId, userId, reason, files) => {
         evidence_photos = uploadResults.map(r => r.url);
     }
 
+    const oldStatus = job.status;
     job.status = 'disputed';
     job.dispute = {
         is_disputed: true,
         reason: reason,
         evidence_photos: evidence_photos,
         opened_at: new Date(),
-        status: 'open'
+        status: 'open',
+        previous_status: oldStatus
     };
     job.cooling_period.dispute_raised = true;
 
@@ -1221,6 +1223,10 @@ exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 
     if (decision === 'release_payment') {
         try {
             await PaymentService.releasePayment(jobId);
+            // Refresh job instance to avoid VersionError (payment service updated it)
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
             job.status = 'completed';
             job.payment_released = true;
             appendTimeline(job, 'completed', 'admin', `Dispute resolved in favor of worker. Note: ${notes}`);
@@ -1230,7 +1236,10 @@ exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 
         }
     } else if (decision === 'refund_client') {
         try {
-            const refund = await PaymentService.refundPayment(jobId);
+            await PaymentService.refundPayment(jobId);
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
             job.status = 'cancelled';
             job.payment_released = false;
             appendTimeline(job, 'cancelled', 'admin', `Dispute resolved in favor of client. Note: ${notes}`);
@@ -1241,7 +1250,9 @@ exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 
     } else if (decision === 'partial_refund') {
         try {
             await PaymentService.processSettlement(jobId, workerAmount, tenantAmount, adminId, notes);
-            // Settlement handles updating status and timeline inherently but we sync here too
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
             job.status = 'completed';
             job.payment_released = (workerAmount > 0);
             notificationTitle = 'Dispute Resolved: Partial Refund Issued';
@@ -1249,9 +1260,10 @@ exports.resolveDispute = async (jobId, adminId, decision, notes, workerAmount = 
             throw new Error(`Failed to process settlement: ${e.message}`);
         }
     } else {
-        job.status = 'cooling_window';
-        job.cooling_period.dispute_raised = false;
-        appendTimeline(job, 'cooling_window', 'admin', `Dispute resolved: Continuing cooling period. Note: ${notes}`);
+        const restoredStatus = job.dispute?.previous_status || 'cooling_window';
+        job.status = restoredStatus;
+        if (job.cooling_period) job.cooling_period.dispute_raised = false;
+        appendTimeline(job, restoredStatus, 'admin', `Dispute resolved: Returned to ${restoredStatus.replace('_', ' ')}. Note: ${notes}`);
     }
 
     await job.save();

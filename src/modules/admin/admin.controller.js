@@ -893,10 +893,10 @@ const getWorkerFinancials = async (req, res) => {
 
     const userId = worker.user._id;
 
-    const [wallet, earningsData, history] = await Promise.all([
+    const [wallet, earningsData, history, escrowData] = await Promise.all([
       Wallet.findOne({ user: userId }),
       Payment.aggregate([
-        { $match: { worker: new mongoose.Types.ObjectId(userId), type: 'payout', status: 'completed' } },
+        { $match: { worker: new mongoose.Types.ObjectId(userId), type: 'payout', status: { $in: ['completed', 'released'] } } },
         { $group: { _id: null, total: { $sum: '$amount' }, count: { $sum: 1 } } }
       ]),
       Payment.find({
@@ -906,7 +906,17 @@ const getWorkerFinancials = async (req, res) => {
         ]
       })
         .sort({ createdAt: -1 })
-        .limit(20)
+        .limit(20),
+      Job.aggregate([
+        { 
+          $match: { 
+            selected_worker_id: new mongoose.Types.ObjectId(userId), 
+            status: { $in: ['in_progress', 'reviewing', 'cooling_window', 'disputed', 'completed'] },
+            payment_released: false 
+          } 
+        },
+        { $group: { _id: null, total: { $sum: '$diagnosis_report.final_total_cost' } } }
+      ])
     ]);
 
     return successResponse(res, 'Worker financials fetched', {
@@ -926,7 +936,8 @@ const getWorkerFinancials = async (req, res) => {
       stats: {
         totalEarnings: earningsData[0]?.total || 0,
         totalSpent: earningsData[0]?.total || 0,
-        payoutCount: earningsData[0]?.count || 0
+        payoutCount: earningsData[0]?.count || 0,
+        activeEscrow: (escrowData && escrowData[0]) ? escrowData[0].total : 0
       },
       history: history.map(p => ({
         id: p._id,
@@ -1194,15 +1205,24 @@ const getPerformanceAnalytics = async (req, res) => {
 const listLegalAuditLogs = async (req, res) => {
   try {
     const { role } = req.query;
-    const filter = { 'legal.termsAccepted': true };
+    const filter = {};
     if (role) filter.role = role;
 
     const logs = await User.find(filter)
-      .select('name email role legal.termsAcceptedAt legal.termsVersion legal.privacyAcceptedAt legal.privacyVersion legal.ipAddress')
-      .sort({ 'legal.termsAcceptedAt': -1 })
-      .limit(100);
+      .select('name email role legal.termsAccepted legal.termsAcceptedAt legal.termsVersion legal.privacyAccepted legal.privacyAcceptedAt legal.privacyVersion legal.ipAddress')
+      .sort({ createdAt: -1 })
+      .limit(200);
 
-    return successResponse(res, 'Legal audit logs fetched', { logs });
+    // Compute separate stats for the filter pills (ignoring the role filter)
+    const statsQuery = {};
+    const stats = {
+        total: await User.countDocuments(statsQuery),
+        user: await User.countDocuments({ ...statsQuery, role: 'user' }),
+        worker: await User.countDocuments({ ...statsQuery, role: 'worker' }),
+        contractor: await User.countDocuments({ ...statsQuery, role: 'contractor' }),
+    };
+
+    return successResponse(res, 'Legal audit logs fetched', { logs, stats });
   } catch (error) {
     logger.error(`Admin listLegalAuditLogs error: ${error.message}`);
     return errorResponse(res, 'Failed to fetch legal logs', 500);
@@ -1353,8 +1373,11 @@ const listHiringRequests = async (req, res) => {
 const getEscrowSummary = async (req, res) => {
   try {
     const [pendingReleases, activeWarranties, payouts] = await Promise.all([
-      // 1. Pending Releases (Completed but not yet released to worker)
-      Job.find({ status: 'completed', payment_released: false })
+      // 1. Pending Releases (Completed or Cooling Window but not yet released to worker)
+      Job.find({ 
+        status: { $in: ['completed', 'cooling_window', 'disputed'] }, 
+        payment_released: false 
+      })
         .populate('user_id', 'name role')
         .populate('selected_worker_id', 'name role')
         .select('job_title diagnosis_report is_contractor_project created_at'),
@@ -1388,6 +1411,7 @@ const getEscrowSummary = async (req, res) => {
       title: job.job_title,
       reserveAmount: job.warranty_reserve_locked,
       workerName: job.selected_worker_id?.name || 'Unknown',
+      completedAt: job.completed_at,
       expiryDate: new Date(new Date(job.completed_at).getTime() + (job.diagnosis_report?.warranty_duration_days || 0) * 24 * 60 * 60 * 1000)
     }));
 

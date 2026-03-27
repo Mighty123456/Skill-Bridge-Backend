@@ -93,6 +93,40 @@ const seedHelpCenter = async () => {
                 role: 'all',
                 isFeatured: true,
                 tags: ['safety', 'protection', 'emergency']
+            },
+
+            // Legal Documents (Role-Based)
+            {
+                title: 'Worker Terms of Service',
+                content: 'As a SkillBridge worker: 1. You must arrive on time. 2. Payouts are held in cooling for 72h. 3. 10% platform fee applies to all jobs. 4. You must use our check-in/out system via the mobile app.',
+                category: 'legal',
+                role: 'worker',
+                isFeatured: true,
+                tags: ['legal', 'terms', 'worker', 'payouts']
+            },
+            {
+                title: 'Tenant Terms of Service',
+                content: 'As a SkillBridge tenant: 1. Your payment is held in escrow until you sign off on job completion. 2. You must provide a safe work environment. 3. Refunds are subject to our dispute resolution rules.',
+                category: 'legal',
+                role: 'tenant',
+                isFeatured: true,
+                tags: ['legal', 'terms', 'tenant', 'escrow']
+            },
+            {
+                title: 'Contractor Terms of Service',
+                content: 'As a SkillBridge contractor: 1. You are responsible for your workforce compliance. 2. Specialized project SLAs apply. 3. Enterprise billing cycles apply. 4. SkillBridge is a platform, not an employer.',
+                category: 'legal',
+                role: 'contractor',
+                isFeatured: true,
+                tags: ['legal', 'terms', 'contractor', 'enterprise']
+            },
+            {
+                title: 'Privacy Policy',
+                content: 'We collect your location, phone number, and ID for security and matching. Your data is encrypted and never sold to third parties. We use Stripe for payments, so your card details never touch our servers.',
+                category: 'legal',
+                role: 'all',
+                isFeatured: true,
+                tags: ['privacy', 'data', 'security']
             }
         ];
 
@@ -101,6 +135,14 @@ const seedHelpCenter = async () => {
 
         // 3. Create Help Categories and Link Articles
         const categories = [
+            {
+                name: 'Legal & Privacy',
+                icon: 'safety',
+                description: 'Terms of Service, Privacy Policy, and legal rules targeting your role',
+                role: 'all',
+                order: 6,
+                articleIds: createdArticles.filter(a => a.category === 'legal').map(a => a._id)
+            },
             {
                 name: 'Payments & Refunds',
                 icon: 'payment',

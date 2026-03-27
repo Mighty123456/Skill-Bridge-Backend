@@ -105,7 +105,9 @@ class HelpCenterService {
         try {
           const job = await Job.findById(ticketData.jobId);
           if (job) {
-            const oldStatus = job.status;
+            const oldStatus = job.status === 'disputed' 
+              ? (job.dispute?.previous_status || 'in_progress')
+              : job.status;
             
             job.status = 'disputed';
             job.dispute = {
@@ -529,39 +531,39 @@ class HelpCenterService {
             const actualJobId = ticket.jobId._id || ticket.jobId;
             const job = await Job.findById(actualJobId);
             
-            if (job && job.dispute) {
-              const restoredStatus = job.dispute.previous_status || 'in_progress';
+            if (job && (job.status === 'disputed' || job.dispute?.is_disputed)) {
+              // Ensure we don't restore to "disputed" again (which would cause a cycle)
+              let restoredStatus = job.dispute?.previous_status || 'cooling_window';
+              if (restoredStatus === 'disputed') restoredStatus = 'cooling_window';
               
-              // Only update if it's currently disputed to avoid double-processing
-              if (job.status === 'disputed' || job.dispute.is_disputed) {
-                job.status = restoredStatus;
+              job.status = restoredStatus;
+              
+              if (job.dispute) {
                 job.dispute.status = status === 'resolved' ? 'resolved' : 'closed';
                 job.dispute.is_disputed = false;
                 job.dispute.resolved_at = new Date();
                 job.dispute.resolution_note = notes || `Ticket #${ticket._id.toString().substring(0, 8)} marked as ${status}.`;
-                
-                // CRITICAL: If we are restoring to cooling_window, we MUST clear the blocker
-                // so the finalizeJob scheduler can eventually release the payout.
-                if (restoredStatus === 'cooling_window' && job.cooling_period) {
-                  job.cooling_period.dispute_raised = false;
-                  // Give it one more day of cooling from resolution time to be safe
-                  job.cooling_period.ends_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
-                }
-
-                job.timeline.push({
-                  status: restoredStatus,
-                  timestamp: new Date(),
-                  actor: 'admin',
-                  note: `Job dispute ${status}. Restored to status: ${restoredStatus}. Support Ticket #${ticket._id.toString().substring(0, 8)} concluded.`
-                });
-                
-                // Explicitly mark as modified for deep-nested safety
-                job.markModified('dispute');
-                if (job.cooling_period) job.markModified('cooling_period');
-                
-                await job.save();
-                logger.info(`Job ${actualJobId} dispute auto-${status}. Restored from disputed to ${restoredStatus}. Payment unblocked.`);
               }
+              
+              if (restoredStatus === 'cooling_window' && job.cooling_period) {
+                job.cooling_period.dispute_raised = false;
+                // Give it one more day from now to cool (Safety Window)
+                job.cooling_period.ends_at = new Date(Date.now() + 24 * 60 * 60 * 1000);
+              }
+
+              job.timeline.push({
+                status: restoredStatus,
+                timestamp: new Date(),
+                actor: 'admin',
+                note: `Job dispute ${status}. Support Ticket #${ticket._id.toString().substring(0, 8)} concluded.`
+              });
+              
+              job.markModified('dispute');
+              job.markModified('timeline');
+              if (job.cooling_period) job.markModified('cooling_period');
+              
+              await job.save();
+              logger.info(`Job ${actualJobId} dispute auto-handled via ticket resolution. New Status: ${restoredStatus}`);
             }
           } catch (jobErr) {
             logger.error(`Failed to auto-resolve job dispute: ${jobErr.message}`);

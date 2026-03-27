@@ -104,7 +104,7 @@ const knowledgeBaseArticleSchema = new mongoose.Schema({
   },
   category: { 
     type: String, 
-    enum: ['faq', 'guide', 'policy', 'tutorial'], 
+    enum: ['faq', 'guide', 'policy', 'tutorial', 'legal'], 
     required: true, 
     index: true 
   },

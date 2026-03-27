@@ -294,6 +294,9 @@ class FraudDetectionService {
    */
   async createAlert(alertData) {
     try {
+      if (!alertData.userId) {
+          logger.warn(`Fraud Alert being created without userId for type: ${alertData.type}. Investigating missing context.`);
+      }
       // Check if similar alert already exists (prevent duplicates)
       const existingAlert = await FraudAlert.findOne({
         userId: alertData.userId,
@@ -304,8 +307,22 @@ class FraudDetectionService {
 
       if (existingAlert) {
         // Update existing alert instead of creating duplicate
+        const escalatedToHigh = (alertData.severity === 'high' && existingAlert.severity !== 'high');
+        
+        if (escalatedToHigh || alertData.severity === 'medium' && existingAlert.severity === 'low') {
+            existingAlert.severity = alertData.severity;
+            existingAlert.title = alertData.title;
+            existingAlert.description = alertData.description;
+        }
+
         existingAlert.metadata = { ...existingAlert.metadata, ...alertData.metadata };
         await existingAlert.save();
+        
+        if (escalatedToHigh) {
+            logger.warn(`Fraud alert ESCALATED: ${existingAlert.type} for user ${alertData.userId} (Severity: high)`);
+            await this.handleAutoBan(alertData.userId, existingAlert);
+        }
+        
         return existingAlert;
       }
 
