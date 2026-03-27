@@ -12,6 +12,9 @@ const register = async (req, res) => {
     if (req.files) {
       if (req.files.governmentId) fileBuffers.governmentId = req.files.governmentId[0].buffer;
       if (req.files.selfie) fileBuffers.selfie = req.files.selfie[0].buffer;
+      if (req.files.panDoc) fileBuffers.panDoc = req.files.panDoc[0].buffer;
+      if (req.files.gstDoc) fileBuffers.gstDoc = req.files.gstDoc[0].buffer;
+      if (req.files.registrationDoc) fileBuffers.registrationDoc = req.files.registrationDoc[0].buffer;
     }
 
     const result = await authService.register(req.body, fileBuffers);

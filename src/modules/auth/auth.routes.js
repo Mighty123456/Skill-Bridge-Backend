@@ -63,7 +63,10 @@ router.post(
   '/register',
   catchUploadErrors(uploadFields([
     { name: 'governmentId', maxCount: 1 },
-    { name: 'selfie', maxCount: 1 }
+    { name: 'selfie', maxCount: 1 },
+    { name: 'panDoc', maxCount: 1 },
+    { name: 'gstDoc', maxCount: 1 },
+    { name: 'registrationDoc', maxCount: 1 }
   ])),
   parseJsonFields(['address', 'services', 'skills']),
   validate(authSchema.registerSchema),

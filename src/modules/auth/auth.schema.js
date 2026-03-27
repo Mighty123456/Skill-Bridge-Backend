@@ -51,6 +51,10 @@ const registerSchema = [
   body('services').optional().isArray().withMessage('Services must be an array'),
   body('skills').optional().isArray().withMessage('Skills must be an array'),
   body('experience').optional().isInt({ min: 0 }).withMessage('Experience must be a non-negative integer'),
+  body('aadhaarNumber').optional().trim(),
+  body('panNumber').optional().trim(),
+  body('gstNumber').optional().trim(),
+  body('businessRegistrationNumber').optional().trim(),
 ];
 
 // Login validation

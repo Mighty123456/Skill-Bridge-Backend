@@ -219,6 +219,35 @@ const register = async (userData, fileBuffers = {}) => {
         }
       }
 
+      // Upload Additional Contractor Documents
+      if (fileBuffers.panDoc) {
+        try {
+          logger.info('Uploading contractor PAN card...');
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.panDoc, `pan_${email || phone}`);
+          contractorData.panDoc = uploadResult.url;
+        } catch (err) {
+          logger.error(`Failed to upload PAN card: ${err.message}`);
+        }
+      }
+      if (fileBuffers.gstDoc) {
+        try {
+          logger.info('Uploading contractor GST certificate...');
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.gstDoc, `gst_${email || phone}`);
+          contractorData.gstDoc = uploadResult.url;
+        } catch (err) {
+          logger.error(`Failed to upload GST certificate: ${err.message}`);
+        }
+      }
+      if (fileBuffers.registrationDoc) {
+        try {
+          logger.info('Uploading contractor business registration document...');
+          const uploadResult = await uploadImageToCloudinary(fileBuffers.registrationDoc, `reg_${email || phone}`);
+          contractorData.registrationDoc = uploadResult.url;
+        } catch (err) {
+          logger.error(`Failed to upload business registration: ${err.message}`);
+        }
+      }
+
       logger.info(`Creating Contractor record with data: ${JSON.stringify(contractorData)}`);
       const newContractor = await Contractor.create(contractorData);
       await user.save({ validateBeforeSave: false });
