@@ -41,6 +41,6 @@ router.get('/project-tasks', protect, authorize('worker'), workerController.getP
 
 const multer = require('multer');
 const upload = multer();
-router.put('/project-tasks/:jobId/:taskId/status', protect, authorize('worker'), upload.array('photos', 5), workerController.updateWorkerTaskStatus);
+router.put('/project-tasks/:jobId/:taskId/status', protect, authorize('worker'), upload.any(), workerController.updateWorkerTaskStatus);
 
 module.exports = router;
