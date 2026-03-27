@@ -738,13 +738,39 @@ exports.updateWorkerTaskStatus = async (req, res) => {
             task.completion_photos = uploadResults.map(r => r.url);
         }
 
+        // ── Auto-sync parent job status from aggregate task states ──
+        const allTasks = job.tasks;
+        const allCompleted = allTasks.length > 0 && allTasks.every(t => t.status === 'completed');
+        const anyInProgress = allTasks.some(t => t.status === 'inProgress');
+        const anyCompleted = allTasks.some(t => t.status === 'completed');
+        const allPending = allTasks.every(t => t.status === 'pending');
+
+        let newJobStatus = job.status;
+        if (allCompleted) {
+            newJobStatus = 'reviewing';
+        } else if (anyInProgress) {
+            newJobStatus = 'in_progress';
+        } else if (anyCompleted && !anyInProgress) {
+            // Some done, rest pending → still in_progress
+            newJobStatus = 'in_progress';
+        } else if (!allPending && (job.status === 'open')) {
+            newJobStatus = 'assigned';
+        }
+
+        const statusChanged = newJobStatus !== job.status;
+        if (statusChanged) {
+            job.status = newJobStatus;
+        }
+
         // Phase 4 Constraint: Log status changes to timeline
         const JobService = require('../jobs/job.service');
+        const photoCount = (task.completion_photos || []).length;
+        const photoNote = photoCount > 0 ? ` (${photoCount} photo${photoCount > 1 ? 's' : ''} attached)` : '';
         JobService.appendTimeline(
             job, 
             job.status, 
             'worker', 
-            `Worker updated task "${task.title}" status to: ${status}${notes ? ' with note: ' + notes : ''}`
+            `Worker updated task "${task.title}" status to: ${status}${notes ? ' — ' + notes : ''}${photoNote}`
         );
 
         await job.save();

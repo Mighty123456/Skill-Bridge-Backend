@@ -41,6 +41,44 @@ exports.addFunds = async (req, res, next) => {
 };
 
 /**
+ * Lock funds in escrow for a project
+ */
+exports.lockEscrow = async (req, res, next) => {
+    try {
+        const { projectId, workerId, amount, description } = req.body;
+        if (!projectId || !workerId || !amount || amount <= 0) {
+            return res.status(400).json({ success: false, message: 'Invalid project, worker, or amount' });
+        }
+
+        const result = await WalletService.lockEscrow(req.user._id, projectId, workerId, Number(amount), description);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Funds locked in escrow successfully',
+            data: result
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * Get all escrows for a project
+ */
+exports.getProjectEscrows = async (req, res, next) => {
+    try {
+        const { projectId } = req.params;
+        const escrows = await WalletService.getProjectEscrows(projectId);
+        res.status(200).json({
+            success: true,
+            data: escrows
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * Request Payout
  */
 exports.withdraw = async (req, res, next) => {

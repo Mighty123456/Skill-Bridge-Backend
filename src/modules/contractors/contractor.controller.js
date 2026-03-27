@@ -461,6 +461,20 @@ exports.updateTask = async (req, res) => {
             job.status = 'assigned';
         }
 
+        // Auto-sync parent job status from aggregate task states
+        if (updateData.status) {
+            const allTasks = job.tasks;
+            const allCompleted = allTasks.length > 0 && allTasks.every(t => t.status === 'completed');
+            const anyInProgress = allTasks.some(t => t.status === 'inProgress');
+            const anyCompleted = allTasks.some(t => t.status === 'completed');
+
+            if (allCompleted) {
+                job.status = 'reviewing';
+            } else if (anyInProgress || anyCompleted) {
+                job.status = 'in_progress';
+            }
+        }
+
         await job.save();
 
         // Notify Worker if assignment changed or updated

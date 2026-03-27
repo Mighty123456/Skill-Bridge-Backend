@@ -392,3 +392,75 @@ exports.getEarningsStats = async (workerId) => {
 
     return result;
 };
+
+/**
+ * Lock funds in escrow for a project
+ */
+exports.lockEscrow = async (userId, projectId, workerId, amount, description) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const wallet = await Wallet.findOne({ user: userId }).session(session);
+        if (!wallet) throw new Error('Wallet not found');
+
+        if (wallet.balance < amount) {
+            throw new Error(`Insufficient funds. Available: ₹${wallet.balance}`);
+        }
+
+        // 1. Debit User Balance and Increase Escrow Balance
+        wallet.balance -= amount;
+        wallet.escrowBalance += amount;
+        await wallet.save({ session });
+
+        // 2. Create Escrow Payment Record
+        const Payment = require('../payments/payment.model');
+        const crypto = require('crypto');
+        
+        const escrowPayment = new Payment({
+            transactionId: `ESCROW_${crypto.randomBytes(6).toString('hex').toUpperCase()}`,
+            job: projectId,
+            user: userId,
+            worker: workerId,
+            amount: amount,
+            type: 'escrow',
+            status: 'completed', // Status is 'completed' because funds are successfully moved to platform hold
+            paymentMethod: 'wallet',
+            gatewayResponse: {
+                description: description || `Escrow for project ${projectId}`,
+                lockedAt: new Date()
+            }
+        });
+
+        await escrowPayment.save({ session });
+
+        // 3. Notify Worker
+        const notifyHelper = require('../../common/notification.helper');
+        await notifyHelper.onWalletTransaction(
+            workerId,
+            'Project Funds Secured',
+            `A contractor has locked ₹${amount} in escrow for your project. Complete the work to receive payment.`,
+            { type: 'escrow_locked', projectId, amount }
+        ).catch(err => logger.error(`Failed to notify worker of escrow: ${err.message}`));
+
+        await session.commitTransaction();
+        return escrowPayment;
+
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
+    }
+};
+
+/**
+ * Get all escrow records for a project
+ */
+exports.getProjectEscrows = async (projectId) => {
+    const Payment = require('../payments/payment.model');
+    return await Payment.find({ 
+        job: projectId, 
+        type: 'escrow' 
+    }).populate('worker', 'name profileImage').sort({ createdAt: -1 });
+};
