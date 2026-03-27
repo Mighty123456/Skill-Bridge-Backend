@@ -11,8 +11,28 @@ exports.initiateChat = async (req, res) => {
         const { recipientId, jobId } = req.body;
         const senderId = req.user.id;
 
-        if (!recipientId || !jobId) {
-            return errorResponse(res, 'Recipient ID and Job ID are required', 400);
+        let resolvedJobId = jobId;
+
+        if (!recipientId) {
+            return errorResponse(res, 'Recipient ID is required', 400);
+        }
+
+        if (!resolvedJobId) {
+            const Job = require('../jobs/job.model');
+            const sharedJob = await Job.findOne({
+                $or: [
+                    { user_id: senderId, selected_worker_id: recipientId },
+                    { user_id: senderId, 'tasks.assigned_worker_id': recipientId },
+                    { user_id: recipientId, selected_worker_id: senderId },
+                    { user_id: recipientId, 'tasks.assigned_worker_id': senderId }
+                ]
+            }).sort({ created_at: -1 });
+
+            if (sharedJob) {
+                resolvedJobId = sharedJob._id;
+            } else {
+                return errorResponse(res, 'Cannot initiate chat without an active context. No shared projects found.', 400);
+            }
         }
 
         // Check if chat exists for these participants (Reuse existing chat for the same person)
@@ -22,7 +42,7 @@ exports.initiateChat = async (req, res) => {
 
         if (chat) {
             // Update to latest job context and reactivate
-            chat.job = jobId;
+            chat.job = resolvedJobId;
             chat.status = 'active'; 
             chat.lastMessageTime = new Date(); // Move to top of list as it's "re-initiated"
 
@@ -41,7 +61,7 @@ exports.initiateChat = async (req, res) => {
 
         // Validate Job exists and status
         const Job = require('../jobs/job.model');
-        const job = await Job.findById(jobId);
+        const job = await Job.findById(resolvedJobId);
         if (!job) {
             return errorResponse(res, 'Job not found', 404);
         }
@@ -56,7 +76,7 @@ exports.initiateChat = async (req, res) => {
         // Create new chat
         const newChat = await Chat.create({
             participants: [senderId, recipientId],
-            job: jobId,
+            job: resolvedJobId,
             unreadCounts: {
                 [senderId]: 0,
                 [recipientId]: 0

@@ -47,19 +47,17 @@ const startServer = async () => {
     // Handle unhandled promise rejections
     process.on('unhandledRejection', (err) => {
       logger.error(`Unhandled Rejection: ${err.message}`);
-      server.close(() => {
-        process.exit(1);
-      });
+      // Do not exit process in production to prevent Render from crashing completely 
+      // on minor background task connection drops (like Redis or DB ping failures)
     });
 
     // Handle uncaught exceptions
     process.on('uncaughtException', (err) => {
       logger.error(`Uncaught Exception: ${err.message}`);
-      process.exit(1);
+      // Allow the process to continue running so Render doesn't throw a status 1 permanently. 
     });
   } catch (error) {
     logger.error(`Failed to start server: ${error.message}`);
-    process.exit(1);
   }
 };
 

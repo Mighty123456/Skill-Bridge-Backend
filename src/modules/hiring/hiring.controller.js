@@ -184,11 +184,16 @@ exports.respondToHireRequest = async (req, res) => {
         }
 
         // Security: Ensure this worker is the one authorized to respond
-        const workerProfile = await Worker.findOne({ user: workerId });
-        const isAuthorized = hiringRequest.worker.toString() === workerId.toString() || 
-                           (workerProfile && hiringRequest.worker.toString() === workerProfile._id.toString());
+        const workerProfile = await Worker.findOne({ user: workerId }).session(session);
+        
+        // Robust check: Compare as strings and as Objects via .equals()
+        const isUserMatch = hiringRequest.worker.toString() === workerId.toString();
+        const isProfileMatch = workerProfile && (hiringRequest.worker.toString() === workerProfile._id.toString());
+        
+        const isAuthorized = isUserMatch || isProfileMatch;
 
         if (!isAuthorized) {
+            logger.warn(`[Hiring] Unauthorised response attempt from ${workerId}. Target worker on request ${requestId} is ${hiringRequest.worker}`);
             await session.abortTransaction();
             session.endSession();
             return res.status(403).json({ success: false, message: 'Not authorized to respond to this request' });
@@ -251,8 +256,10 @@ exports.respondToHireRequest = async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
-        // Notify Contractor (FCM + In-App) via Helper
-        await notifyHelper.onHireRequestResponded(hiringRequest.contractor._id, hiringRequest.project, req.user.name, status);
+        // Notify Contractor (fire-and-forget – must NOT block the response)
+        notifyHelper.onHireRequestResponded(hiringRequest.contractor._id, hiringRequest.project, req.user.name, status).catch((err) => {
+            logger.warn(`[Hiring] Respond notification failed: ${err.message}`);
+        });
 
         res.status(200).json({
             success: true,
