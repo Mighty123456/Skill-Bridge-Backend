@@ -117,8 +117,10 @@ exports.createHireRequest = async (req, res) => {
                     status: 'pending'
                 });
 
-                // 5. Send Notification (FCM + In-App) via Helper
-                await notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, proposedRate);
+                // 5. Send Notification (fire-and-forget – must NOT block the response)
+                notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, proposedRate).catch((err) => {
+                    logger.warn(`[Hiring] Notification failed for worker ${currentWorkerId}: ${err.message}`);
+                });
 
                 createdRequests.push(hiringRequest);
              } catch (err) {
@@ -128,9 +130,10 @@ exports.createHireRequest = async (req, res) => {
         }
 
         if (createdRequests.length === 0) {
+             const reason = errors.length > 0 ? errors[0].reason : 'Unknown error';
              return res.status(400).json({
                  success: false,
-                 message: 'Failed to send any hire requests.',
+                 message: `Failed to send hire request: ${reason}`,
                  errors
              });
         }

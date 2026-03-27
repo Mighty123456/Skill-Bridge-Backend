@@ -25,6 +25,15 @@ exports.createContract = async (req, res) => {
             terminationNoticePeriodDays
         } = req.body;
 
+        // Explicit validation for required fields
+        if (!workerId) return res.status(400).json({ success: false, message: 'Worker ID is required.' });
+        if (!title) return res.status(400).json({ success: false, message: 'Contract title is required.' });
+        if (!startDate) return res.status(400).json({ success: false, message: 'Start date is required.' });
+        if (!endDate) return res.status(400).json({ success: false, message: 'End date is required.' });
+        if (!termsAndConditions) return res.status(400).json({ success: false, message: 'Terms and conditions are required.' });
+        if (agreementType === 'fixed' && !totalValue) return res.status(400).json({ success: false, message: 'Total value is required for fixed agreements.' });
+        if (agreementType === 'retainer' && !monthlyRate) return res.status(400).json({ success: false, message: 'Monthly rate is required for retainer agreements.' });
+
         // Create the contract
         const contract = await Contract.create({
             contractor_id: contractorId,
@@ -49,8 +58,10 @@ exports.createContract = async (req, res) => {
             }]
         });
 
-        // Notify worker (FCM + In-App)
-        await notifyHelper.onContractReceived(workerId, title, req.user.name);
+        // Notify worker (fire-and-forget – notification failure must NOT fail the whole request)
+        notifyHelper.onContractReceived(workerId, title, req.user.name).catch((err) => {
+            logger.warn(`[Contract] Notification failed for worker ${workerId}: ${err.message}`);
+        });
 
         res.status(201).json({
             success: true,
@@ -61,11 +72,11 @@ exports.createContract = async (req, res) => {
         logger.error('Create Contract Error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to create contract proposal',
-            error: error.message
+            message: error.message || 'Failed to create contract proposal',
         });
     }
 };
+
 
 /**
  * Respond to a contract (Worker only)
