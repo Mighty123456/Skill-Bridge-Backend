@@ -337,4 +337,12 @@ router.get(
   adminController.getCalendarOverview
 );
 
+// Escrow & Financial Control Hub
+router.get(
+  '/escrow/summary',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getEscrowSummary
+);
+
 module.exports = router;

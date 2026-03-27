@@ -1375,7 +1375,7 @@ const getEscrowSummary = async (req, res) => {
     const [pendingReleases, activeWarranties, payouts] = await Promise.all([
       // 1. Pending Releases (Completed or Cooling Window but not yet released to worker)
       Job.find({ 
-        status: { $in: ['completed', 'cooling_window', 'disputed'] }, 
+        status: { $in: ['diagnosed', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'disputed', 'material_pending_approval', 'warranty_in_progress'] }, 
         payment_released: false 
       })
         .populate('user_id', 'name role')
@@ -1396,15 +1396,29 @@ const getEscrowSummary = async (req, res) => {
         .limit(20)
     ]);
 
-    const formattedPending = pendingReleases.map(job => ({
-      id: job._id,
-      title: job.job_title,
-      amount: job.diagnosis_report?.final_total_cost || 0,
-      workerName: job.selected_worker_id?.name || 'Unknown',
-      clientName: job.user_id?.name || 'Unknown',
-      isContractor: job.is_contractor_project,
-      createdAt: job.created_at
-    }));
+    // 4. Calculate actual escrowed totals per job for accuracy (includes materials)
+    const jobIds = pendingReleases.map(j => j._id);
+    const relatedEscrows = await Payment.find({ 
+      job: { $in: jobIds }, 
+      type: 'escrow', 
+      status: 'completed' 
+    });
+
+    const formattedPending = pendingReleases.map(job => {
+      const jobEscrow = relatedEscrows
+        .filter(p => p.job?.toString() === job._id.toString())
+        .reduce((sum, p) => sum + p.amount, 0);
+
+      return {
+        id: job._id,
+        title: job.job_title,
+        amount: jobEscrow || job.diagnosis_report?.final_total_cost || 0,
+        workerName: job.selected_worker_id?.name || 'Unknown',
+        clientName: job.user_id?.name || 'Unknown',
+        isContractor: job.is_contractor_project,
+        createdAt: job.created_at
+      };
+    });
 
     const formattedWarranties = activeWarranties.map(job => ({
       id: job._id,
