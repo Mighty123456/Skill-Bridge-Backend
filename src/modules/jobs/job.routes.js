@@ -22,23 +22,23 @@ router.post('/:id/start', protect, authorize('worker'), jobController.startJob);
 router.post('/:id/delay', protect, authorize('worker'), jobController.reportDelay); // New
 router.post('/:id/location', protect, authorize('worker'), jobController.updateLocation);
 router.post('/:id/diagnosis', protect, authorize('worker'), jobController.submitDiagnosis);
-router.post('/:id/approve-diagnosis', protect, authorize('user'), jobController.approveDiagnosis);
+router.post('/:id/approve-diagnosis', protect, authorize('user', 'contractor'), jobController.approveDiagnosis);
 router.post('/:id/materials', protect, authorize('worker'), catchUploadErrors(uploadSingle('bill_proof')), jobController.requestMaterial);
-router.post('/:id/materials/:requestId/respond', protect, authorize('user'), jobController.respondToMaterial);
+router.post('/:id/materials/:requestId/respond', protect, authorize('user', 'contractor'), jobController.respondToMaterial);
 
 const completionUpload = uploadFields([
     { name: 'completion_photos', maxCount: 5 },
     { name: 'signature', maxCount: 1 }
 ]);
 router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(completionUpload), jobController.submitCompletion);
-router.post('/:id/confirm-completion', protect, authorize('user'), jobController.confirmCompletion);
+router.post('/:id/confirm-completion', protect, authorize('user', 'contractor'), jobController.confirmCompletion);
 
 router.post('/:id/finalize', protect, jobController.finalizeJob);
 router.post('/:id/cancel', protect, jobController.cancelJob); // New Cancellation Route
-router.post('/:id/dispute', protect, authorize('user'), catchUploadErrors(uploadMultiple('evidence_photos', 3)), jobController.raiseDispute);
-router.post('/:id/dispute/resolve', protect, authorize('admin', 'user'), jobController.resolveDispute);
+router.post('/:id/dispute', protect, authorize('user', 'contractor'), catchUploadErrors(uploadMultiple('evidence_photos', 3)), jobController.raiseDispute);
+router.post('/:id/dispute/resolve', protect, authorize('admin', 'user', 'contractor'), jobController.resolveDispute);
 
-router.post('/:id/warranty/claim', protect, authorize('user'), catchUploadErrors(uploadMultiple('evidence_photos', 3)), jobController.claimWarranty);
+router.post('/:id/warranty/claim', protect, authorize('user', 'contractor'), catchUploadErrors(uploadMultiple('evidence_photos', 3)), jobController.claimWarranty);
 router.post('/:id/warranty/resolve', protect, authorize('worker', 'admin'), jobController.resolveWarranty);
 
 // Documents

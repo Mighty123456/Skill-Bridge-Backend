@@ -7,6 +7,7 @@ const Availability = require('./availability.model');
 const EtaTracking = require('./etaTracking.model');
 const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
+const cloudinaryService = require('../../common/cloudinary.service');
 
 /**
  * Internal: Recompute Reliability Score for a worker
@@ -711,7 +712,7 @@ exports.updateWorkerTaskStatus = async (req, res) => {
     try {
         const workerId = req.user._id;
         const { jobId, taskId } = req.params;
-        const { status } = req.body;
+        const { status, notes } = req.body;
 
         const Job = require('../jobs/job.model');
         const job = await Job.findById(jobId);
@@ -726,6 +727,16 @@ exports.updateWorkerTaskStatus = async (req, res) => {
         }
 
         task.status = status;
+        if (notes) task.notes = notes;
+
+        // Handle Completion Photos if any
+        if (req.files && req.files.length > 0) {
+            const uploadPromises = req.files.map(file => 
+                cloudinaryService.uploadOptimizedImage(file.buffer, `skillbridge/project_tasks/${jobId}/${taskId}`)
+            );
+            const uploadResults = await Promise.all(uploadPromises);
+            task.completion_photos = uploadResults.map(r => r.url);
+        }
 
         // Phase 4 Constraint: Log status changes to timeline
         const JobService = require('../jobs/job.service');
@@ -733,7 +744,7 @@ exports.updateWorkerTaskStatus = async (req, res) => {
             job, 
             job.status, 
             'worker', 
-            `Worker updated task "${task.title}" status to: ${status}`
+            `Worker updated task "${task.title}" status to: ${status}${notes ? ' with note: ' + notes : ''}`
         );
 
         await job.save();

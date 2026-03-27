@@ -719,9 +719,30 @@ exports.approveDiagnosis = async (jobId, userId, approved, rejectionReason) => {
             throw new Error('Invalid diagnosis cost. Cannot proceed to payment.');
         }
 
-        // Direct Pay: Always create Stripe Checkout session.
-        // No tenant wallet involved — tenant pays via card/UPI directly.
-        // The webhook will call handleJobPaymentSuccess() after payment.
+        // --- NEW: Contractor Project Wallet Flow ---
+        if (job.is_contractor_project) {
+            const breakdown = await PaymentService.calculateBreakdown(amount, job.selected_worker_id);
+            const totalUserPayable = breakdown.totalUserPayable;
+
+            // Attempt to pay via wallet
+            const WalletService = require('../wallet/wallet.service');
+            try {
+                await WalletService.debitWallet(userId, totalUserPayable);
+                // On success, create escrow and finalize status
+                await PaymentService.createEscrow(jobId, userId, amount, 'wallet', `WLT_${Date.now()}_${jobId}`);
+                await exports.handleJobPaymentSuccess(jobId, totalUserPayable);
+                
+                // Return updated job
+                return await Job.findById(jobId).populate('user_id', 'name email').populate('selected_worker_id', 'name email');
+            } catch (walletError) {
+                if (walletError.message.includes('Insufficient funds')) {
+                    throw new Error(`Insufficient wallet balance. Total required: ₹${totalUserPayable.toFixed(2)}. Please top up your contractor wallet.`);
+                }
+                throw walletError;
+            }
+        }
+        // --------------------------------------------
+
         const error = new Error('PAYMENT_REQUIRED');
         error.code = 'PAYMENT_REQUIRED';
         error.jobId = jobId;
@@ -788,8 +809,31 @@ exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
     if (!request) throw new Error('Request not found');
 
     if (approved) {
-        // Direct Pay: Return a flag indicating payment is needed.
-        // The controller will create a Stripe checkout session.
+        const amount = request.cost;
+
+        // --- NEW: Contractor Project Wallet Flow ---
+        if (job.is_contractor_project) {
+            const WalletService = require('../wallet/wallet.service');
+            try {
+                // For materials, we currently assume 100% to worker
+                await WalletService.debitWallet(job.user_id, amount);
+                await PaymentService.createMaterialEscrow(jobId, job.user_id, amount, 'wallet', `WLT_MAT_${Date.now()}_${jobId}`);
+                
+                request.status = 'approved';
+                request.responded_at = new Date();
+                appendTimeline(job, job.status, 'user', `Material request approved via wallet: ${request.item_name} (₹${amount})`);
+                await job.save();
+                return { job, needsPayment: false };
+            } catch (walletError) {
+                if (walletError.message.includes('Insufficient funds')) {
+                    throw new Error(`Insufficient wallet balance. Total required for material: ₹${amount}. Please top up.`);
+                }
+                throw walletError;
+            }
+        }
+        // --------------------------------------------
+
+        // Direct Pay
         request.status = 'payment_pending';
         request.responded_at = new Date();
         appendTimeline(job, job.status, 'user', `Material approved, awaiting payment`);
