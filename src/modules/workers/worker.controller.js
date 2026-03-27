@@ -7,7 +7,7 @@ const Availability = require('./availability.model');
 const EtaTracking = require('./etaTracking.model');
 const notifyHelper = require('../../common/notification.helper');
 const logger = require('../../config/logger');
-const cloudinaryService = require('../../common/cloudinary.service');
+const cloudinaryService = require('../../common/services/cloudinary.service');
 
 /**
  * Internal: Recompute Reliability Score for a worker
