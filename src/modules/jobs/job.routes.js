@@ -45,4 +45,9 @@ router.post('/:id/warranty/resolve', protect, authorize('worker', 'admin'), jobC
 router.get('/:id/invoice', protect, jobController.getInvoice);
 router.get('/:id/warranty-card', protect, jobController.getWarrantyCard);
 
+// Phase 4: Contractor Operations
+router.post('/:id/tasks/:taskId/attendance', protect, jobController.updateTaskAttendance);
+router.put('/:id/tasks/:taskId/status', protect, jobController.updateTaskStatus);
+router.post('/:id/materials/:requestId/respond', protect, authorize('user', 'contractor'), jobController.respondToMaterialRequest);
+
 module.exports = router;

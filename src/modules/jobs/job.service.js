@@ -1536,3 +1536,135 @@ exports.enforceWarrantySLAs = async () => {
         }
     }
 };
+
+/**
+ * PHASE 4: Contractor Operations
+ */
+
+/**
+ * Geo-verified Attendance for Contractor Tasks
+ */
+exports.updateTaskAttendance = async (jobId, taskId, userId, attendanceData) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Project not found');
+
+    const task = job.tasks.id(taskId);
+    if (!task) throw new Error('Task not found');
+
+    const isWorker = task.assigned_worker_id?.toString() === userId.toString();
+    const isContractor = job.user_id.toString() === userId.toString();
+
+    if (!isWorker && !isContractor) throw new Error('Unauthorized');
+
+    if (attendanceData.clock_in_at && job.location?.coordinates) {
+        const { lat, lng } = attendanceData;
+        const [jobLng, jobLat] = job.location.coordinates;
+        
+        const distance = calculateDistance(jobLat, jobLng, lat, lng);
+        const radius = 0.2; // 200m default
+
+        if (distance > radius) {
+            throw new Error(`Out of range. You are ${Math.round(distance * 1000)}m away. Required: ${radius * 1000}m`);
+        }
+
+        task.status = 'inProgress';
+        task.start_date = new Date();
+        
+        appendTimeline(job, 'in_progress', 'worker', `Task "${task.title}" started. GPS Verified.`, { 
+            taskId, 
+            location: { lat, lng }
+        });
+    }
+
+    if (!task.notes) task.notes = '';
+    task.notes += `\nAttendance Logged: ${new Date().toISOString()}`;
+
+    await job.save();
+    return job;
+};
+
+exports.respondToMaterialRequest = async (jobId, requestId, contractorId, status, note) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Project not found');
+
+    if (job.user_id.toString() !== contractorId.toString()) throw new Error('Unauthorized');
+
+    const request = job.material_requests.id(requestId);
+    if (!request) throw new Error('Material request not found');
+
+    request.status = status; 
+    request.responded_at = new Date();
+    
+    appendTimeline(job, job.status, 'user', 
+        `Material Request ${status}: ${request.item_name}. Note: ${note || 'No note'}`, 
+        { requestId, status, cost: request.cost }
+    );
+    
+    await job.save();
+    return job;
+};
+
+/**
+ * Phase 4: Contractor Task Lifecycle
+ */
+exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Project not found');
+
+    const task = job.tasks.id(taskId);
+    if (!task) throw new Error('Task not found');
+
+    const isWorker = task.assigned_worker_id?.toString() === userId.toString();
+    const isContractor = job.user_id.toString() === userId.toString();
+
+    if (!isWorker && !isContractor) throw new Error('Unauthorized method');
+
+    const oldStatus = task.status;
+    task.status = status;
+    if (note) task.notes = (task.notes || '') + `\n[${status.toUpperCase()}]: ${note}`;
+
+    if (status === 'completed') {
+        task.end_date = new Date();
+        
+        // FINANCIALS: Partial Escrow Release Logic
+        // If there's an escrow linked to this task specifically (or worker), we trigger a partial release.
+        try {
+            const WalletService = require('../wallet/wallet.service');
+            // We search for a 'locked' escrow for this worker in this job
+            const wallet = await (require('../wallet/wallet.model')).findOne({ user: job.user_id });
+            if (wallet) {
+                const escrow = wallet.escrows.find(e => 
+                    e.jobId.toString() === jobId.toString() && 
+                    e.status === 'locked' &&
+                    e.workerId?.toString() === task.assigned_worker_id?.toString()
+                );
+
+                if (escrow) {
+                    // Release the specific escrow amount linked to this worker
+                    await WalletService.releaseEscrow(job.user_id, escrow._id);
+                    task.notes += `\n[FINANCE]: Partial payment released to worker wallet.`;
+                }
+            }
+        } catch (walletErr) {
+            logger.warn(`Task payment release failed: ${walletErr.message}`);
+        }
+    }
+
+    appendTimeline(job, job.status, isContractor ? 'user' : 'worker', 
+        `Task "${task.title}" status changed from ${oldStatus} to ${status}`, 
+        { taskId, status, note }
+    );
+
+    await job.save();
+
+    // NOTIFY:
+    const recipientId = isContractor ? task.assigned_worker_id : job.user_id;
+    if (recipientId) {
+        notifyHelper.onJobStatusUpdate(recipientId, `Task Update: ${task.title}`, 
+            `Status changed to ${status.toUpperCase()}${note ? ': ' + note : ''}`, 
+            { jobId: job._id, taskId: task._id }
+        ).catch(err => logger.warn(`Task notification sync failed: ${err.message}`));
+    }
+
+    return job;
+};

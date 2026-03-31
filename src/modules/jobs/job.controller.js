@@ -532,15 +532,46 @@ exports.getInvoice = async (req, res) => {
         const { id } = req.params;
         const job = await Job.findById(id)
             .populate('user_id', 'name email address')
-            .populate('selected_worker_id', 'name');
+            .populate({
+                path: 'selected_worker_id',
+                select: 'name email'
+            })
+            .populate({
+                path: 'tasks.assigned_worker_id',
+                select: 'name email'
+            });
 
         if (!job) return res.status(404).send('Invoice not found');
 
-        const PaymentService = require('../payments/payment.service');
-        const breakdown = await PaymentService.calculateBreakdown(job.diagnosis_report.final_total_cost, job.selected_worker_id._id);
-        const materialCost = (job.diagnosis_report.materials || []).reduce((sum, m) => sum + (m.estimated_cost || 0), 0);
-        const laborCost = job.diagnosis_report.final_labor_cost || (job.diagnosis_report.final_total_cost - materialCost);
+        const isContractor = job.is_contractor_project;
+        let laborCost = 0;
+        let materialCost = 0;
+        let items = [];
 
+        if (isContractor) {
+            // Aggregate all tasks for contractors
+            laborCost = job.budget || 0; // The total contract value
+            
+            // Materials approved
+            const approvedMaterials = job.material_requests.filter(m => m.status === 'approved');
+            materialCost = approvedMaterials.reduce((sum, m) => sum + (m.cost || 0), 0);
+
+            items = [
+                { desc: 'Professional Workforce Management & Labor', amt: laborCost, sub: 'All scheduled works & workforce overhead' },
+                ...approvedMaterials.map(m => ({ desc: `Material: ${m.item_name}`, amt: m.cost, sub: `Approved on ${new Date(m.responded_at).toLocaleDateString()}` }))
+            ];
+        } else {
+            // Standard individual job logic
+            materialCost = (job.diagnosis_report.materials || []).reduce((sum, m) => sum + (m.estimated_cost || 0), 0);
+            laborCost = job.diagnosis_report.final_labor_cost || (job.diagnosis_report.final_total_cost - materialCost);
+            
+            items = [
+                { desc: 'Professional Service Fee', amt: laborCost, sub: 'Labor and expertise charge' },
+                { desc: 'Material Expenses', amt: materialCost, sub: 'Parts and materials supplied' }
+            ];
+        }
+
+        const totalAmount = laborCost + materialCost;
         const invoiceDate = new Date().toLocaleDateString('en-IN', {
             year: 'numeric',
             month: 'long',
@@ -553,22 +584,22 @@ exports.getInvoice = async (req, res) => {
         <head>
             <meta charset="utf-8">
             <style>
-                body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; margin: 0; padding: 40px; background: #fff; }
+                body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; color: #333; margin: 0; padding: 40px; background: #fff; line-height: 1.5; }
                 .invoice-box { max-width: 800px; margin: auto; }
-                .header { display: flex; justify-content: space-between; border-bottom: 2px solid #008080; padding-bottom: 20px; margin-bottom: 40px; }
-                .logo { font-size: 28px; font-weight: bold; color: #008080; }
+                .header { display: flex; justify-content: space-between; border-bottom: 3px solid #008080; padding-bottom: 25px; margin-bottom: 40px; }
+                .logo { font-size: 30px; font-weight: bold; color: #008080; }
                 .invoice-details { text-align: right; }
-                .section { margin-bottom: 30px; }
-                .section-title { font-weight: bold; color: #666; font-size: 12px; text-transform: uppercase; margin-bottom: 10px; }
-                .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
-                table { width: 100%; line-height: inherit; text-align: left; border-collapse: collapse; }
-                table th { background: #f8fafc; padding: 12px; border-bottom: 1px solid #e2e8f0; color: #64748b; font-size: 13px; }
-                table td { padding: 12px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+                .section-title { font-weight: bold; color: #64748b; font-size: 11px; text-transform: uppercase; margin-bottom: 8px; letter-spacing: 1px; }
+                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                th { background: #f8fafc; padding: 15px; text-align: left; border-bottom: 2px solid #e2e8f0; color: #475569; font-size: 13px; text-transform: uppercase; }
+                td { padding: 15px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
                 .total-row { background: #008080 !important; color: white !important; font-weight: bold; }
-                .total-row td { border: none; padding: 15px 12px; font-size: 18px; color: white !important; }
-                .footer { margin-top: 60px; text-align: center; color: #94a3b8; font-size: 12px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
-                .badge { display: inline-block; padding: 4px 12px; border-radius: 99px; font-size: 11px; font-weight: bold; }
-                .badge-success { background: #E0F7F7; color: #008080; }
+                .total-row td { border: none; padding: 20px 15px; font-size: 20px; }
+                .footer { margin-top: 60px; text-align: center; color: #94a3b8; font-size: 11px; border-top: 1px solid #f1f5f9; padding-top: 25px; }
+                .badge { display: inline-block; padding: 5px 15px; border-radius: 99px; font-size: 11px; font-weight: bold; }
+                .badge-success { background: #dcfce7; color: #166534; }
+                .meta-grid { display: flex; justify-content: space-between; gap: 40px; margin-bottom: 40px; }
+                .meta-col { flex: 1; }
             </style>
         </head>
         <body>
@@ -576,115 +607,89 @@ exports.getInvoice = async (req, res) => {
                 <div class="header">
                     <div>
                         <div class="logo">Skill<span style="color: #FF6B35">Bridge</span></div>
-                        <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Professional Service Marketplace</div>
+                        <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Project Settlement & Claims Proof</div>
                     </div>
                     <div class="invoice-details">
-                        <h1 style="margin: 0; font-size: 24px; color: #008080;">TAX INVOICE</h1>
-                         <div style="margin-top: 5px; color: #64748b;">#INV-${job._id.toString().slice(-6).toUpperCase()}</div>
+                        <h1 style="margin: 0; font-size: 26px; color: #008080;">${isContractor ? 'PROJECT SETTLEMENT' : 'TAX INVOICE'}</h1>
+                        <div style="margin-top: 5px; color: #64748b; font-weight: bold;">#INV-${job._id.toString().slice(-8).toUpperCase()}</div>
                         <div style="font-size: 14px; margin-top: 5px;">Date: ${invoiceDate}</div>
                     </div>
                 </div>
 
-                <div style="display: flex; justify-content: space-between; margin-bottom: 40px;">
-                    <div style="flex: 1;">
-                        <div class="section-title">Billed To (Tenant)</div>
-                        <div style="font-weight: bold; font-size: 16px;">${job.user_id.name}</div>
-                        <div style="font-size: 14px; color: #475569; margin-top: 4px;">${job.user_id.email || ''}</div>
-                        <div style="font-size: 14px; color: #475569;">${job.location?.address || 'N/A'}</div>
+                <div class="meta-grid">
+                    <div class="meta-col">
+                        <div class="section-title">Client / Project Owner</div>
+                        <div style="font-weight: bold; font-size: 17px; color: #1e293b;">${job.user_id.name}</div>
+                        <div style="font-size: 13px; color: #64748b; margin-top: 4px;">${job.user_id.email || 'account@skillbridge.user'}</div>
+                        <div style="font-size: 13px; color: #64748b;">${job.location?.address_text || 'Active Service Site'}</div>
                     </div>
-                    <div style="flex: 1; text-align: right;">
-                        <div class="section-title">Service Provider (Worker)</div>
-                        <div style="font-weight: bold; font-size: 16px;">${job.selected_worker_id?.name || 'Worker'}</div>
-                        <div style="font-size: 14px; color: #475569; margin-top: 4px;">Verified SkillBridge Partner</div>
-                        <div style="margin-top: 8px;">
-                            <span class="badge badge-success">PAID VIA SECROW</span>
+                    <div class="meta-col" style="text-align: right;">
+                        <div class="section-title">Service Type / Lead</div>
+                        <div style="font-weight: bold; font-size: 17px; color: #1e293b;">${job.job_title}</div>
+                        <div style="font-size: 13px; color: #64748b; margin-top: 4px;">Lead: ${job.selected_worker_id?.name || 'SkillBridge Operations'}</div>
+                        <div style="margin-top: 10px;">
+                            <span class="badge badge-success">✓ PAYMENT COMPLETED</span>
                         </div>
                     </div>
                 </div>
 
-                <div class="section">
-                    <div class="section-title">Service Description</div>
-                    <div style="font-size: 16px; font-weight: bold; margin-bottom: 5px;">${job.job_title}</div>
-                    <div style="color: #475569; font-size: 14px;">Complete professional service delivered.</div>
-                </div>
-
-                <div class="section">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Description</th>
-                                <th style="text-align: right;">Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 70%;">Service Description</th>
+                            <th style="text-align: right;">Amount (INR)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${items.map(item => `
                             <tr>
                                 <td>
-                                    <strong>Professional Service Fee</strong><br>
-
-                                    <small style="color: #64748b;">Labor and expertise charge</small>
+                                    <div style="font-weight: bold; color: #1e293b;">${item.desc}</div>
+                                    <div style="font-size: 12px; color: #64748b; margin-top: 3px;">${item.sub}</div>
                                 </td>
-                                <td style="text-align: right;">₹${laborCost.toFixed(2)}</td>
+                                <td style="text-align: right; font-weight: bold; font-size: 15px;">₹${item.amt.toLocaleString('en-IN')}</td>
                             </tr>
-                            ${materialCost > 0 ? `
-                            <tr>
-                                <td>
-                                    <strong>Material Expenses</strong><br>
-                                    <small style="color: #64748b;">Parts and materials supplied</small>
-                                </td>
-                                <td style="text-align: right;">₹${materialCost.toFixed(2)}</td>
-                            </tr>
-                            ` : ''}
+                        `).join('')}
+                        <tr class="total-row">
+                            <td>TOTAL PROJECT SETTLEMENT</td>
+                            <td style="text-align: right;">₹${totalAmount.toLocaleString('en-IN')}</td>
+                        </tr>
+                    </tbody>
+                </table>
 
-                            <tr>
-                                <td>
-                                    <strong>Platform Protection Fee</strong><br>
-                                    <small style="color: #64748b;">Secure escrow and support coverage</small>
-                                </td>
-                                <td style="text-align: right;">₹${breakdown.protectionFee.toFixed(2)}</td>
-                            </tr>
-                            <tr class="total-row">
-                                <td style="color: white !important;">Total Amount (Paid)</td>
-                                <td style="text-align: right; color: white !important;">₹${breakdown.totalUserPayable.toFixed(2)}</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-
-                <div style="margin-top: 40px; padding: 20px; background: #E0F7F7; border-radius: 12px; font-size: 13px; color: #005252;">
-                    <strong>Note:</strong> This document serves as proof of payment for services rendered. The total amount has been successfully settled from the tenant's wallet through the SkillBridge secure platform.
+                <div style="margin-top: 40px; padding: 25px; background: #f8fafc; border-radius: 12px; border-left: 4px solid #008080;">
+                    <div style="font-weight: bold; font-size: 13px; color: #008080; margin-bottom: 5px;">TRANS-ID REFERENCE</div>
+                    <div style="font-family: monospace; font-size: 12px; color: #475569; word-break: break-all;">
+                        SECROW_OPERATION_REF: ${job._id}_${Date.now()}
+                    </div>
+                    <p style="font-size: 12px; color: #64748b; margin-top: 15px; line-height: 1.6;">
+                        This document verifies that all dues for project <strong>#${job._id.toString().slice(-8)}</strong> have been settled. Labor fees have been released from escrow, and approved materials have been reimbursed. This is a computer-generated record for tax purposes.
+                    </p>
                 </div>
 
                 <div class="footer">
-                    <p>&copy; ${new Date().getFullYear()} SkillBridge. All rights reserved.</p>
-                    <p>SkillBridge Technologies Pvt Ltd | support@skillbridge.com</p>
+                    <p style="font-weight: bold; color: #475569; margin-bottom: 5px;">SkillBridge Marketplace Technologies Pvt Ltd</p>
+                    <p>Secured by SkillBridge Escrow Protection | GSTIN: Verified Portfolio</p>
+                    <p style="margin-top: 15px;">Support: contact@skillbridge.com | Web: www.skillbridge.com</p>
                 </div>
             </div>
         </body>
         </html>
         `;
 
-        // Generate PDF if requested
         if (req.query.format === 'pdf') {
-            try {
-                const PDFService = require('../../common/services/pdf.service');
-                const pdfBuffer = await PDFService.generatePDF(html);
-
-                res.setHeader('Content-Type', 'application/pdf');
-                res.setHeader('Content-Disposition', `attachment; filename="invoice-SB-${job._id.toString().slice(-6).toUpperCase()}.pdf"`);
-                res.send(pdfBuffer);
-            } catch (pdfError) {
-                // Fallback to HTML if PDF generation fails
-                logger.error(`PDF generation failed: ${pdfError.message}`);
-                res.setHeader('Content-Type', 'text/html');
-                res.setHeader('Content-Disposition', `inline; filename="invoice-${job._id}.html"`);
-                res.send(html);
-            }
-        } else {
-            res.setHeader('Content-Type', 'text/html');
-            res.send(html);
+            const PDFService = require('../../common/services/pdf.service');
+            const pdfBuffer = await PDFService.generatePDF(html);
+            res.setHeader('Content-Type', 'application/pdf');
+            res.setHeader('Content-Disposition', `attachment; filename=Invoice_${job._id.toString().slice(-8)}.pdf`);
+            return res.send(pdfBuffer);
         }
+
+        res.setHeader('Content-Type', 'text/html');
+        res.send(html);
     } catch (e) {
-        res.status(500).send(e.message);
+        logger.error('Invoice Generation Error:', e);
+        res.status(500).send(`Failed to generate invoice: ${e.message}`);
     }
 };
 
@@ -814,6 +819,45 @@ exports.resolveWarranty = async (req, res) => {
         res.json({ success: true, message: 'Warranty claim resolved successfully', data: job });
     } catch (error) {
         logger.error('Resolve Warranty Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * PHASE 4: Contractor Operations
+ */
+
+exports.updateTaskAttendance = async (req, res) => {
+    try {
+        const { id, taskId } = req.params;
+        const job = await JobService.updateTaskAttendance(id, taskId, req.user._id, req.body);
+        res.json({ success: true, message: 'Attendance updated', data: job });
+    } catch (error) {
+        logger.error('Update Task Attendance Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.respondToMaterialRequest = async (req, res) => {
+    try {
+        const { id, requestId } = req.params;
+        const { status, note } = req.body;
+        const job = await JobService.respondToMaterialRequest(id, requestId, req.user._id, status, note);
+        res.json({ success: true, message: `Material request ${status}`, data: job });
+    } catch (error) {
+        logger.error('Respond to Material Request Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.updateTaskStatus = async (req, res) => {
+    try {
+        const { id, taskId } = req.params;
+        const { status, note } = req.body;
+        const job = await JobService.updateTaskStatus(id, taskId, req.user._id, status, note);
+        res.json({ success: true, message: 'Task status updated and partial settlement processed if applicable', data: job });
+    } catch (error) {
+        logger.error('Update Task Status Error:', error);
         res.status(500).json({ success: false, message: error.message });
     }
 };

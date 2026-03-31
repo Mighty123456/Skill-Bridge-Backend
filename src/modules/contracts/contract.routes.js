@@ -14,6 +14,13 @@ router.post(
   contractController.createContract
 );
 
+// Bulk Create Contracts (Contractor only)
+router.post(
+  '/bulk', 
+  authorize('contractor'), 
+  contractController.createBulkContracts
+);
+
 // List all contracts for the authenticated user
 router.get(
   '/', 
@@ -24,6 +31,12 @@ router.get(
 router.get(
   '/:id', 
   contractController.getContractDetails
+);
+
+// Download contract as PDF
+router.get(
+  '/:id/download',
+  contractController.downloadContractPDF
 );
 
 // Worker responds to a contract proposal

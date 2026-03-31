@@ -273,3 +273,201 @@ exports.terminateContract = async (req, res) => {
         });
     }
 };
+
+/**
+ * Bulk Create Contracts (Contractor only)
+ * @route   POST /api/v1/contracts/bulk
+ * @access  Private (Contractor)
+ */
+exports.createBulkContracts = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { 
+            workerIds, 
+            title, 
+            description, 
+            agreementType, 
+            totalValue, 
+            monthlyRate, 
+            paymentFrequency,
+            startDate, 
+            endDate, 
+            termsAndConditions,
+            autoRenew,
+            terminationNoticePeriodDays
+        } = req.body;
+
+        if (!Array.isArray(workerIds) || workerIds.length === 0) {
+            return res.status(400).json({ success: false, message: 'workerIds must be a non-empty array.' });
+        }
+
+        const contractsData = workerIds.map(workerId => ({
+            contractor_id: contractorId,
+            worker_id: workerId,
+            title,
+            description,
+            agreement_type: agreementType,
+            total_value: totalValue,
+            monthly_rate: monthlyRate,
+            payment_frequency: paymentFrequency,
+            start_date: startDate,
+            end_date: endDate,
+            terms_and_conditions: termsAndConditions,
+            auto_renew: autoRenew,
+            termination_notice_period_days: terminationNoticePeriodDays,
+            status: 'pending',
+            timeline: [{
+                status: 'pending',
+                timestamp: new Date(),
+                note: 'Bulk contract offer initiated by contractor.',
+                actor: 'contractor'
+            }]
+        }));
+
+        const contracts = await Contract.insertMany(contractsData);
+
+        // Notify each worker
+        workerIds.forEach(workerId => {
+            notifyHelper.onContractReceived(workerId, title, req.user.name).catch((err) => {
+                logger.warn(`[Contract Bulk] Notification failed for worker ${workerId}: ${err.message}`);
+            });
+        });
+
+        res.status(201).json({
+            success: true,
+            message: `${contracts.length} contract proposals sent successfully`,
+            data: contracts
+        });
+    } catch (error) {
+        logger.error('Create Bulk Contracts Error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Failed to create bulk contract proposals',
+        });
+    }
+};
+
+/**
+ * Download Contract as PDF
+ * @route   GET /api/v1/contracts/:id/download
+ * @access  Private (Contractor/Worker)
+ */
+exports.downloadContractPDF = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user._id;
+        const PDFService = require('../../common/services/pdf.service');
+
+        const contract = await Contract.findById(id)
+            .populate('contractor_id', 'name email phone')
+            .populate('worker_id', 'name email phone');
+
+        if (!contract) {
+            return res.status(404).json({ success: false, message: 'Contract not found' });
+        }
+
+        // Auth check
+        const isAuthorized = 
+            contract.contractor_id._id.toString() === userId.toString() || 
+            contract.worker_id._id.toString() === userId.toString();
+
+        if (!isAuthorized) {
+            return res.status(403).json({ success: false, message: 'Unauthorized to download this contract' });
+        }
+
+        const html = `
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <style>
+                    body { font-family: 'Helvetica', sans-serif; padding: 40px; color: #1e293b; line-height: 1.6; }
+                    .header { border-bottom: 2px solid #008080; padding-bottom: 20px; margin-bottom: 30px; }
+                    .title { font-size: 28px; font-weight: bold; color: #008080; }
+                    .status { font-size: 14px; text-transform: uppercase; color: #64748b; font-weight: bold; }
+                    .section { margin-bottom: 25px; }
+                    .section-title { font-size: 12px; font-weight: bold; color: #008080; text-transform: uppercase; border-bottom: 1px solid #e2e8f0; margin-bottom: 10px; }
+                    .grid { display: flex; justify-content: space-between; margin-bottom: 20px; }
+                    .col { width: 48%; }
+                    .label { font-size: 11px; color: #64748b; font-weight: bold; }
+                    .value { font-size: 14px; font-weight: bold; }
+                    .terms { font-size: 12px; white-space: pre-wrap; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; }
+                    .footer { margin-top: 50px; font-size: 10px; text-align: center; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="header">
+                    <div class="status">Official Agreement Record [${contract.status}]</div>
+                    <div class="title">${contract.title}</div>
+                </div>
+
+                <div class="grid">
+                    <div class="col">
+                        <div class="section-title">Contractor Details</div>
+                        <div class="value">${contract.contractor_id.name}</div>
+                        <div class="label">${contract.contractor_id.email}</div>
+                    </div>
+                    <div class="col">
+                        <div class="section-title">Worker Details</div>
+                        <div class="value">${contract.worker_id.name}</div>
+                        <div class="label">${contract.worker_id.email}</div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Agreement Value</div>
+                    <div class="value">
+                        ${contract.agreement_type === 'retainer' 
+                            ? '₹' + contract.monthly_rate + ' Monthly Retainer' 
+                            : '₹' + contract.total_value + ' Total Project Value'}
+                    </div>
+                    <div class="label">Payment Frequency: ${contract.payment_frequency}</div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Validity Dates</div>
+                    <div class="value">
+                        Starts: ${new Date(contract.start_date).toLocaleDateString()} &nbsp;|&nbsp; 
+                        Ends: ${new Date(contract.end_date).toLocaleDateString()}
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Terms & Conditions</div>
+                    <div class="terms">${contract.terms_and_conditions}</div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Signatures</div>
+                    <div class="grid">
+                        <div class="col">
+                            <div class="label">Contractor Digital Signature</div>
+                            <div class="value">${contract.contractor_id.name}</div>
+                            <div class="label">Time: ${new Date(contract.createdAt).toLocaleString()}</div>
+                        </div>
+                        <div class="col">
+                            <div class="label">Worker Digital Signature</div>
+                            <div class="value">${contract.status === 'active' ? contract.worker_id.name : 'PENDING'}</div>
+                            <div class="label">Time: ${contract.signed_at ? new Date(contract.signed_at).toLocaleString() : 'N/A'}</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="footer">
+                    This is an electronically generated legal document from SkillBridge Marketplace.
+                    Validated under IT Act 2000. Document Hash: ${contract._id}
+                </div>
+            </body>
+            </html>
+        `;
+
+        const pdfBuffer = await PDFService.generatePDF(html);
+
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename=SB_Agreement_${contract._id.toString().slice(-6)}.pdf`);
+        res.status(200).send(pdfBuffer);
+    } catch (error) {
+        logger.error('Download Contract PDF Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to generate PDF' });
+    }
+};
+
