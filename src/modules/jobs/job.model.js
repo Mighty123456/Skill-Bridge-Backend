@@ -179,8 +179,24 @@ const jobSchema = new mongoose.Schema(
             due_date: { type: Date },
             start_date: { type: Date },
             end_date: { type: Date },
+            is_recurring: { type: Boolean, default: false },
+            priority: { 
+                type: String, 
+                enum: ['low', 'medium', 'high'], 
+                default: 'medium' 
+            },
             completion_photos: [{ type: String }],
-            notes: { type: String }
+            notes: { type: String },
+            attendance_metadata: {
+                start_lat: Number,
+                start_lng: Number,
+                clock_in_at: Date,
+                clock_out_at: Date
+            },
+            dispute_metadata: {
+                evidence: String,
+                note: String
+            }
         }],
 
         // Module 4: Execution & Timeline

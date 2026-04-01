@@ -21,6 +21,7 @@ exports.createContract = async (req, res) => {
             startDate, 
             endDate, 
             termsAndConditions,
+            currency,
             autoRenew,
             terminationNoticePeriodDays
         } = req.body;
@@ -43,6 +44,7 @@ exports.createContract = async (req, res) => {
             agreement_type: agreementType,
             total_value: totalValue,
             monthly_rate: monthlyRate,
+            currency: currency || 'INR',
             payment_frequency: paymentFrequency,
             start_date: startDate,
             end_date: endDate,
@@ -293,6 +295,7 @@ exports.createBulkContracts = async (req, res) => {
             startDate, 
             endDate, 
             termsAndConditions,
+            currency,
             autoRenew,
             terminationNoticePeriodDays
         } = req.body;
@@ -309,6 +312,7 @@ exports.createBulkContracts = async (req, res) => {
             agreement_type: agreementType,
             total_value: totalValue,
             monthly_rate: monthlyRate,
+            currency: currency || 'INR',
             payment_frequency: paymentFrequency,
             start_date: startDate,
             end_date: endDate,

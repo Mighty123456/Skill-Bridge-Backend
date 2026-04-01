@@ -348,7 +348,7 @@ exports.getContractorWorkers = async (req, res) => {
 exports.addTaskToJob = async (req, res) => {
     try {
         const contractorId = req.user._id;
-        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date, start_date, end_date } = req.body;
+        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date, start_date, end_date, priority, is_recurring } = req.body;
 
         const job = await Job.findOne({ _id: jobId, user_id: contractorId });
         if (!job) return res.status(404).json({ success: false, message: 'Job not found or unauthorized' });
@@ -373,7 +373,9 @@ exports.addTaskToJob = async (req, res) => {
             assigned_worker_name,
             due_date: new Date(due_date || eDate),
             start_date: sDate ? new Date(sDate) : undefined,
-            end_date: eDate ? new Date(eDate) : undefined
+            end_date: eDate ? new Date(eDate) : undefined,
+            priority: priority || 'medium',
+            is_recurring: is_recurring || false
         };
 
         job.tasks.push(newTask);
@@ -447,6 +449,8 @@ exports.updateTask = async (req, res) => {
         if (updateData.due_date) task.due_date = new Date(updateData.due_date);
         if (updateData.start_date) task.start_date = new Date(updateData.start_date);
         if (updateData.end_date) task.end_date = new Date(updateData.end_date);
+        if (updateData.priority) task.priority = updateData.priority;
+        if (updateData.is_recurring !== undefined) task.is_recurring = updateData.is_recurring;
 
         // Phase 4 Constraint: Log schedule updates
         JobService.appendTimeline(
