@@ -2,6 +2,7 @@ const Rating = require('./rating.model');
 const Worker = require('../workers/worker.model');
 const Badge = require('../workers/badge.model');
 const Job = require('../jobs/job.model');
+const Payment = require('../payments/payment.model');
 const logger = require('../../config/logger');
 
 class RatingService {
@@ -28,6 +29,29 @@ class RatingService {
 
         if (!workerProfile) {
             throw new Error('Worker not found');
+        }
+
+        const workerUserId = workerProfile.user._id || workerProfile.user;
+
+        // Rule: Payment must be released before rating (Step 11.5)
+        const escrow = await Payment.findOne({
+            job: jobId,
+            worker: workerUserId,
+            type: 'escrow'
+        });
+
+        // If an escrow exists for this worker on this project, it must be released.
+        if (escrow && escrow.status !== 'released') {
+            throw new Error('Payment has not been released yet. You must finalize and release funds from escrow before rating this professional.');
+        }
+
+        // Project Status Guard
+        if (job.status !== 'completed' && job.status !== 'reviewing') {
+             // In contractor projects, rating is usually at completion.
+             // But let's allow rating if the specific payment is released (Rule 11.5 take precedence).
+             if (!escrow || escrow.status !== 'released') {
+                 throw new Error('Ratings can only be submitted after the project is completed or payment is finalized.');
+             }
         }
 
         // Create Rating document

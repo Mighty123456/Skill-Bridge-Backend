@@ -9,6 +9,8 @@ const logger = require('../../config/logger');
 const PaymentService = require('../payments/payment.service');
 const EmailService = require('../../common/services/email.service');
 const EtaTracking = require('../workers/etaTracking.model');
+const Contract = require('../contracts/contract.model');
+const Payment = require('../payments/payment.model');
 
 
 // === PHASE 3: Strict Status Sequence ===
@@ -543,6 +545,18 @@ exports.startJob = async (jobId, workerId, otp, isContractorRequest = false) => 
     }
 
     const isContractorProject = job.is_contractor_project || isContractorRequest;
+
+    // Rule 11.3: Contract must be accepted before work starts
+    if (isContractorProject) {
+        const contract = await Contract.findOne({
+            worker_id: workerId,
+            contractor_id: job.user_id,
+            status: 'active'
+        });
+        if (!contract) {
+            throw new Error('Contract access denied: An active signed contract is required before starting this professional work.');
+        }
+    }
 
     if (!isContractorProject) {
         if (!isValidTransition(job.status, 'in_progress')) {
@@ -1555,6 +1569,18 @@ exports.updateTaskAttendance = async (jobId, taskId, userId, attendanceData) => 
     const isContractor = job.user_id.toString() === userId.toString();
 
     if (!isWorker && !isContractor) throw new Error('Unauthorized');
+
+    // Rule 11.3: Contract must be accepted before work starts (Clock-In)
+    if (attendanceData.clock_in_at) {
+        const contract = await Contract.findOne({
+            worker_id: task.assigned_worker_id || userId,
+            contractor_id: job.user_id,
+            status: 'active'
+        });
+        if (!contract) {
+            throw new Error('Attendance denied: Professional must have an active signed contract for this project to log work sessions.');
+        }
+    }
 
     if (attendanceData.clock_in_at && job.location?.coordinates) {
         const { lat, lng } = attendanceData;

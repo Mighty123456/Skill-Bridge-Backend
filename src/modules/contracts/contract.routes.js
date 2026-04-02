@@ -52,4 +52,24 @@ router.patch(
   contractController.terminateContract
 );
 
+// Activate an accepted agreement (Contractor only)
+router.patch(
+  '/:id/activate',
+  authorize('contractor'),
+  contractController.activateContract
+);
+
+// Extend an agreement (Contractor only)
+router.patch(
+  '/:id/extend',
+  authorize('contractor'),
+  contractController.extendContract
+);
+
+// Raise a dispute on an agreement
+router.post(
+  '/:id/dispute',
+  contractController.raiseContractDispute
+);
+
 module.exports = router;

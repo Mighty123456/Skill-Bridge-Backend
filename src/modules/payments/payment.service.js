@@ -343,6 +343,16 @@ exports.releasePayment = async (jobId) => {
         if (!job) throw new Error('Job not found');
         if (job.payment_released) throw new Error('Payment already released');
 
+        // Rule 11.4: Work must be completed before payment
+        const validFinalStates = ['reviewing', 'cooling_window', 'completed'];
+        if (!validFinalStates.includes(job.status)) {
+             throw new Error(`Payment release restricted: Current project state (${job.status}) does not permit final settlement. Work must be completed first.`);
+        }
+
+        if (job.dispute?.is_disputed) {
+             throw new Error('Payment release suspended: This project is currently under formal dispute. Resolve the dispute via admin desk to proceed.');
+        }
+
         // 2. Find ALL Escrow Payments
         const escrowPayments = await Payment.find({
             job: jobId,

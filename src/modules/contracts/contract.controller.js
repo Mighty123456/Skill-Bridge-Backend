@@ -26,50 +26,102 @@ exports.createContract = async (req, res) => {
             terminationNoticePeriodDays
         } = req.body;
 
-        // Explicit validation for required fields
-        if (!workerId) return res.status(400).json({ success: false, message: 'Worker ID is required.' });
-        if (!title) return res.status(400).json({ success: false, message: 'Contract title is required.' });
-        if (!startDate) return res.status(400).json({ success: false, message: 'Start date is required.' });
-        if (!endDate) return res.status(400).json({ success: false, message: 'End date is required.' });
-        if (!termsAndConditions) return res.status(400).json({ success: false, message: 'Terms and conditions are required.' });
-        if (agreementType === 'fixed' && !totalValue) return res.status(400).json({ success: false, message: 'Total value is required for fixed agreements.' });
-        if (agreementType === 'retainer' && !monthlyRate) return res.status(400).json({ success: false, message: 'Monthly rate is required for retainer agreements.' });
-
-        // Create the contract
-        const contract = await Contract.create({
+        // Rule 4.4: One contract per worker
+        const existing = await Contract.findOne({
             contractor_id: contractorId,
             worker_id: workerId,
-            title,
-            description,
-            agreement_type: agreementType,
-            total_value: totalValue,
-            monthly_rate: monthlyRate,
-            currency: currency || 'INR',
-            payment_frequency: paymentFrequency,
-            start_date: startDate,
-            end_date: endDate,
-            terms_and_conditions: termsAndConditions,
-            auto_renew: autoRenew,
-            termination_notice_period_days: terminationNoticePeriodDays,
-            status: 'pending',
-            timeline: [{
+            status: { $in: ['pending', 'active'] }
+        });
+        if (existing) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'A pending or active contract already exists for this professional. Terminate the current one before proposing another.' 
+            });
+        }
+
+        // Rule 4.5: Payment must be backed by wallet balance
+        const Wallet = require('../wallet/wallet.model');
+        const wallet = await Wallet.findOne({ user: contractorId });
+        const costToReserve = agreementType === 'fixed' ? Number(totalValue) : Number(monthlyRate);
+
+        if (!wallet || wallet.balance < costToReserve) {
+            return res.status(402).json({ 
+                success: false, 
+                message: `Insufficient wallet balance to back this contract commitment. Required: ₹${costToReserve}. Your balance: ₹${wallet ? wallet.balance : 0}. Please top up your wallet.` 
+            });
+        }
+
+        // Rule 4.4: Conflict detection for proposed dates
+        const { isWorkerAvailable } = require('../workers/worker.controller');
+        const available = await isWorkerAvailable(workerId, startDate, endDate);
+        if (!available) {
+            return res.status(403).json({ 
+                success: false, 
+                message: 'Scheduling conflict detected: This professional is already committed to other tasks during your proposed contract dates.' 
+            });
+        }
+
+        // Use a transaction for atomic Contract Creation + Escrow Locking
+        const mongoose = require('mongoose');
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            // Create the contract
+            const contract = new Contract({
+                contractor_id: contractorId,
+                worker_id: workerId,
+                title,
+                description,
+                agreement_type: agreementType,
+                total_value: totalValue,
+                monthly_rate: monthlyRate,
+                currency: currency || 'INR',
+                payment_frequency: paymentFrequency,
+                start_date: startDate,
+                end_date: endDate,
+                terms_and_conditions: termsAndConditions,
+                auto_renew: autoRenew,
+                termination_notice_period_days: terminationNoticePeriodDays,
                 status: 'pending',
-                timestamp: new Date(),
-                note: 'Contract offer initiated by contractor.',
-                actor: 'contractor'
-            }]
-        });
+                timeline: [{
+                    status: 'pending',
+                    timestamp: new Date(),
+                    note: 'Contract offer initiated. Funds secured in escrow.',
+                    actor: 'contractor'
+                }]
+            });
 
-        // Notify worker (fire-and-forget – notification failure must NOT fail the whole request)
-        notifyHelper.onContractReceived(workerId, title, req.user.name).catch((err) => {
-            logger.warn(`[Contract] Notification failed for worker ${workerId}: ${err.message}`);
-        });
+            await contract.save({ session });
 
-        res.status(201).json({
-            success: true,
-            message: 'Contract proposal sent successfully',
-            data: contract
-        });
+            // Rule 6.3: Contract created → funds locked (escrow)
+            const WalletService = require('../wallet/wallet.service');
+            await WalletService.lockEscrow(
+                contractorId, 
+                null, // Project ID is null for generic contracts or use contract._id
+                workerId, 
+                costToReserve, 
+                `Escrow for contract: ${title}`
+            );
+
+            await session.commitTransaction();
+            
+            // Notify worker
+            notifyHelper.onContractReceived(workerId, title, req.user.name).catch((err) => {
+                logger.warn(`[Contract] Notification failed for worker ${workerId}: ${err.message}`);
+            });
+
+            res.status(201).json({
+                success: true,
+                message: 'Contract proposal sent and funds secured in escrow.',
+                data: contract
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
     } catch (error) {
         logger.error('Create Contract Error:', error);
         res.status(500).json({
@@ -104,29 +156,62 @@ exports.respondToContract = async (req, res) => {
             return res.status(400).json({ success: false, message: `Contract is already ${contract.status}` });
         }
 
-        contract.status = status;
-        if (status === 'active') {
-            contract.signed_at = new Date();
-            contract.worker_signature = signature;
+        // Start Transaction for atomic status update + escrow reversal
+        const mongoose = require('mongoose');
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            if (status === 'accepted') {
+                contract.status = 'accepted';
+                contract.signed_at = new Date();
+                contract.worker_signature = signature;
+            } else {
+                contract.status = 'rejected';
+                
+                // Rule 6.3: If rejected, release locked funds back to contractor wallet
+                const Wallet = require('../wallet/wallet.model');
+                const wallet = await Wallet.findOne({ user: contract.contractor_id }).session(session);
+                if (wallet) {
+                    const costToReturn = contract.agreement_type === 'fixed' ? Number(contract.total_value) : Number(contract.monthly_rate);
+                    wallet.escrowBalance = Math.max(0, wallet.escrowBalance - costToReturn);
+                    wallet.balance += costToReturn;
+                    await wallet.save({ session });
+
+                    // Log Reversal
+                    contract.timeline.push({
+                        status: 'rejected',
+                        timestamp: new Date(),
+                        note: `Proposal rejected. ₹${costToReturn} released back to wallet.`,
+                        actor: 'system'
+                    });
+                }
+            }
+
+            contract.timeline.push({
+                status: contract.status,
+                timestamp: new Date(),
+                note: note || `Contract ${contract.status} by worker.`,
+                actor: 'worker'
+            });
+
+            await contract.save({ session });
+            await session.commitTransaction();
+
+            // Notify contractor
+            await notifyHelper.onContractResponded(contract.contractor_id, contract.title, req.user.name, contract.status);
+
+            res.status(200).json({
+                success: true,
+                message: `Contract ${contract.status} successfully`,
+                data: contract
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
         }
-
-        contract.timeline.push({
-            status: status,
-            timestamp: new Date(),
-            note: note || `Worker ${status} the contract proposal.`,
-            actor: 'worker'
-        });
-
-        await contract.save();
-
-        // Notify contractor
-        await notifyHelper.onContractResponded(contract.contractor_id, contract.title, req.user.name, status);
-
-        res.status(200).json({
-            success: true,
-            message: `Contract ${status} successfully`,
-            data: contract
-        });
     } catch (error) {
         logger.error('Respond to Contract Error:', error);
         res.status(500).json({
@@ -277,6 +362,113 @@ exports.terminateContract = async (req, res) => {
 };
 
 /**
+ * Activate contract (Contractor only, after worker accepted)
+ * @route   PATCH /api/v1/contracts/:id/activate
+ */
+exports.activateContract = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const contractorId = req.user._id;
+
+        const contract = await Contract.findOne({ _id: id, contractor_id: contractorId });
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        if (contract.status !== 'accepted') {
+            return res.status(400).json({ success: false, message: `Cannot activate contract in ${contract.status} status.` });
+        }
+
+        contract.status = 'active';
+        contract.timeline.push({
+            status: 'active',
+            timestamp: new Date(),
+            note: 'Contract officially activated. Mobilization started.',
+            actor: 'contractor'
+        });
+
+        await contract.save();
+        await notifyHelper.onContractStatusChanged(contract.worker_id, contract.title, 'active');
+
+        res.status(200).json({ success: true, message: 'Contract activated', data: contract });
+    } catch (error) {
+        logger.error('Activate Contract Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to activate contract' });
+    }
+};
+
+/**
+ * Extend contract (Contractor only)
+ * @route   PATCH /api/v1/contracts/:id/extend
+ */
+exports.extendContract = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { newEndDate, reason } = req.body;
+        const contractorId = req.user._id;
+
+        if (!newEndDate) return res.status(400).json({ success: false, message: 'New end date is required' });
+
+        const contract = await Contract.findOne({ _id: id, contractor_id: contractorId });
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        const oldDate = contract.end_date;
+        contract.end_date = new Date(newEndDate);
+        contract.timeline.push({
+            status: contract.status,
+            timestamp: new Date(),
+            note: `Contract extended from ${oldDate.toDateString()} to ${contract.end_date.toDateString()}. Reason: ${reason || 'Project scope extension.'}`,
+            actor: 'contractor'
+        });
+
+        await contract.save();
+        await notifyHelper.onContractExtended(contract.worker_id, contract.title, newEndDate);
+
+        res.status(200).json({ success: true, message: 'Contract extended successfully', data: contract });
+    } catch (error) {
+        logger.error('Extend Contract Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to extend contract' });
+    }
+};
+
+/**
+ * Raise Dispute on Contract
+ * @route   POST /api/v1/contracts/:id/dispute
+ */
+exports.raiseContractDispute = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        const isAuthorized = 
+            contract.contractor_id.toString() === userId.toString() || 
+            contract.worker_id.toString() === userId.toString();
+
+        if (!isAuthorized) return res.status(403).json({ success: false, message: 'Unauthorized' });
+
+        contract.status = 'disputed';
+        contract.timeline.push({
+            status: 'disputed',
+            timestamp: new Date(),
+            note: `Formal dispute raised: ${reason}`,
+            actor: req.user.role
+        });
+
+        await contract.save();
+        
+        const recipientId = contract.contractor_id.toString() === userId.toString() ? contract.worker_id : contract.contractor_id;
+        await notifyHelper.onDisputeRaised(recipientId, contract.title, reason);
+
+        res.status(200).json({ success: true, message: 'Dispute raised successfully', data: contract });
+    } catch (error) {
+        logger.error('Contract Dispute Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to raise dispute' });
+    }
+};
+
+/**
  * Bulk Create Contracts (Contractor only)
  * @route   POST /api/v1/contracts/bulk
  * @access  Private (Contractor)
@@ -286,11 +478,12 @@ exports.createBulkContracts = async (req, res) => {
         const contractorId = req.user._id;
         const { 
             workerIds, 
+            workerConfigs, // Optional: array of { workerId, totalValue, monthlyRate, title }
             title, 
             description, 
             agreementType, 
-            totalValue, 
-            monthlyRate, 
+            totalValue: globalTotalValue, 
+            monthlyRate: globalMonthlyRate, 
             paymentFrequency,
             startDate, 
             endDate, 
@@ -300,48 +493,93 @@ exports.createBulkContracts = async (req, res) => {
             terminationNoticePeriodDays
         } = req.body;
 
-        if (!Array.isArray(workerIds) || workerIds.length === 0) {
-            return res.status(400).json({ success: false, message: 'workerIds must be a non-empty array.' });
+        const workersToHire = workerConfigs || (workerIds ? workerIds.map(id => ({ workerId: id })) : []);
+
+        if (workersToHire.length === 0) {
+            return res.status(400).json({ success: false, message: 'workerIds or workerConfigs must be a non-empty array.' });
         }
 
-        const contractsData = workerIds.map(workerId => ({
-            contractor_id: contractorId,
-            worker_id: workerId,
-            title,
-            description,
-            agreement_type: agreementType,
-            total_value: totalValue,
-            monthly_rate: monthlyRate,
-            currency: currency || 'INR',
-            payment_frequency: paymentFrequency,
-            start_date: startDate,
-            end_date: endDate,
-            terms_and_conditions: termsAndConditions,
-            auto_renew: autoRenew,
-            termination_notice_period_days: terminationNoticePeriodDays,
-            status: 'pending',
-            timeline: [{
-                status: 'pending',
-                timestamp: new Date(),
-                note: 'Bulk contract offer initiated by contractor.',
-                actor: 'contractor'
-            }]
-        }));
+        // Rule 4.5 & 9.3: Total Batch Cost Calculation (supporting individual overrides)
+        let totalBatchCost = 0;
+        workersToHire.forEach(w => {
+            const cost = agreementType === 'fixed' 
+                ? (w.totalValue || globalTotalValue) 
+                : (w.monthlyRate || globalMonthlyRate);
+            totalBatchCost += Number(cost || 0);
+        });
 
-        const contracts = await Contract.insertMany(contractsData);
-
-        // Notify each worker
-        workerIds.forEach(workerId => {
-            notifyHelper.onContractReceived(workerId, title, req.user.name).catch((err) => {
-                logger.warn(`[Contract Bulk] Notification failed for worker ${workerId}: ${err.message}`);
+        const Wallet = require('../wallet/wallet.model');
+        const wallet = await Wallet.findOne({ user: contractorId });
+        
+        if (!wallet || wallet.balance < totalBatchCost) {
+            return res.status(402).json({ 
+                success: false, 
+                message: `Insufficient wallet balance to cover this bulk contract batch. Required: ₹${totalBatchCost}. Available: ₹${wallet ? wallet.balance : 0}.` 
             });
-        });
+        }
 
-        res.status(201).json({
-            success: true,
-            message: `${contracts.length} contract proposals sent successfully`,
-            data: contracts
-        });
+        // Rule 6.3: Contract created → funds locked (escrow)
+        const mongoose = require('mongoose');
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            const contractsData = workersToHire.map(w => ({
+                contractor_id: contractorId,
+                worker_id: w.workerId,
+                title: w.title || title,
+                description,
+                agreement_type: agreementType,
+                total_value: agreementType === 'fixed' ? (w.totalValue || globalTotalValue) : undefined,
+                monthly_rate: agreementType === 'monthly' ? (w.monthlyRate || globalMonthlyRate) : undefined,
+                currency: currency || 'INR',
+                payment_frequency: paymentFrequency,
+                start_date: startDate,
+                end_date: endDate,
+                terms_and_conditions: termsAndConditions,
+                auto_renew: autoRenew,
+                termination_notice_period_days: terminationNoticePeriodDays,
+                status: 'pending',
+                timeline: [{
+                    status: 'pending',
+                    timestamp: new Date(),
+                    note: 'Bulk recruitment initiated via professional template.',
+                    actor: 'contractor'
+                }]
+            }));
+
+            const contracts = await Contract.insertMany(contractsData, { session });
+
+            // Perform Bulk Escrow Lock
+            const WalletService = require('../wallet/wallet.service');
+            await WalletService.lockEscrow(
+                contractorId, 
+                null, 
+                null, // Multi-worker batch escrow
+                totalBatchCost, 
+                `Bulk Recruitment: ${title} (${contracts.length} professionals)`
+            );
+
+            await session.commitTransaction();
+
+            // Notify each worker
+            workersToHire.forEach(w => {
+                notifyHelper.onContractReceived(w.workerId, w.title || title, req.user.name).catch((err) => {
+                    logger.warn(`[Contract Bulk] Notification failed for worker ${w.workerId}: ${err.message}`);
+                });
+            });
+
+            res.status(201).json({
+                success: true,
+                message: `${contracts.length} personalized professional agreements sent and batch funds secured in escrow.`,
+                data: contracts
+            });
+        } catch (error) {
+            await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
     } catch (error) {
         logger.error('Create Bulk Contracts Error:', error);
         res.status(500).json({

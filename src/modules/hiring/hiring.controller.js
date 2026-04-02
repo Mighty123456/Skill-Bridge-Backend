@@ -14,19 +14,31 @@ const logger = require('../../config/logger');
  */
 exports.createHireRequest = async (req, res) => {
     try {
-        const { workerId, workerIds, projectId, proposedRate, message } = req.body;
+        const { workerId, workerIds, projectId, proposedRate, message, workerConfigs } = req.body;
         const contractorId = req.user._id;
 
         // Determine targets to support both bulk and single requests
-        let targetList = [];
-        if (workerIds && Array.isArray(workerIds)) {
-             targetList = workerIds;
+        // workerConfigs: Array of { workerId, proposedRate, message }
+        let targetConfigs = [];
+
+        if (workerConfigs && Array.isArray(workerConfigs)) {
+            targetConfigs = workerConfigs;
+        } else if (workerIds && Array.isArray(workerIds)) {
+            targetConfigs = workerIds.map(id => ({ 
+                workerId: id, 
+                proposedRate: proposedRate, 
+                message: message 
+            }));
         } else if (workerId) {
-             targetList = [workerId];
+            targetConfigs = [{ 
+                workerId: workerId, 
+                proposedRate: proposedRate, 
+                message: message 
+            }];
         }
 
-        if (targetList.length === 0) {
-             return res.status(400).json({ success: false, message: 'Please provide at least one worker ID.' });
+        if (targetConfigs.length === 0) {
+            return res.status(400).json({ success: false, message: 'Please provide at least one worker or configuration.' });
         }
 
         // Verification Constraint: Unverified contractors cannot hire workers
@@ -35,6 +47,18 @@ exports.createHireRequest = async (req, res) => {
             return res.status(403).json({ 
                 success: false, 
                 message: 'Your account must be verified by SkillBridge admin before you can hire workers. Please complete your profile and verification fields.' 
+            });
+        }
+
+        // Rule 4.5: Payment must be backed by wallet balance
+        const Wallet = require('../wallet/wallet.model');
+        const wallet = await Wallet.findOne({ user: contractorId });
+        const totalProposedCost = targetConfigs.reduce((sum, config) => sum + (Number(config.proposedRate) || 0), 0);
+        
+        if (!wallet || wallet.balance < totalProposedCost) {
+            return res.status(402).json({ 
+                success: false, 
+                message: `Insufficient wallet balance. Total estimated liability for this request: ₹${totalProposedCost}. Your current balance: ₹${wallet ? wallet.balance : 0}. Please top up your wallet to proceed.` 
             });
         }
 
@@ -58,11 +82,15 @@ exports.createHireRequest = async (req, res) => {
         let createdRequests = [];
         let errors = [];
 
-        for (const currentWorkerId of targetList) {
+        for (const config of targetConfigs) {
+            const currentWorkerId = config.workerId;
+            const currentRate = config.proposedRate || proposedRate;
+            const currentMessage = config.message || message;
+
              try {
                 // Anti-Fraud: Prevent self-hiring
                 if (currentWorkerId.toString() === contractorId.toString()) {
-                    errors.push({ workerId: currentWorkerId, reason: 'Self-hiring is strictly prohibited.' });
+                    errors.push({ workerId: currentWorkerId, reason: 'Self-hiring is prohibited.' });
                     continue;
                 }
 
@@ -81,6 +109,21 @@ exports.createHireRequest = async (req, res) => {
 
                 if (!workerUser || !workerProfile) {
                     errors.push({ workerId: currentWorkerId, reason: 'Worker not found' });
+                    continue;
+                }
+
+                // Constraint 3.3: Worker must exist in pool before hiring (Contractor Rule)
+                const WorkforcePool = require('../contractors/workforce-pool.model');
+                const isInPool = await WorkforcePool.findOne({ 
+                    contractor: contractorId, 
+                    worker: workerUser._id 
+                });
+
+                if (!isInPool) {
+                    errors.push({ 
+                        workerId: currentWorkerId, 
+                        reason: `Pool Exclusion: ${workerUser.name} must be added to your workforce pool before they can be officially hired for a project.` 
+                    });
                     continue;
                 }
 
@@ -112,13 +155,13 @@ exports.createHireRequest = async (req, res) => {
                     contractor: contractorId,
                     worker: targetWorkerIdObj,
                     project: projectId,
-                    proposedRate,
-                    message,
+                    proposedRate: currentRate,
+                    message: currentMessage,
                     status: 'pending'
                 });
 
-                // 5. Send Notification (fire-and-forget – must NOT block the response)
-                notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, proposedRate).catch((err) => {
+                // 5. Send Notification
+                notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, currentRate).catch((err) => {
                     logger.warn(`[Hiring] Notification failed for worker ${currentWorkerId}: ${err.message}`);
                 });
 

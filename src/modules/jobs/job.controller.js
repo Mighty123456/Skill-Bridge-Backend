@@ -143,6 +143,11 @@ exports.getJob = async (req, res) => {
             }
         }
 
+        // Rule 10.1: Project Budget is internal only (hide from workers)
+        if (req.user && req.user.role === 'worker') {
+            job.budget = undefined;
+        }
+
         res.json({
             success: true,
             data: {

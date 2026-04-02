@@ -61,20 +61,29 @@ exports.getContractorProjects = async (req, res) => {
 const isWorkerAvailable = async (workerId, startDate, endDate, excludeTaskId = null) => {
     if (!workerId) return true;
     
-    // Normalize date to start and end of day in UTC to ensure consistency
-    const sDate = new Date(startDate);
-    const eDate = new Date(endDate || startDate);
+    // Use precise times if provided, otherwise assume full day (UTC)
+    const queryStart = new Date(startDate);
+    const queryEnd = new Date(endDate || startDate);
+
+    // If both are exact same (e.g. 12:00 to 12:00), treat as full day
+    const isFullDay = queryStart.getTime() === queryEnd.getTime();
     
-    const queryStart = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth(), sDate.getUTCDate(), 0, 0, 0, 0));
-    const queryEnd = new Date(Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 23, 59, 59, 999));
+    let dbStart, dbEnd;
+    if (isFullDay) {
+        dbStart = new Date(Date.UTC(queryStart.getUTCFullYear(), queryStart.getUTCMonth(), queryStart.getUTCDate(), 0, 0, 0, 0));
+        dbEnd = new Date(Date.UTC(queryStart.getUTCFullYear(), queryStart.getUTCMonth(), queryStart.getUTCDate(), 23, 59, 59, 999));
+    } else {
+        dbStart = queryStart;
+        dbEnd = queryEnd;
+    }
 
     const existingJobsWithConflicts = await Job.find({
         "tasks.assigned_worker_id": workerId,
         $or: [
-            { "tasks.due_date": { $gte: queryStart, $lte: queryEnd } },
+            { "tasks.due_date": { $gte: dbStart, $lte: dbEnd } },
             { 
-               "tasks.start_date": { $lte: queryEnd },
-               "tasks.end_date": { $gte: queryStart }
+               "tasks.start_date": { $lte: dbEnd },
+               "tasks.end_date": { $gte: dbStart }
             }
         ]
     });
@@ -88,12 +97,12 @@ const isWorkerAvailable = async (workerId, startDate, endDate, excludeTaskId = n
                     continue;
                 }
 
-                // Check overlap logic
+                // Check overlap logic: (TaskStart < QueryEnd && TaskEnd > QueryStart)
                 const tStart = task.start_date || task.due_date;
                 const tEnd = task.end_date || task.due_date;
 
                 if (tStart && tEnd) {
-                    if (tStart <= queryEnd && tEnd >= queryStart) {
+                    if (tStart < dbEnd && tEnd > dbStart) {
                         return false;
                     }
                 }
@@ -239,32 +248,78 @@ exports.getDashboardStats = async (req, res) => {
     try {
         const contractorId = req.user._id;
 
-        // 1. Calculate Active Projects
+        // 1. Calculate Project Counts
         const activeProjectStatuses = [
             'open', 'assigned', 'eta_confirmed', 'on_the_way', 
             'arrived', 'diagnosis_mode', 'diagnosed', 
             'material_pending_approval', 'in_progress', 'reviewing'
         ];
-        
         const activeProjectsCount = await Job.countDocuments({
             user_id: contractorId,
             status: { $in: activeProjectStatuses }
         });
-
-        // 2. Calculate Completed Projects
         const completedProjectsCount = await Job.countDocuments({
             user_id: contractorId,
             status: 'completed'
         });
 
-        // 3. Calculate Total Workers Hired
+        // 2. today's Workers Count (Assigned to tasks today)
+        const today = new Date();
+        const sStart = new Date(today.setHours(0,0,0,0));
+        const sEnd = new Date(today.setHours(23,59,59,999));
+
+        const todayTasks = await Job.aggregate([
+            { $match: { user_id: contractorId } },
+            { $unwind: "$tasks" },
+            { 
+                $match: { 
+                    "tasks.start_date": { $lte: sEnd },
+                    "tasks.end_date": { $gte: sStart }
+                } 
+            },
+            { $group: { _id: "$tasks.assigned_worker_id" } }
+        ]);
+        const todayWorkersCount = todayTasks.length;
+
+        // 3. Operational Alerts
+        const alerts = [];
+        
+        // Alert: Pending Material Requests
+        const pendingMaterialsCount = await Job.countDocuments({
+            user_id: contractorId,
+            status: 'material_pending_approval'
+        });
+        if (pendingMaterialsCount > 0) {
+            alerts.push({ type: 'warning', message: `${pendingMaterialsCount} project(s) awaiting material approval.` });
+        }
+
+        // Alert: Pending Contracts (Sent but not accepted)
+        const Contract = require('../contracts/contract.model');
+        const pendingContractsCount = await Contract.countDocuments({
+            contractor_id: contractorId,
+            status: 'pending'
+        });
+        if (pendingContractsCount > 0) {
+            alerts.push({ type: 'info', message: `${pendingContractsCount} professional contract(s) awaiting worker signature.` });
+        }
+
+        // 4. Monthly Spend (Rule 10.3)
+        const monthStart = new Date();
+        monthStart.setDate(1);
+        monthStart.setHours(0,0,0,0);
+        const Payment = require('../payments/payment.model');
+        const monthSpend = await Payment.aggregate([
+            { $match: { user: contractorId, type: 'payout', status: 'completed', createdAt: { $gte: monthStart } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+
         const uniqueWorkers = await Job.distinct('selected_worker_id', {
             user_id: contractorId,
             selected_worker_id: { $ne: null }
         });
         const totalWorkersCount = uniqueWorkers.length;
 
-        // 4. Calculate Total Earnings & Pending from Wallet
+        // 5. Build final response
         let wallet = await Wallet.findOne({ user: contractorId });
         
         res.status(200).json({
@@ -272,9 +327,12 @@ exports.getDashboardStats = async (req, res) => {
             data: {
                 activeProjects: activeProjectsCount || 0,
                 completedProjects: completedProjectsCount || 0,
+                todayWorkers: todayWorkersCount || 0,
                 totalWorkers: totalWorkersCount || 0,
                 totalEarnings: wallet ? wallet.balance : 0,
-                pendingPayments: wallet ? wallet.pendingBalance : 0
+                pendingPayments: wallet ? wallet.pendingBalance : 0,
+                monthlySpend: monthSpend[0]?.total || 0,
+                alerts: alerts
             }
         });
     } catch (error) {
@@ -353,6 +411,21 @@ exports.addTaskToJob = async (req, res) => {
         const job = await Job.findOne({ _id: jobId, user_id: contractorId });
         if (!job) return res.status(404).json({ success: false, message: 'Job not found or unauthorized' });
 
+        // Rule 11.2: Contract must exist before scheduling
+        const Contract = require('../contracts/contract.model');
+        const contract = await Contract.findOne({
+            contractor_id: contractorId,
+            worker_id: assigned_worker_id,
+            status: 'active'
+        });
+
+        if (!contract) {
+            return res.status(403).json({ 
+                success: false, 
+                message: `Scheduling restricted: This professional must have an ACTIVE signed contract for your project before they can be assigned to tasks. Please hire them first and wait for their acceptance.` 
+            });
+        }
+
         const sDate = start_date || due_date;
         const eDate = end_date || due_date;
 
@@ -424,6 +497,23 @@ exports.updateTask = async (req, res) => {
 
         const task = job.tasks.id(taskId);
         if (!task) return res.status(404).json({ success: false, message: 'Task not found' });
+
+        // Rule 11.2: Contract must exist before scheduling (Check on update if worker changes)
+        if (updateData.assigned_worker_id) {
+            const Contract = require('../contracts/contract.model');
+            const contract = await Contract.findOne({
+                contractor_id: contractorId,
+                worker_id: updateData.assigned_worker_id,
+                status: 'active'
+            });
+
+            if (!contract) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: "Assignment restricted: This professional must have an ACTIVE signed contract for your project before they can be assigned to tasks." 
+                });
+            }
+        }
 
         // Phase 4 Constraint: Check availability if date or worker changes
         const newWorkerId = updateData.assigned_worker_id || task.assigned_worker_id;
@@ -532,22 +622,22 @@ exports.checkAvailability = async (req, res) => {
         const { workerId, date } = req.params;
         const endDateStr = req.query.endDate || date;
         
-        // Phase 4 Constraint: Use UTC for consistency
-        const sDate = new Date(date);
-        const eDate = new Date(endDateStr);
+        // Precise shift windows if provided
+        const startTimeStr = req.query.startTime; 
+        const endTimeStr = req.query.endTime;
 
-        const startOfDay = new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth(), sDate.getUTCDate(), 0, 0, 0, 0));
-        const endOfDay = new Date(Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 23, 59, 59, 999));
+        const windowStart = startTimeStr ? new Date(startTimeStr) : new Date(Date.UTC(sDate.getUTCFullYear(), sDate.getUTCMonth(), sDate.getUTCDate(), 0, 0, 0, 0));
+        const windowEnd = endTimeStr ? new Date(endTimeStr) : new Date(Date.UTC(eDate.getUTCFullYear(), eDate.getUTCMonth(), eDate.getUTCDate(), 23, 59, 59, 999));
 
         const existingTasks = await Job.find({
             tasks: {
                 $elemMatch: {
                     assigned_worker_id: workerId,
                     $or: [
-                        { due_date: { $gte: startOfDay, $lte: endOfDay } },
+                        { due_date: { $gte: windowStart, $lte: windowEnd } },
                         { 
-                           start_date: { $lte: endOfDay },
-                           end_date: { $gte: startOfDay }
+                           start_date: { $lte: windowEnd },
+                           end_date: { $gte: windowStart }
                         }
                     ]
                 }
@@ -560,7 +650,9 @@ exports.checkAvailability = async (req, res) => {
                 if (task.assigned_worker_id?.toString() === workerId) {
                     const tStart = task.start_date || task.due_date;
                     const tEnd = task.end_date || task.due_date;
-                    if (tStart && tEnd && tStart <= endOfDay && tEnd >= startOfDay) {
+
+                    // Precision Overlap check: (TaskStart < WindowEnd && TaskEnd > WindowStart)
+                    if (tStart && tEnd && tStart < windowEnd && tEnd > windowStart) {
                         dayTasks.push({
                             jobId: job._id,
                             taskId: task._id,
@@ -743,6 +835,134 @@ exports.getPool = async (req, res) => {
     } catch (error) {
         logger.error('Get Pool Error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch workforce pool' });
+    }
+};
+
+/**
+ * Generate Contractor Report (Preview/JSON)
+ * @route   GET /api/v1/contractors/reports/generate
+ */
+exports.generateContractorReport = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { type, startDate, endDate } = req.query;
+
+        if (!startDate || !endDate) return res.status(400).json({ success: false, message: 'Date range (startDate, endDate) is required.' });
+        if (new Date(startDate) > new Date(endDate)) return res.status(400).json({ success: false, message: 'Start date cannot be after end date.' });
+
+        const sDate = new Date(startDate);
+        const eDate = new Date(endDate);
+        const mongoose = require('mongoose');
+        const Job = require('../jobs/job.model');
+        const Contract = require('../contracts/contract.model');
+        const Payment = require('../payments/payment.model');
+
+        let reportData = [];
+
+        if (type === 'project') {
+            reportData = await Job.find({
+                user_id: contractorId,
+                status: 'completed', // Finalized data only
+                createdAt: { $gte: sDate, $lte: eDate }
+            }).lean();
+        } else if (type === 'workforce') {
+            reportData = await Contract.find({
+                contractor_id: contractorId,
+                status: { $in: ['active', 'completed'] },
+                createdAt: { $gte: sDate, $lte: eDate }
+            }).populate('worker_id', 'name email').lean();
+        } else if (type === 'financial') {
+            reportData = await Payment.find({
+                user: contractorId,
+                status: 'completed',
+                createdAt: { $gte: sDate, $lte: eDate }
+            }).lean();
+        } else {
+            return res.status(400).json({ success: false, message: 'Invalid report type. Use project, workforce, or financial.' });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: `${type} report generated successfully`,
+            metadata: { count: reportData.length, range: { startDate, endDate } },
+            data: reportData
+        });
+    } catch (error) {
+        logger.error('Generate Report Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to generate report' });
+    }
+};
+
+/**
+ * Download Contractor Report (Placeholder for PDF/CSV)
+ * @route   GET /api/v1/contractors/reports/download
+ */
+exports.downloadContractorReport = async (req, res) => {
+    try {
+        res.status(200).json({ 
+            success: true, 
+            message: 'Report is being prepared for download. This endpoint will stream a PDF/CSV file in production.' 
+        });
+    } catch (error) {
+        logger.error('Download Report Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to prepare download' });
+    }
+};
+
+/**
+ * Get Project Financial Analysis (Rule 10.3)
+ * Formula: Profit = Budget - (Sum of Contracts + Approved Materials)
+ * @route   GET /api/v1/contractors/projects/:id/financials
+ */
+exports.getProjectFinancials = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const jobId = req.params.id;
+
+        const Job = require('../jobs/job.model');
+        const Contract = require('../contracts/contract.model');
+
+        const job = await Job.findOne({ _id: jobId, user_id: contractorId }).lean();
+        if (!job) return res.status(404).json({ success: false, message: 'Project not found' });
+
+        // 1. Calculate Workforce Cost (Sum of all active/completed/accepted contracts for workers in this project's tasks)
+        const workerIds = [...new Set(job.tasks.map(t => t.assigned_worker_id).filter(id => id))];
+        
+        const contracts = await Contract.find({
+            contractor_id: contractorId,
+            worker_id: { $in: workerIds },
+            status: { $in: ['active', 'completed', 'accepted'] }
+        }).lean();
+
+        const totalWorkforceCost = contracts.reduce((sum, c) => {
+            const cost = c.agreement_type === 'fixed' ? (c.total_value || 0) : (c.monthly_rate || 0);
+            return sum + cost;
+        }, 0);
+
+        // 2. Calculate Approved Material Cost
+        const approvedMaterials = (job.material_requests || []).filter(m => m.status === 'approved');
+        const totalMaterialCost = approvedMaterials.reduce((sum, m) => sum + (m.cost || 0), 0);
+
+        const totalExpenses = totalWorkforceCost + totalMaterialCost;
+        const projectRevenue = job.budget || 0;
+        const netProfit = projectRevenue - totalExpenses;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                projectTitle: job.job_title,
+                revenue: projectRevenue,
+                workforceCost: totalWorkforceCost,
+                materialCost: totalMaterialCost,
+                totalExpenses: totalExpenses,
+                netProfit: netProfit,
+                profitMargin: projectRevenue > 0 ? ((netProfit / projectRevenue) * 100).toFixed(2) + '%' : '0%',
+                contractsUsed: contracts.length
+            }
+        });
+    } catch (error) {
+        logger.error('Project Financials Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to calculate financials' });
     }
 };
 
