@@ -79,23 +79,51 @@ exports.getProjectEscrows = async (req, res, next) => {
 };
 
 /**
- * Request Payout
+ * Request Payout / Manual Withdrawal
  */
 exports.withdraw = async (req, res, next) => {
     try {
-        const { amount, type, bankDetails } = req.body; // type: 'instant' or 'standard'
-        if (!amount || amount <= 0) return res.status(400).json({ message: 'Invalid amount' });
+        const { amount, type, bankDetails } = req.body;
 
-        const withdrawal = await WalletService.requestWithdrawal(req.user._id, Number(amount), type, bankDetails);
+        // Parse amount robustly (Flutter sends as number, web may send as string)
+        const parsedAmount = parseFloat(amount);
+
+        if (!amount || isNaN(parsedAmount) || parsedAmount <= 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid amount. Please enter a positive number.'
+            });
+        }
+
+        if (parsedAmount < 100) {
+            return res.status(400).json({
+                success: false,
+                message: 'Minimum withdrawal amount is ₹100.'
+            });
+        }
+
+        const withdrawal = await WalletService.requestWithdrawal(
+            req.user._id,
+            parsedAmount,
+            type || 'standard',
+            bankDetails
+        );
+
         res.status(200).json({
             success: true,
-            message: 'Withdrawal request submitted',
+            message: 'Withdrawal request submitted successfully',
             data: withdrawal
         });
     } catch (e) {
+        // Catch service-level errors (Insufficient funds, etc.) and return them
+        // cleanly instead of letting next(e) produce a generic 500.
+        if (e.message && (e.message.includes('Insufficient') || e.message.includes('low to cover'))) {
+            return res.status(400).json({ success: false, message: e.message });
+        }
         next(e);
     }
 };
+
 
 /**
  * Get Transaction History (Payments + Withdrawals)
