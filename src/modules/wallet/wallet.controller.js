@@ -167,6 +167,23 @@ exports.withdraw = async (req, res, next) => {
             });
         }
 
+        // ── Server-side guard: manual payouts MUST include bank details ──
+        if (method === 'manual') {
+            const bd = bankDetails || {};
+            const missing =
+                !bd.accountNumber?.trim() ||
+                !bd.ifsc?.trim() ||
+                !bd.bankName?.trim() ||
+                !bd.accountHolderName?.trim();
+
+            if (missing) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Bank details (account number, IFSC, bank name, account holder name) are required for manual bank transfer withdrawals.'
+                });
+            }
+        }
+
         const withdrawal = await WalletService.requestWithdrawal(
             req.user._id,
             parsedAmount,
