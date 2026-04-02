@@ -170,7 +170,7 @@ exports.creditPlatformRevenue = async (amount, session = null) => {
 /**
  * Request Withdrawal
  */
-exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetails) => {
+exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMethod = 'manual', bankDetails) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -209,6 +209,7 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', bankDetail
             tds,
             netAmount,
             type,
+            payoutMethod,
             bankDetails,
             status: 'pending' // Admin needs to approve or auto-process via payout gateway
         });
@@ -278,26 +279,34 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
         withdrawal.processedBy = adminId;
 
         if (status === 'completed') {
-            // Trigger actual transfer via Stripe Connect if onboarded
-            try {
-                const PaymentService = require('../payments/payment.service');
-                const stripeResult = await PaymentService.processStripeTransfer(withdrawal.user, withdrawal.netAmount, `WITHDRAWAL_${withdrawal._id}`);
-                
-                if (stripeResult.success) {
-                    withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
-                    withdrawal.stripeTransferId = stripeResult.transferId;
-                } else {
-                    // Mark as failed so the retry cron can pick it up
+            if (withdrawal.payoutMethod === 'stripe') {
+                // Trigger actual transfer via Stripe Connect if onboarded
+                try {
+                    const PaymentService = require('../payments/payment.service');
+                    const stripeResult = await PaymentService.processStripeTransfer(withdrawal.user, withdrawal.netAmount, `WITHDRAWAL_${withdrawal._id}`);
+                    
+                    if (stripeResult.success) {
+                        withdrawal.status = 'completed'; // Ensure status is correctly set
+                        withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
+                        withdrawal.stripeTransferId = stripeResult.transferId;
+                    } else {
+                        // Mark as failed so the retry cron can pick it up
+                        withdrawal.status = 'failed';
+                        withdrawal.failureReason = stripeResult.message;
+                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will auto-retry.)`;
+                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry.`);
+                    }
+                } catch (err) {
                     withdrawal.status = 'failed';
-                    withdrawal.failureReason = stripeResult.message;
-                    withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will auto-retry.)`;
-                    logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry.`);
+                    withdrawal.failureReason = err.message;
+                    withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Will auto-retry.)`;
+                    logger.error(`Withdrawal Stripe integration error: ${err.message}`);
                 }
-            } catch (err) {
-                withdrawal.status = 'failed';
-                withdrawal.failureReason = err.message;
-                withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Will auto-retry.)`;
-                logger.error(`Withdrawal Stripe integration error: ${err.message}`);
+            } else {
+                // Manual Payout Mode
+                withdrawal.status = 'completed';
+                withdrawal.adminNotes = (notes || '') + ' (Processed via Manual Bank Transfer)';
+                logger.info(`Withdrawal ${withdrawalId} completed manually by admin`);
             }
         }
 

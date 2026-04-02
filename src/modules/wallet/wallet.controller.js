@@ -145,7 +145,10 @@ exports.getInvoice = async (req, res, next) => {
  */
 exports.withdraw = async (req, res, next) => {
     try {
-        const { amount, type, bankDetails } = req.body;
+        const { amount, type, payoutMethod, bankDetails } = req.body;
+        
+        // Default to manual if not specified
+        const method = ['stripe', 'manual'].includes(payoutMethod) ? payoutMethod : 'manual';
 
         // Parse amount robustly (Flutter sends as number, web may send as string)
         const parsedAmount = parseFloat(amount);
@@ -168,6 +171,7 @@ exports.withdraw = async (req, res, next) => {
             req.user._id,
             parsedAmount,
             type || 'standard',
+            method,
             bankDetails
         );
 

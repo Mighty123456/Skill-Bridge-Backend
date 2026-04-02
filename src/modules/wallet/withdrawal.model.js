@@ -29,6 +29,11 @@ const withdrawalSchema = new mongoose.Schema(
             enum: ['instant', 'standard'],
             default: 'standard', // T+1
         },
+        payoutMethod: {
+            type: String,
+            enum: ['stripe', 'manual'],
+            default: 'manual', // Manual bank transfer backup
+        },
         status: {
             type: String,
             enum: ['pending', 'processing', 'completed', 'processed', 'rejected', 'failed'],
