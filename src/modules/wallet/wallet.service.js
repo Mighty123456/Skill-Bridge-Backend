@@ -118,18 +118,23 @@ exports.creditWallet = async (userId, amount, session = null) => {
  * Debit amount from wallet
  */
 exports.debitWallet = async (userId, amount, session = null) => {
-    const opts = session ? { session } : {};
-    const wallet = await Wallet.findOne({ user: userId }).session(session); // Add session here for read too if strictly consistent
+    const opts = { new: true, ... (session ? { session } : {}) };
+    
+    // ATOMIC DEBIT: Ensure balance is sufficient at the moment of update
+    const wallet = await Wallet.findOneAndUpdate(
+        { user: userId, balance: { $gte: amount } },
+        { $inc: { balance: -amount } },
+        opts
+    );
 
     if (!wallet) {
-        throw new Error('Wallet not found');
-    }
-    if (wallet.balance < amount) {
-        throw new Error(`Insufficient funds. Available: ${wallet.balance}, Required: ${amount}`);
+        // Distinguish between User not found and Insufficient funds
+        const exists = await Wallet.findOne({ user: userId }).session(session);
+        if (!exists) throw new Error('Wallet not found for this user');
+        throw new Error(`Insufficient funds. Required: ₹${amount.toFixed(2)}`);
     }
 
-    wallet.balance -= amount;
-    return await wallet.save(opts);
+    return wallet;
 };
 
 /**
@@ -175,31 +180,31 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMeth
     session.startTransaction();
 
     try {
-        const wallet = await Wallet.findOne({ user: userId }).session(session);
-        if (!wallet) throw new Error('Wallet not found');
+        // 1. ATOMIC DEBIT: Deduct balance only if sufficient funds exist
+        const wallet = await Wallet.findOneAndUpdate(
+            { user: userId, balance: { $gte: amount } },
+            { $inc: { balance: -amount } },
+            { session, new: true }
+        );
 
-        if (wallet.balance < amount) {
-            throw new Error(`Insufficient funds. Available: ₹${wallet.balance}`);
+        if (!wallet) {
+            throw new Error(`Insufficient funds for withdrawal. Requested: ₹${amount.toFixed(2)}`);
         }
 
-        // Fee Logic
+        // 2. Fee Logic
         let fee = 0;
         if (type === 'instant') {
             fee = Math.max(10, Math.round(amount * 0.02)); // 2% or min ₹10
         }
 
-        // Fetch Dynamic Configuration for TDS
-        const sysConfig = await SystemConfig.findOne().sort({ createdAt: -1 });
-        const TDS_RATE = sysConfig ? (sysConfig.tdsRate / 100) : 0.01;
+        // 3. TDS Logic (Pull dynamic TDS from config)
+        const sysConfig = await SystemConfig.findOne({}).sort({ createdAt: -1 });
+        const TDS_RATE = sysConfig ? (sysConfig.tdsRate / 100) : 0.01; // Default 1%
 
-        const tds = Math.round(amount * TDS_RATE); // Statutory TDS
+        const tds = Math.round(amount * TDS_RATE);
         const netAmount = amount - fee - tds;
 
-        if (netAmount <= 0) throw new Error('Amount too low to cover fees and TDS');
-
-        // Debit Wallet
-        wallet.balance -= amount;
-        await wallet.save({ session });
+        if (netAmount <= 0) throw new Error('Withdrawal amount too low to cover fees and TDS.');
 
         // Create Withdrawal Record
         const withdrawal = new Withdrawal({
@@ -295,11 +300,7 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                         withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Amount refunded to wallet.)`;
                         
                         // Give money back to user wallet if failed
-                        const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
-                        if (wallet) {
-                            wallet.balance += withdrawal.amount;
-                            await wallet.save({ session });
-                        }
+                        await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
                         logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Refunded.`);
                     }
                 } catch (err) {
@@ -308,11 +309,7 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                     withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Amount refunded to wallet.)`;
                     
                     // Give money back to user wallet if failed
-                    const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
-                    if (wallet) {
-                        wallet.balance += withdrawal.amount;
-                        await wallet.save({ session });
-                    }
+                    await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
                     logger.error(`Withdrawal Stripe integration error: ${err.message}. Refunded.`);
                 }
             } else {
@@ -325,11 +322,7 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
 
         if (status === 'rejected') {
             // Give money back to user wallet if rejected
-            const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
-            if (wallet) {
-                wallet.balance += withdrawal.amount; // amount is the gross amount debited earlier
-                await wallet.save({ session });
-            }
+            await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
         }
 
         await withdrawal.save({ session });
