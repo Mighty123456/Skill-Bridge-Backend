@@ -79,6 +79,68 @@ exports.getProjectEscrows = async (req, res, next) => {
 };
 
 /**
+ * Release escrowed funds to a worker
+ */
+exports.releaseEscrow = async (req, res, next) => {
+    try {
+        const { escrowId, projectId } = req.body;
+        if (!escrowId && !projectId) {
+            return res.status(400).json({ success: false, message: 'escrowId or projectId is required' });
+        }
+
+        let jobId = projectId;
+        if (escrowId) {
+            const Payment = require('../payments/payment.model');
+            const payment = await Payment.findById(escrowId);
+            if (!payment) return res.status(404).json({ success: false, message: 'Escrow record not found' });
+            if (payment.user.toString() !== req.user._id.toString()) {
+                return res.status(403).json({ success: false, message: 'Unauthorized' });
+            }
+            jobId = payment.job;
+        }
+
+        const result = await PaymentService.releasePayment(jobId);
+        
+        res.status(200).json({
+            success: true,
+            message: 'Funds released successfully',
+            data: result
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * Get Invoice for a transaction (For compatibility with Flutter side)
+ */
+exports.getInvoice = async (req, res, next) => {
+    try {
+        const { transactionId } = req.params;
+        
+        // Find payment by its ID (as sent from Flutter) OR its transactionId field
+        const Payment = require('../payments/payment.model');
+        const payment = await Payment.findOne({
+            $or: [
+                { _id: require('mongoose').Types.ObjectId.isValid(transactionId) ? transactionId : null },
+                { transactionId: transactionId }
+            ]
+        });
+
+        if (!payment) {
+            return res.status(404).json({ success: false, message: 'Transaction not found for invoice' });
+        }
+
+        // Reuse the existing downloadInvoice logic from payment controller
+        const paymentController = require('../payments/payment.controller');
+        req.params.paymentId = payment._id.toString();
+        return paymentController.downloadInvoice(req, res, next);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * Request Payout / Manual Withdrawal
  */
 exports.withdraw = async (req, res, next) => {

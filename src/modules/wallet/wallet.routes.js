@@ -25,10 +25,16 @@ router.get('/transactions', authenticate, WalletController.getHistory); // Alias
 router.get('/payout-status', authenticate, WalletController.getPayoutStatus);
 router.get('/earnings-stats', authenticate, WalletController.getEarningsStats);
 
+// Contractor Wallet Top-up
+router.post('/topup', authenticate, authorize('contractor'), WalletController.addFunds);
+
 // Contractor Escrow Operations
 router.post('/escrow/lock', authenticate, authorize('contractor'), WalletController.lockEscrow);
-router.post('/escrow/release', authenticate, authorize('contractor'), WalletController.processWithdrawal); // Using processWithdrawal for release or specific Release logic
+router.post('/escrow/release', authenticate, authorize('contractor'), WalletController.releaseEscrow);
 router.get('/escrow/project/:projectId', authenticate, WalletController.getProjectEscrows);
+
+// Transaction Details
+router.get('/transactions/:transactionId/invoice', authenticate, WalletController.getInvoice);
 
 // Export Transactions
 router.get('/transactions/export', authenticate, WalletController.exportTransactions);

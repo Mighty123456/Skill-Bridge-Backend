@@ -393,12 +393,20 @@ exports.releasePayment = async (jobId) => {
             // We'll rely on Job.payment_released flag to prevent double pay.
         }
 
-        // 3. Escrow is a DB record (Payment model), NOT tenant wallet balance.
-        // No tenant wallet to debit — money was collected via Stripe directly.
-        // Mark escrow payments as released.
+        // 3. Mark escrow payments as released.
+        // If funds were locked via internal wallet, we must also decrement the user's escrowBalance.
         for (const ep of escrowPayments) {
             ep.status = 'released';
             await ep.save({ session });
+
+            if (ep.paymentMethod === 'wallet') {
+                await Wallet.findOneAndUpdate(
+                    { user: ep.user },
+                    { $inc: { escrowBalance: -ep.amount } },
+                    { session }
+                );
+                logger.info(`Decremented escrowBalance for user ${ep.user} by ${ep.amount} (Wallet Escrow Released)`);
+            }
         }
 
         // 4. Credit Worker Wallet (With Delay Logic & Warranty Reserve)
