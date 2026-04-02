@@ -788,3 +788,26 @@ exports.updateWorkerTaskStatus = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to update task status' });
     }
 };
+
+/**
+ * Clear Payout Error
+ */
+exports.clearPayoutError = async (req, res) => {
+    try {
+        const worker = await Worker.findOne({ user: req.user._id });
+        if (!worker) {
+            return res.status(404).json({ success: false, message: 'Worker profile not found' });
+        }
+
+        worker.lastPayoutError = null;
+        await worker.save();
+
+        res.status(200).json({
+            success: true,
+            message: 'Payout error cleared successfully'
+        });
+    } catch (error) {
+        logger.error(`Clear Payout Error: ${error.message}`);
+        res.status(500).json({ success: false, message: 'Failed to clear payout error' });
+    }
+};

@@ -43,4 +43,7 @@ const multer = require('multer');
 const upload = multer();
 router.put('/project-tasks/:jobId/:taskId/status', protect, authorize('worker'), upload.any(), workerController.updateWorkerTaskStatus);
 
+// Clear Payout Error
+router.post('/clear-payout-error', protect, authorize('worker'), workerController.clearPayoutError);
+
 module.exports = router;
