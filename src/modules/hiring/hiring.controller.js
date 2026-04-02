@@ -52,20 +52,15 @@ exports.createHireRequest = async (req, res) => {
         }
 
         // Rule 4.5: Payment must be backed by wallet balance
-        const Wallet = require('../wallet/wallet.model');
-        const wallet = await Wallet.findOne({ user: contractorId });
+        // Rule 4.5 [UPDATED]: Wallet check moved to 'Escrow Activation' stage to allow free discovery.
+        // We still calculate this for logging/analytics.
         const totalProposedCost = targetConfigs.reduce((sum, config) => {
             const rate = Number(config.proposedRate) || Number(proposedRate) || 0;
             const hours = Number(config.estimatedHours) || Number(estimatedHours) || 1;
             return sum + (rate * hours);
         }, 0);
         
-        if (!wallet || wallet.balance < totalProposedCost) {
-            return res.status(402).json({ 
-                success: false, 
-                message: `Insufficient wallet balance. Total estimated liability for this request: ₹${totalProposedCost}. Your current balance: ₹${wallet ? wallet.balance : 0}. Please top up your wallet to proceed.` 
-            });
-        }
+        logger.info(`[Hiring] Proposal sent with estimated liability: ₹${totalProposedCost}. Balance check deferred to contract stage.`);
 
         // 1. Validate Project (must belong to contractor and be open)
         const project = await Job.findOne({ _id: projectId, user_id: contractorId });
@@ -117,7 +112,7 @@ exports.createHireRequest = async (req, res) => {
                     continue;
                 }
 
-                // Constraint 3.3: Worker must exist in pool before hiring (Contractor Rule)
+                // [PRO FLOW] Automatically add to pool if missing
                 const WorkforcePool = require('../contractors/workforce-pool.model');
                 const isInPool = await WorkforcePool.findOne({ 
                     contractor: contractorId, 
@@ -125,11 +120,11 @@ exports.createHireRequest = async (req, res) => {
                 });
 
                 if (!isInPool) {
-                    errors.push({ 
-                        workerId: currentWorkerId, 
-                        reason: `Pool Exclusion: ${workerUser.name} must be added to your workforce pool before they can be officially hired for a project.` 
+                    await WorkforcePool.create({ 
+                        contractor: contractorId, 
+                        worker: workerUser._id 
                     });
-                    continue;
+                    logger.info(`[Hiring] Worker ${workerUser.name} automatically added to pool for contractor ${contractorId}`);
                 }
 
                 const targetWorkerIdObj = workerUser._id;
