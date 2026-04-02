@@ -432,17 +432,38 @@ exports.handleStripeWebhook = async (req, res) => {
                 logger.error(`❌ Stripe Payout Failed: ${failedPayout.id} - ${failedPayout.failure_code}`);
                 
                 const fWithdrawal = await Withdrawal.findOne({ stripeTransferId: failedPayout.id }).session(session_stripe);
-                if (fWithdrawal) {
+                if (fWithdrawal && fWithdrawal.status !== 'failed') {
                     fWithdrawal.status = 'failed';
                     fWithdrawal.failureReason = failedPayout.failure_message;
                     await fWithdrawal.save({ session: session_stripe });
                     
+                    // CRITICAL: Refund the worker's wallet
+                    await WalletService.creditWallet(fWithdrawal.user, fWithdrawal.amount, session_stripe);
+                    logger.info(`✅ Refunded ₹${fWithdrawal.amount} to user ${fWithdrawal.user} due to payout failure.`);
+
                     // Notify worker
                     const fWorker = await Worker.findOne({ user: fWithdrawal.user }).session(session_stripe);
                     if (fWorker) {
                         fWorker.lastPayoutError = `Bank payout failed: ${failedPayout.failure_message}`;
                         await fWorker.save({ session: session_stripe });
                     }
+                }
+                break;
+
+            case 'transfer.failed':
+                const failedTransfer = event.data.object;
+                logger.error(`❌ Stripe Transfer Failed: ${failedTransfer.id}`);
+                
+                // This happens if platform account has insufficient funds
+                const tWithdrawal = await Withdrawal.findOne({ stripeTransferId: failedTransfer.id }).session(session_stripe);
+                if (tWithdrawal && tWithdrawal.status !== 'failed') {
+                    tWithdrawal.status = 'failed';
+                    tWithdrawal.failureReason = "Platform insufficient funds or transfer restriction";
+                    await tWithdrawal.save({ session: session_stripe });
+
+                    // CRITICAL: Refund the worker's wallet
+                    await WalletService.creditWallet(tWithdrawal.user, tWithdrawal.amount, session_stripe);
+                    logger.info(`✅ Refunded ₹${tWithdrawal.amount} to user ${tWithdrawal.user} due to transfer failure.`);
                 }
                 break;
 
