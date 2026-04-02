@@ -290,17 +290,30 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                         withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
                         withdrawal.stripeTransferId = stripeResult.transferId;
                     } else {
-                        // Mark as failed so the retry cron can pick it up
                         withdrawal.status = 'failed';
                         withdrawal.failureReason = stripeResult.message;
-                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will auto-retry.)`;
-                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry.`);
+                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Amount refunded to wallet.)`;
+                        
+                        // Give money back to user wallet if failed
+                        const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
+                        if (wallet) {
+                            wallet.balance += withdrawal.amount;
+                            await wallet.save({ session });
+                        }
+                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Refunded.`);
                     }
                 } catch (err) {
                     withdrawal.status = 'failed';
                     withdrawal.failureReason = err.message;
-                    withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Will auto-retry.)`;
-                    logger.error(`Withdrawal Stripe integration error: ${err.message}`);
+                    withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Amount refunded to wallet.)`;
+                    
+                    // Give money back to user wallet if failed
+                    const wallet = await Wallet.findOne({ user: withdrawal.user }).session(session);
+                    if (wallet) {
+                        wallet.balance += withdrawal.amount;
+                        await wallet.save({ session });
+                    }
+                    logger.error(`Withdrawal Stripe integration error: ${err.message}. Refunded.`);
                 }
             } else {
                 // Manual Payout Mode
@@ -321,6 +334,24 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
 
         await withdrawal.save({ session });
 
+        // Setup final notification status and strings based on actual withdrawal outcome
+        const finalStatus = withdrawal.status; // 'completed', 'rejected', or 'failed'
+        let notificationTitle = 'Withdrawal Processed';
+        let notificationBody = `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} has been processed.`;
+        let emailNotes = notes || 'Funds have been transferred to your bank account.';
+
+        if (finalStatus === 'rejected') {
+            notificationTitle = 'Withdrawal Rejected';
+            notificationBody = `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} was rejected. ${notes || ''}`;
+            emailNotes = notes || 'Please contact support for more information.';
+        } else if (finalStatus === 'failed') {
+            notificationTitle = 'Withdrawal Failed';
+            notificationBody = `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} failed due to a bank/network issue. The amount has been refunded to your wallet.`;
+            emailNotes = 'Your withdrawal failed and the amount has been refunded to your wallet. Please check your bank details and try again.';
+        } else {
+             notificationTitle = 'Withdrawal Successful';
+        }
+
         // Send withdrawal status email (async)
         const EmailService = require('../../common/services/email.service');
         const User = require('mongoose').model('User');
@@ -329,20 +360,18 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
             EmailService.sendWithdrawalStatusEmail(user.email, {
                 userName: user.name,
                 amount: withdrawal.amount,
-                status: status,
+                status: finalStatus,
                 processedAt: withdrawal.processedAt,
-                notes: notes || (status === 'completed' ? 'Funds have been transferred to your bank account.' : 'Please contact support for more information.')
+                notes: emailNotes
             }).catch(err => logger.error(`Failed to send withdrawal status email: ${err.message}`));
         }
 
         // Send App Notification
         await notifyHelper.onWithdrawalStatus(
             withdrawal.user,
-            status === 'completed' ? 'Withdrawal Successful' : 'Withdrawal Rejected',
-            status === 'completed'
-                ? `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} has been processed.`
-                : `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} was rejected. ${notes || ''}`,
-            { withdrawalId: withdrawal._id, status: status }
+            notificationTitle,
+            notificationBody,
+            { withdrawalId: withdrawal._id, status: finalStatus }
         );
 
         await session.commitTransaction();
