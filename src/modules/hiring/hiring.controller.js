@@ -14,7 +14,7 @@ const logger = require('../../config/logger');
  */
 exports.createHireRequest = async (req, res) => {
     try {
-        const { workerId, workerIds, projectId, proposedRate, message, workerConfigs } = req.body;
+        const { workerId, workerIds, projectId, proposedRate, message, workerConfigs, estimatedHours } = req.body;
         const contractorId = req.user._id;
 
         // Determine targets to support both bulk and single requests
@@ -33,7 +33,8 @@ exports.createHireRequest = async (req, res) => {
             targetConfigs = [{ 
                 workerId: workerId, 
                 proposedRate: proposedRate, 
-                message: message 
+                message: message,
+                estimatedHours: estimatedHours
             }];
         }
 
@@ -53,7 +54,11 @@ exports.createHireRequest = async (req, res) => {
         // Rule 4.5: Payment must be backed by wallet balance
         const Wallet = require('../wallet/wallet.model');
         const wallet = await Wallet.findOne({ user: contractorId });
-        const totalProposedCost = targetConfigs.reduce((sum, config) => sum + (Number(config.proposedRate) || 0), 0);
+        const totalProposedCost = targetConfigs.reduce((sum, config) => {
+            const rate = Number(config.proposedRate) || Number(proposedRate) || 0;
+            const hours = Number(config.estimatedHours) || Number(estimatedHours) || 1;
+            return sum + (rate * hours);
+        }, 0);
         
         if (!wallet || wallet.balance < totalProposedCost) {
             return res.status(402).json({ 
@@ -151,11 +156,16 @@ exports.createHireRequest = async (req, res) => {
                 }
 
                 // 4. Create Request
+                const hours = Number(config.estimatedHours) || Number(estimatedHours) || 1;
+                const total = (Number(config.proposedRate) || Number(proposedRate)) * hours;
+
                 const hiringRequest = await HiringRequest.create({
                     contractor: contractorId,
                     worker: targetWorkerIdObj,
                     project: projectId,
-                    proposedRate: currentRate,
+                    proposedRate: config.proposedRate || proposedRate,
+                    estimatedHours: hours,
+                    estimatedTotal: total,
                     message: currentMessage,
                     status: 'pending'
                 });

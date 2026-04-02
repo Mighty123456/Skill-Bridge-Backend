@@ -24,6 +24,14 @@ const hiringRequestSchema = new mongoose.Schema({
         type: String,
         trim: true
     },
+    estimatedHours: {
+        type: Number,
+        default: 1
+    },
+    estimatedTotal: {
+        type: Number,
+        required: true
+    },
     status: {
         type: String,
         enum: ['pending', 'accepted', 'rejected', 'expired'],
