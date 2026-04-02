@@ -1131,7 +1131,6 @@ exports.createStripeOnboardingLink = async (workerId, baseUrl) => {
             country: 'US', // Changed to US for testing to avoid GST requirements
             email: user.email,
             capabilities: {
-                card_payments: { requested: true },
                 transfers: { requested: true },
             },
             business_type: 'individual',
