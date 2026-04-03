@@ -33,7 +33,7 @@ const contractSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['pending', 'accepted', 'active', 'completed', 'terminated', 'rejected', 'expired', 'cancelled', 'disputed'],
+            enum: ['pending', 'accepted', 'active', 'paused', 'completed', 'terminated', 'rejected', 'expired', 'cancelled', 'disputed'],
             default: 'pending',
             index: true
         },

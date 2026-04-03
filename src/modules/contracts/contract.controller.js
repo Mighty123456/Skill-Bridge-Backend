@@ -590,7 +590,7 @@ exports.extendContract = async (req, res) => {
 };
 
 /**
- * Raise Dispute on Contract
+ * Dispute or report an issue on Contract
  * @route   POST /api/v1/contracts/:id/dispute
  */
 exports.raiseContractDispute = async (req, res) => {
@@ -625,6 +625,123 @@ exports.raiseContractDispute = async (req, res) => {
     } catch (error) {
         logger.error('Contract Dispute Error:', error);
         res.status(500).json({ success: false, message: 'Failed to raise dispute' });
+    }
+};
+
+/**
+ * Pause active contract (Worker or Contractor)
+ * @route   PATCH /api/v1/contracts/:id/pause
+ * @access  Private
+ */
+exports.pauseContract = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { reason } = req.body;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        if (contract.status !== 'active') {
+            return res.status(400).json({ success: false, message: 'Only active contracts can be paused' });
+        }
+
+        contract.status = 'paused';
+        contract.timeline.push({
+            status: 'paused',
+            timestamp: new Date(),
+            note: reason || `Contract paused by ${req.user.role}`,
+            actor: req.user.role === 'contractor' ? 'contractor' : 'worker'
+        });
+
+        // Optional work log entry for the pause
+        contract.work_logs.push({
+            work_done: reason || 'Contract paused',
+            status: 'paused',
+            logged_by: 'system'
+        });
+
+        await contract.save();
+        
+        const recipientId = req.user.role === 'contractor' ? contract.worker_id : contract.contractor_id;
+        await notifyHelper.onContractStatusChanged(recipientId, contract.title, 'paused');
+
+        res.status(200).json({ success: true, message: 'Contract paused successfully', data: contract });
+    } catch (error) {
+        logger.error('Pause Contract Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to pause contract' });
+    }
+};
+
+/**
+ * Resume paused contract (Worker or Contractor)
+ * @route   PATCH /api/v1/contracts/:id/resume
+ * @access  Private
+ */
+exports.resumeContract = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        if (contract.status !== 'paused') {
+            return res.status(400).json({ success: false, message: 'Only paused contracts can be resumed' });
+        }
+
+        contract.status = 'active';
+        contract.timeline.push({
+            status: 'active',
+            timestamp: new Date(),
+            note: 'Contract resumed.',
+            actor: req.user.role === 'contractor' ? 'contractor' : 'worker'
+        });
+
+        await contract.save();
+
+        const recipientId = req.user.role === 'contractor' ? contract.worker_id : contract.contractor_id;
+        await notifyHelper.onContractStatusChanged(recipientId, contract.title, 'active');
+
+        res.status(200).json({ success: true, message: 'Contract resumed successfully', data: contract });
+    } catch (error) {
+        logger.error('Resume Contract Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to resume contract' });
+    }
+};
+
+/**
+ * Add work log/progress report (Worker only)
+ * @route   POST /api/v1/contracts/:id/work-log
+ * @access  Private (Worker)
+ */
+exports.addWorkLog = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { workDone, hoursWorked } = req.body;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        // Ensure user is the assigned worker
+        if (contract.worker_id.toString() !== userId.toString()) {
+            return res.status(403).json({ success: false, message: 'Only the assigned professional can log work' });
+        }
+
+        contract.work_logs.push({
+            work_done: workDone,
+            hours_worked: hoursWorked || 0,
+            status: 'completed',
+            logged_by: 'worker'
+        });
+
+        await contract.save();
+
+        res.status(200).json({ success: true, message: 'Work progress logged successfully', data: contract });
+    } catch (error) {
+        logger.error('Add Work Log Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to log work' });
     }
 };
 

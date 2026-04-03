@@ -72,4 +72,23 @@ router.post(
   contractController.raiseContractDispute
 );
 
+// Pause active contract
+router.patch(
+  '/:id/pause',
+  contractController.pauseContract
+);
+
+// Resume paused contract
+router.patch(
+  '/:id/resume',
+  contractController.resumeContract
+);
+
+// Add work log (Worker only)
+router.post(
+  '/:id/work-log',
+  authorize('worker'),
+  contractController.addWorkLog
+);
+
 module.exports = router;

@@ -148,13 +148,21 @@ exports.getJob = async (req, res) => {
             job.budget = undefined;
         }
 
+        // Fetch Contract details if it's a contractor project
+        let contract = null;
+        if (job.is_contractor_project) {
+            const Contract = require('../contracts/contract.model');
+            contract = await Contract.findOne({ project_id: job._id });
+        }
+
         res.json({
             success: true,
             data: {
                 ...job._doc,
                 hasSubmittedQuotation,
                 submittedQuotation,
-                start_otp // Will be undefined for non-owners
+                start_otp, // Will be undefined for non-owners
+                contract
             }
         });
     } catch (error) {
