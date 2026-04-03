@@ -179,6 +179,8 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMeth
     const session = await mongoose.startSession();
     session.startTransaction();
 
+    let savedWithdrawal = null;
+
     try {
         // 1. ATOMIC DEBIT: Deduct balance only if sufficient funds exist
         const wallet = await Wallet.findOneAndUpdate(
@@ -206,7 +208,7 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMeth
 
         if (netAmount <= 0) throw new Error('Withdrawal amount too low to cover fees and TDS.');
 
-        // Create Withdrawal Record
+        // 4. Create Withdrawal Record (inside transaction)
         const withdrawal = new Withdrawal({
             user: userId,
             amount,
@@ -216,12 +218,29 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMeth
             type,
             payoutMethod,
             bankDetails,
-            status: 'pending' // Admin needs to approve or auto-process via payout gateway
+            status: 'pending'
         });
 
         await withdrawal.save({ session });
+        savedWithdrawal = withdrawal;
 
-        // Send withdrawal request email (async)
+        // ── COMMIT before any side effects ──
+        // CRITICAL: Notifications/emails must NOT be inside the transaction.
+        // If they throw, abortTransaction() only restores the debit on replica-set
+        // MongoDB. On standalone instances the abort is a no-op and the balance
+        // stays debited permanently — funds lost with no withdrawal record.
+        await session.commitTransaction();
+
+    } catch (error) {
+        await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
+    }
+
+    // ── Side effects fire AFTER the commit (fire-and-forget) ──
+    // These cannot affect wallet balance, so failures here are non-critical.
+    try {
         const EmailService = require('../../common/services/email.service');
         const User = require('mongoose').model('User');
         const user = await User.findById(userId).select('name email').lean();
@@ -233,25 +252,24 @@ exports.requestWithdrawal = async (userId, amount, type = 'standard', payoutMeth
                 notes: 'Your withdrawal request has been received and is being processed.'
             }).catch(err => logger.error(`Failed to send withdrawal email: ${err.message}`));
         }
+    } catch (emailErr) {
+        logger.error(`Post-commit email error for withdrawal (non-critical): ${emailErr.message}`);
+    }
 
-        // Send App Notification
+    try {
         await notifyHelper.onWithdrawalStatus(
             userId,
             'Withdrawal Requested',
             `Your request for ₹${amount.toFixed(2)} has been received.`,
-            { withdrawalId: withdrawal._id, status: 'pending' }
+            { withdrawalId: savedWithdrawal._id, status: 'pending' }
         );
-
-        await session.commitTransaction();
-        return withdrawal;
-
-    } catch (error) {
-        await session.abortTransaction();
-        throw error;
-    } finally {
-        session.endSession();
+    } catch (notifyErr) {
+        logger.error(`Post-commit notification error for withdrawal (non-critical): ${notifyErr.message}`);
     }
+
+    return savedWithdrawal;
 };
+
 
 exports.getWithdrawalHistory = async (userId) => {
     return await Withdrawal.find({ user: userId }).sort({ createdAt: -1 });
@@ -296,17 +314,39 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                         withdrawal.stripeTransferId = stripeResult.transferId;
                         withdrawal.refunded = false; // Funds successfully sent — no refund needed
                     } else {
-                        // Mark as failed — do NOT immediately credit the wallet.
-                        // CRON 5 (scheduler) will retry up to 3 times and then auto-refund.
-                        // This prevents the double-refund bug where CRON 5 was crediting
-                        // the wallet a second time after the immediate credit here.
-                        withdrawal.status = 'failed';
-                        withdrawal.failureReason = stripeResult.message;
-                        withdrawal.refunded = false; // CRON 5 will set this to true when it refunds
-                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will retry automatically.)`;
-                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry by scheduler.`);
+                        // Determine if this failure is retriable (transient) or permanent (config issue).
+                        // Non-retriable errors: worker not onboarded, payouts disabled, invalid amount.
+                        // These will NEVER succeed on retry, so we refund immediately.
+                        const NON_RETRIABLE_MSGS = [
+                            'not onboarded',
+                            'payouts disabled',
+                            'not configured',
+                            'invalid amount',
+                            'amount too small'
+                        ];
+                        const isNonRetriable = NON_RETRIABLE_MSGS.some(m => 
+                            stripeResult.message?.toLowerCase().includes(m)
+                        );
+
+                        if (isNonRetriable) {
+                            // Immediate refund — no point retrying
+                            withdrawal.status = 'rejected';
+                            withdrawal.rejectionReason = stripeResult.message;
+                            withdrawal.refunded = true;
+                            withdrawal.adminNotes = (notes || '') + ` (Stripe blocked: ${stripeResult.message}. Funds returned to wallet immediately.)`;
+                            await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
+                            logger.warn(`Withdrawal ${withdrawalId} immediately refunded — non-retriable Stripe error: ${stripeResult.message}`);
+                        } else {
+                            // Transient failure — let CRON 5 retry up to 3 times then auto-refund
+                            withdrawal.status = 'failed';
+                            withdrawal.failureReason = stripeResult.message;
+                            withdrawal.refunded = false; // CRON 5 will set this to true when it refunds
+                            withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will retry automatically.)`;
+                            logger.warn(`Withdrawal ${withdrawalId} queued for retry — transient Stripe error: ${stripeResult.message}`);
+                        }
                     }
                 } catch (err) {
+                    // Unknown/unexpected error — treat as transient and let CRON 5 retry
                     withdrawal.status = 'failed';
                     withdrawal.failureReason = err.message;
                     withdrawal.refunded = false; // CRON 5 will set this to true when it refunds

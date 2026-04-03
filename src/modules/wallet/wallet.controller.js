@@ -167,6 +167,28 @@ exports.withdraw = async (req, res, next) => {
             });
         }
 
+        // ── Pre-check: Stripe method requires a fully onboarded account ──
+        // This prevents creating a withdrawal that will ALWAYS fail at processing
+        // time, which was causing the repeated 'Withdrawal Failed' notification loop.
+        if (method === 'stripe') {
+            const Worker = require('../workers/worker.model');
+            const worker = await Worker.findOne({ user: req.user._id });
+
+            if (!worker || !worker.stripeAccountId || !worker.stripeOnboarded) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Your Stripe payout account is not set up yet. Please complete Stripe onboarding under Settings, or choose Manual Bank Transfer instead.'
+                });
+            }
+
+            if (!worker.payoutEnabled) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Your Stripe payouts are currently disabled due to repeated failures. Please contact support or choose Manual Bank Transfer instead.'
+                });
+            }
+        }
+
         // ── Server-side guard: manual payouts MUST include bank details ──
         if (method === 'manual') {
             const bd = bankDetails || {};
