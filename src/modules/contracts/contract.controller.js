@@ -171,18 +171,21 @@ exports.createContract = async (req, res) => {
  * @access  Private (Worker)
  */
 exports.respondToContract = async (req, res) => {
+    const { id } = req.params;
+    const { status, note, signature } = req.body;
+    const userId = req.user._id;
+
+    logger.info(`[ContractController] respondToContract: User ${userId} responding ${status} to contract ${id}`);
+
+    if (!['active', 'rejected'].includes(status)) {
+        return res.status(400).json({ success: false, message: 'Invalid response status' });
+    }
+
     try {
-        const { id } = req.params;
-        const { status, note, signature } = req.body;
-        const userId = req.user._id;
-
-        if (!['active', 'rejected'].includes(status)) {
-            return res.status(400).json({ success: false, message: 'Invalid response status' });
-        }
-
         const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
 
+        // Find contract checking both direct User ID and Worker Profile ID (just in case)
         const contract = await Contract.findOne({ 
             _id: id, 
             $or: [
@@ -190,7 +193,9 @@ exports.respondToContract = async (req, res) => {
                 { worker_id: workerProfile ? workerProfile._id : null }
             ]
         });
+
         if (!contract) {
+            logger.warn(`[ContractController] Contract ${id} not found or not authorized for user ${userId}`);
             return res.status(404).json({ success: false, message: 'Contract not found or not authorized' });
         }
 
@@ -199,38 +204,65 @@ exports.respondToContract = async (req, res) => {
         }
 
         const User = require('../users/user.model');
+        const Job = require('../jobs/job.model');
         const respondingUser = await User.findById(userId);
 
-        // Start Transaction for atomic status update + escrow reversal
         const mongoose = require('mongoose');
         const session = await mongoose.startSession();
         session.startTransaction();
+
+        let transactionCommitted = false;
 
         try {
             if (status === 'active' || status === 'accepted') {
                 contract.status = 'active';
                 contract.signed_at = new Date();
                 contract.worker_signature = signature;
+
+                // ✅ Synchronize Job Status: Mark project as assigned
+                if (contract.project_id) {
+                    const project = await Job.findById(contract.project_id).session(session);
+                    if (project && project.status === 'open') {
+                        project.status = 'assigned';
+                        project.selected_worker_id = userId; // User ID for consistent tracking
+                        
+                        project.timeline.push({
+                            status: 'assigned',
+                            timestamp: new Date(),
+                            actor: 'system',
+                            note: `Project assigned via formal contract signature by worker.`
+                        });
+                        
+                        await project.save({ session });
+                        logger.info(`[ContractController] Synchronized Job ${project._id} status to 'assigned'`);
+                    }
+                }
+
             } else {
                 contract.status = 'rejected';
                 
-                // Rule 6.3: If rejected, release locked funds back to contractor wallet
+                // Release locked funds back to contractor wallet
                 const Wallet = require('../wallet/wallet.model');
                 const wallet = await Wallet.findOne({ user: contract.contractor_id }).session(session);
                 if (wallet) {
                     const costToReturn = contract.agreement_type === 'fixed' ? Number(contract.total_value) : Number(contract.monthly_rate);
-                    wallet.escrowBalance = Math.max(0, wallet.escrowBalance - costToReturn);
-                    wallet.balance += costToReturn;
-                    await wallet.save({ session });
+                    
+                    if (!isNaN(costToReturn) && costToReturn > 0) {
+                        wallet.escrowBalance = Math.max(0, wallet.escrowBalance - costToReturn);
+                        wallet.balance += costToReturn;
+                        await wallet.save({ session });
 
-                    // Log Reversal
-                    contract.timeline.push({
-                        status: 'rejected',
-                        timestamp: new Date(),
-                        note: `Proposal rejected. ₹${costToReturn} released back to wallet.`,
-                        actor: 'system'
-                    });
+                        logger.info(`[ContractController] Released ₹${costToReturn} back to contractor ${contract.contractor_id} wallet.`);
+                    }
                 }
+
+                // Log Reversal in timeline if rejected
+                contract.timeline.push({
+                    status: 'rejected',
+                    timestamp: new Date(),
+                    note: `Proposal rejected. Funds released back to wallet.`,
+                    actor: 'system'
+                });
             }
 
             contract.timeline.push({
@@ -242,24 +274,39 @@ exports.respondToContract = async (req, res) => {
 
             await contract.save({ session });
             await session.commitTransaction();
+            transactionCommitted = true;
+            logger.info(`[ContractController] respondToContract success for ${id}`);
 
-            // Notify contractor
-            await notifyHelper.onContractResponded(contract.contractor_id, contract.title, respondingUser?.name || 'A Professional', contract.status);
-
-            res.status(200).json({
-                success: true,
-                message: `Contract ${contract.status} successfully`,
-                data: contract
-            });
-        } catch (error) {
-            await session.abortTransaction();
-            throw error;
+        } catch (innerError) {
+            if (!transactionCommitted) {
+                await session.abortTransaction();
+            }
+            throw innerError;
         } finally {
             session.endSession();
         }
+
+        // Notify contractor (Outside transaction to avoid slowing it down)
+        try {
+            await notifyHelper.onContractResponded(
+                contract.contractor_id, 
+                contract.title, 
+                respondingUser?.name || 'A Professional', 
+                contract.status
+            );
+        } catch (notifyErr) {
+            logger.error(`[ContractController] Notification failed: ${notifyErr.message}`);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Contract ${status === 'active' ? 'accepted' : 'rejected'} successfully`,
+            data: contract
+        });
+
     } catch (error) {
-        logger.error('Respond to Contract Error:', error);
-        res.status(500).json({
+        logger.error(`[ContractController] Respond to Contract Error: ${error.message}`);
+        return res.status(500).json({
             success: false,
             message: 'Failed to respond to contract',
             error: error.message
