@@ -214,7 +214,7 @@ exports.respondToContract = async (req, res) => {
         let transactionCommitted = false;
 
         try {
-            if (status === 'active' || status === 'accepted') {
+            if (status === 'active' || status === 'accepted' || status === 'accepted') {
                 contract.status = 'active';
                 contract.signed_at = new Date();
                 contract.worker_signature = signature;
@@ -381,18 +381,29 @@ exports.getContractDetails = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Contract not found' });
         }
 
+        // Helper to get ID regardless of population
+        const getRefId = (field) => {
+            if (!field) return null;
+            return field._id ? field._id.toString() : field.toString();
+        };
+
+        const contractorId = getRefId(contract.contractor_id);
+        const workerIdInContract = getRefId(contract.worker_id);
+
         // Basic authorization
-        const isContractor = contract.contractor_id._id.toString() === userId.toString();
+        const isContractor = contractorId === userId.toString();
         
         const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
-        const isWorkerMatch = contract.worker_id.toString() === userId.toString();
-        const isProfileMatch = workerProfile && (contract.worker_id.toString() === workerProfile._id.toString());
+        
+        const isWorkerMatch = workerIdInContract === userId.toString();
+        const isProfileMatch = workerProfile && (workerIdInContract === workerProfile._id.toString());
         const isWorker = isWorkerMatch || isProfileMatch;
 
         const isAuthorized = isContractor || isWorker || req.user.role === 'admin';
 
         if (!isAuthorized) {
+            logger.warn(`[ContractController] Unauthorized access attempt for contract ${id} by user ${userId}`);
             return res.status(403).json({ success: false, message: 'Unauthorized to view this contract' });
         }
 
