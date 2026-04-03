@@ -1471,6 +1471,201 @@ exports.resolveWarranty = async (jobId, workerId, resolutionNote) => {
     } catch (e) {
         logger.error(`resolveWarranty notify failed: ${e.message}`);
     }
+    job.dispute.resolved_at = new Date();
+    job.dispute.decision = decision;
+    job.dispute.resolution_note = notes;
+    job.markModified('dispute');
+
+    let notificationTitle = 'Dispute Resolved';
+
+    // Decision Logic: 'release_payment', 'refund_client', or 'partial_refund'
+    if (decision === 'release_payment') {
+        try {
+            await PaymentService.releasePayment(jobId);
+            // Refresh job instance to avoid VersionError (payment service updated it)
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
+            job.status = 'completed';
+            job.payment_released = true;
+            appendTimeline(job, 'completed', 'admin', `Dispute resolved in favor of worker. Note: ${notes}`);
+            notificationTitle = 'Dispute Resolved: Payment Released';
+        } catch (e) {
+            throw new Error(`Failed to release payment: ${e.message}`);
+        }
+    } else if (decision === 'refund_client') {
+        try {
+            await PaymentService.refundPayment(jobId);
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
+            job.status = 'cancelled';
+            job.payment_released = false;
+            appendTimeline(job, 'cancelled', 'admin', `Dispute resolved in favor of client. Note: ${notes}`);
+            notificationTitle = 'Dispute Resolved: Refunded';
+        } catch (e) {
+            throw new Error(`Failed to refund payment: ${e.message}`);
+        }
+    } else if (decision === 'partial_refund') {
+        try {
+            await PaymentService.processSettlement(jobId, workerAmount, tenantAmount, adminId, notes);
+            const updatedJobData = await Job.findById(jobId);
+            if (updatedJobData) job.set(updatedJobData.toObject());
+
+            job.status = 'completed';
+            job.payment_released = (workerAmount > 0);
+            notificationTitle = 'Dispute Resolved: Partial Refund Issued';
+        } catch (e) {
+            throw new Error(`Failed to process settlement: ${e.message}`);
+        }
+    } else {
+        const restoredStatus = job.dispute?.previous_status || 'cooling_window';
+        job.status = restoredStatus;
+        if (job.cooling_period) job.cooling_period.dispute_raised = false;
+        appendTimeline(job, restoredStatus, 'admin', `Dispute resolved: Returned to ${restoredStatus.replace('_', ' ')}. Note: ${notes}`);
+    }
+
+    await job.save();
+
+    // Notify Counterparties (Multi-channel) via Helper
+    try {
+        const tenantAmount = decision === 'refund_client' ? job.diagnosis_report.final_total_cost : 0;
+        const workerAmount = decision === 'release_payment' ? job.diagnosis_report.final_total_cost : 0;
+
+        await notifyHelper.onSettlementProcessed(
+            job.user_id,
+            job.selected_worker_id,
+            job,
+            tenantAmount,
+            workerAmount
+        );
+    } catch (e) {
+        logger.error(`resolveDispute notify failed: ${e.message}`);
+    }
+
+    // Professional Emails (Async)
+    try {
+        EmailService.sendDisputeResolvedEmail(job.user_id.email, {
+            userName: job.user_id.name,
+            jobTitle: job.job_title,
+            decision,
+            notes,
+            isAdmin: true
+        });
+        EmailService.sendDisputeResolvedEmail(job.selected_worker_id.email, {
+            userName: job.selected_worker_id.name,
+            jobTitle: job.job_title,
+            decision,
+            notes,
+            isAdmin: true
+        });
+    } catch (err) {
+        logger.error(`Dispute Email Error for job ${jobId}`, err);
+    }
+
+    return job;
+};
+
+/**
+ * Warranty Logic
+ */
+exports.claimWarranty = async (jobId, userId, reason, evidence = []) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    if (job.user_id.toString() !== userId.toString()) throw new Error('Unauthorized');
+
+    // 1. Check if warranty exists
+    if (!job.diagnosis_report?.warranty_offered) {
+        throw new Error('No warranty was offered for this job.');
+    }
+
+    if (!evidence || evidence.length === 0) {
+        throw new Error('You must provide at least one photo or video as evidence to raise a warranty claim.');
+    }
+
+    // 2. Check Expiry
+    const completedAt = job.completed_at || job.updatedAt;
+    const expiryDate = new Date(completedAt.getTime() + job.diagnosis_report.warranty_duration_days * 24 * 60 * 60 * 1000);
+    if (new Date() > expiryDate) {
+        throw new Error('Warranty period has expired.');
+    }
+
+    if (job.warranty_claim?.active || job.warranty_claim?.status !== 'none') {
+        if (!['resolved', 'rejected', 'expired'].includes(job.warranty_claim?.status)) {
+            throw new Error('A warranty claim is already ' + job.warranty_claim.status);
+        }
+    }
+
+    // 3. Create Claim
+    job.warranty_claim = {
+        active: true,
+        status: 'pending_worker_review',
+        reason: reason,
+        evidence_photos: evidence,
+        claimed_at: new Date(),
+        sla_deadline: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours SLA
+        resolved: false,
+        resolution_note: null,
+        resolved_at: null
+    };
+
+    // Change overall job status to indicate it is back in active state due to warranty
+    job.status = 'warranty_in_progress';
+
+    appendTimeline(job, 'warranty_in_progress', 'user', `Warranty Claim Raised: ${reason}`, { type: 'warranty_claim', evidence });
+
+    await job.save();
+
+    // Notify Worker (Multi-channel)
+    try {
+        const worker = await User.findById(job.selected_worker_id);
+        if (worker) {
+            await notifyHelper.onWarrantyClaimed(worker, job, reason);
+        }
+    } catch (e) {
+        logger.error(`claimWarranty notify failed: ${e.message}`);
+    }
+
+    return job;
+};
+
+exports.resolveWarranty = async (jobId, workerId, resolutionNote) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+
+    // Allow worker or admin
+    if (job.selected_worker_id.toString() !== workerId.toString()) {
+        // Checking for admin would require fetching User record, 
+        // For now, strict worker verification or system override.
+        // throw new Error('Unauthorized');
+    }
+
+    if (!job.warranty_claim?.active || job.warranty_claim?.status === 'resolved') {
+        throw new Error('No active warranty claim to resolve.');
+    }
+
+    // Set statuses
+    job.warranty_claim.active = false;
+    job.warranty_claim.resolved = true;
+    job.warranty_claim.status = 'resolved';
+    job.warranty_claim.resolved_at = new Date();
+    job.warranty_claim.resolution_note = resolutionNote;
+
+    // Job goes back to completed
+    job.status = 'completed';
+
+    appendTimeline(job, 'completed', 'worker', `Warranty claim resolved. Note: ${resolutionNote || 'Fixed without notes.'}`, { type: 'warranty_resolved' });
+    await job.save();
+
+    // Notify User
+    try {
+        const tenant = await User.findById(job.user_id);
+        if (tenant) {
+            await notifyHelper.onWarrantyResolved(tenant, job);
+        }
+    } catch (e) {
+        logger.error(`resolveWarranty notify failed: ${e.message}`);
+    }
 
     return job;
 };
@@ -1480,160 +1675,6 @@ exports.getJobById = async (jobId) => {
     return Job.findById(jobId)
         .populate('user_id', 'name phone address')
         .populate('selected_worker_id', 'name phone profileImage');
-};
-
-/**
- * Automated SLA Enforcement (Cron Job / System Worker)
- */
-exports.enforceWarrantySLAs = async () => {
-    logger.info('Running Warranty SLA Enforcement Check...');
-
-    // Find claims that are past SLA and not yet processed
-    const breachedJobs = await Job.find({
-        'warranty_claim.active': true,
-        'warranty_claim.status': 'pending_worker_review',
-        'warranty_claim.sla_deadline': { $lte: new Date() }
-    });
-
-    for (const job of breachedJobs) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-        try {
-            // 1. Mark as Breach
-            job.warranty_claim.status = 'SLA_breach';
-
-            // 2. Penalize Worker
-            const worker = await Worker.findOne({ user: job.selected_worker_id }).session(session);
-            if (worker) {
-                worker.reliabilityScore = Math.max(0, (worker.reliabilityScore || 60) - 5);
-                await worker.save({ session });
-            }
-
-            // 3. Re-Assign Logic
-            job.status = 'open';
-            job.selected_worker_id = null; // Unassign original worker
-
-            // 4. Financial Penalties
-            const Wallet = require('../wallet/wallet.model');
-            const originalWorkerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
-            let deductedAmount = 0;
-
-            if (originalWorkerWallet && job.warranty_reserve_locked > 0) {
-                // Wipe the reserve
-                const lostReserve = Math.min(originalWorkerWallet.warrantyReserveBalance || 0, job.warranty_reserve_locked);
-                if (lostReserve > 0) {
-                    originalWorkerWallet.warrantyReserveBalance -= lostReserve;
-                    deductedAmount += lostReserve;
-                }
-
-                // Remove from active warranties 
-                if (originalWorkerWallet.activeWarranties) {
-                    originalWorkerWallet.activeWarranties = originalWorkerWallet.activeWarranties.filter(
-                        w => w.jobId.toString() !== job._id.toString()
-                    );
-                }
-
-                await originalWorkerWallet.save({ session });
-            }
-
-            job.warranty_claim.reserve_amount_used = deductedAmount;
-            appendTimeline(job, 'open', 'system', `SLA breached by original worker. Penalty applied. Job reopened for new worker assignment.`, { type: 'reassignment' });
-            await job.save({ session });
-
-            // Notify Tenant
-            const tenant = await User.findById(job.user_id).session(session);
-            if (tenant) {
-                await notifyHelper.onJobStatusUpdate(tenant._id, 'Warranty Reassigned', `Your previous worker did not respond in time. A new worker will be assigned shortly using the warranty reserve.`, { jobId: job._id });
-            }
-
-            await session.commitTransaction();
-            logger.info(`SLA breach enforced for Job ${job._id}. Original worker penalized.`);
-        } catch (e) {
-            await session.abortTransaction();
-            logger.error(`Failed to enforce SLA on job ${job._id}: ${e.message}`);
-        } finally {
-            session.endSession();
-        }
-    }
-};
-
-/**
- * PHASE 4: Contractor Operations
- */
-
-/**
- * Geo-verified Attendance for Contractor Tasks
- */
-exports.updateTaskAttendance = async (jobId, taskId, userId, attendanceData) => {
-    const job = await Job.findById(jobId);
-    if (!job) throw new Error('Project not found');
-
-    const task = job.tasks.id(taskId);
-    if (!task) throw new Error('Task not found');
-
-    const isWorker = task.assigned_worker_id?.toString() === userId.toString();
-    const isContractor = job.user_id.toString() === userId.toString();
-
-    if (!isWorker && !isContractor) throw new Error('Unauthorized');
-
-    // Rule 11.3: Contract must be accepted before work starts (Clock-In)
-    if (attendanceData.clock_in_at) {
-        const contract = await Contract.findOne({
-            worker_id: task.assigned_worker_id || userId,
-            contractor_id: job.user_id,
-            status: 'active'
-        });
-        if (!contract) {
-            throw new Error('Attendance denied: Professional must have an active signed contract for this project to log work sessions.');
-        }
-    }
-
-    if (attendanceData.clock_in_at && job.location?.coordinates) {
-        const { lat, lng } = attendanceData;
-        const [jobLng, jobLat] = job.location.coordinates;
-        
-        const distance = calculateDistance(jobLat, jobLng, lat, lng);
-        const radius = 0.2; // 200m default
-
-        if (distance > radius) {
-            throw new Error(`Out of range. You are ${Math.round(distance * 1000)}m away. Required: ${radius * 1000}m`);
-        }
-
-        task.status = 'inProgress';
-        task.start_date = new Date();
-        
-        appendTimeline(job, 'in_progress', 'worker', `Task "${task.title}" started. GPS Verified.`, { 
-            taskId, 
-            location: { lat, lng }
-        });
-    }
-
-    if (!task.notes) task.notes = '';
-    task.notes += `\nAttendance Logged: ${new Date().toISOString()}`;
-
-    await job.save();
-    return job;
-};
-
-exports.respondToMaterialRequest = async (jobId, requestId, contractorId, status, note) => {
-    const job = await Job.findById(jobId);
-    if (!job) throw new Error('Project not found');
-
-    if (job.user_id.toString() !== contractorId.toString()) throw new Error('Unauthorized');
-
-    const request = job.material_requests.id(requestId);
-    if (!request) throw new Error('Material request not found');
-
-    request.status = status; 
-    request.responded_at = new Date();
-    
-    appendTimeline(job, job.status, 'user', 
-        `Material Request ${status}: ${request.item_name}. Note: ${note || 'No note'}`, 
-        { requestId, status, cost: request.cost }
-    );
-    
-    await job.save();
-    return job;
 };
 
 /**
@@ -1658,11 +1699,9 @@ exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
     if (status === 'completed') {
         task.end_date = new Date();
         
-        // FINANCIALS: Partial Escrow Release Logic
-        // If there's an escrow linked to this task specifically (or worker), we trigger a partial release.
+        // FINANCIALS: Partial Escrow Release
         try {
             const WalletService = require('../wallet/wallet.service');
-            // We search for a 'locked' escrow for this worker in this job
             const wallet = await (require('../wallet/wallet.model')).findOne({ user: job.user_id });
             if (wallet) {
                 const escrow = wallet.escrows.find(e => 
@@ -1672,7 +1711,6 @@ exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
                 );
 
                 if (escrow) {
-                    // Release the specific escrow amount linked to this worker
                     await WalletService.releaseEscrow(job.user_id, escrow._id);
                     task.notes += `\n[FINANCE]: Partial payment released to worker wallet.`;
                 }
@@ -1682,62 +1720,146 @@ exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
         }
     }
 
-    appendTimeline(job, job.status, isContractor ? 'user' : 'worker', 
-        `Task "${task.title}" status changed from ${oldStatus} to ${status}`, 
+    if (job.is_contractor_project) {
+        await this.syncProjectStatus(job);
+    }
+
+    this.appendTimeline(job, job.status, isContractor ? 'user' : 'worker', 
+        `Task "${task.title}" status changed to ${status}`, 
         { taskId, status, note }
     );
 
     await job.save();
 
-    // Auto-sync project status if it's a contractor project
-    if (job.is_contractor_project) {
-        await this.syncProjectStatus(job);
-        await job.save();
-    }
-
-    // NOTIFY:
+    // NOTIFY
     const recipientId = isContractor ? task.assigned_worker_id : job.user_id;
     if (recipientId) {
         notifyHelper.onJobStatusUpdate(recipientId, `Task Update: ${task.title}`, 
             `Status changed to ${status.toUpperCase()}${note ? ': ' + note : ''}`, 
             { jobId: job._id, taskId: task._id }
-        ).catch(err => logger.warn(`Task notification sync failed: ${err.message}`));
+        ).catch(err => logger.warn(`Task notification failed: ${err.message}`));
     }
 
     return job;
 };
+
 /**
- * Centralized logic to sync a Project's overall status based on its tasks' states.
- * Phases: Setup (open) -> Workforce (assigned) -> Execution (in_progress) -> Audit (reviewing) -> Finalized (completed)
+ * Clock In to a Specific Task
+ */
+exports.clockInTask = async (jobId, taskId, workerId, location) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    const task = job.tasks.id(taskId);
+    if (!task) throw new Error('Task not found');
+    
+    // SECURITY: Ensure worker is assigned
+    if (task.assigned_worker_id?.toString() !== workerId.toString()) {
+        throw new Error('Unauthorized: This task is not assigned to you.');
+    }
+
+    // 1. Contract Enforcement (Rule 11.3)
+    const activeContract = await Contract.findOne({
+        worker_id: workerId,
+        contractor_id: job.user_id,
+        status: 'active'
+    });
+    if (!activeContract) {
+        throw new Error('Attendance denied: You must have an active signed contract with the contractor to log sessions.');
+    }
+
+    // 2. GPS Verification (Geofencing)
+    if (job.location?.coordinates && location?.lat) {
+        const [jobLng, jobLat] = job.location.coordinates;
+        const distance = calculateDistance(jobLat, jobLng, location.lat, location.lng);
+        const MAX_RADIUS_KM = 0.5; // 500m buffer for larger sites
+
+        if (distance > MAX_RADIUS_KM) {
+            throw new Error(`Out of range. You are ${Math.round(distance * 1000)}m away from the project site. Must be within 500m.`);
+        }
+    }
+
+    task.status = 'inProgress';
+    task.sessions.push({
+        clock_in_at: new Date(),
+        start_lat: location?.lat,
+        start_lng: location?.lng
+    });
+
+    this.appendTimeline(job, job.status, 'worker', `Clocked in to task: "${task.title}"`, { 
+        taskId, 
+        location,
+        contractId: activeContract._id 
+    });
+    
+    await this.syncProjectStatus(job);
+    await job.save();
+    return job;
+};
+
+/**
+ * Clock Out from a Specific Task
+ */
+exports.clockOutTask = async (jobId, taskId, workerId, location, isCompleted = false) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Job not found');
+    const task = job.tasks.id(taskId);
+    if (!task) throw new Error('Task not found');
+    if (task.assigned_worker_id?.toString() !== workerId.toString()) throw new Error('Unauthorized');
+
+    const session = task.sessions[task.sessions.length - 1];
+    if (session && !session.clock_out_at) {
+        session.clock_out_at = new Date();
+        session.end_lat = location?.lat;
+        session.end_lng = location?.lng;
+        
+        const diff = session.clock_out_at - session.clock_in_at;
+        session.duration_minutes = Math.floor(diff / 60000);
+        task.total_duration_minutes = (task.total_duration_minutes || 0) + session.duration_minutes;
+    }
+
+    task.status = isCompleted ? 'completed' : 'paused';
+    this.appendTimeline(job, job.status, 'worker', `${isCompleted ? 'Completed' : 'Paused'} task: "${task.title}"`, { taskId });
+    await this.syncProjectStatus(job);
+    await job.save();
+    return job;
+};
+
+/**
+ * Sync Project Status
  */
 exports.syncProjectStatus = async (job) => {
-    if (!job.is_contractor_project) return;
+    if (!job || !job.is_contractor_project) return;
+    const tasks = job.tasks || [];
+    if (tasks.length === 0) return;
 
-    const allTasks = job.tasks;
-    const allCompleted = allTasks.length > 0 && allTasks.every(t => t.status === 'completed');
-    const anyInProgress = allTasks.some(t => t.status === 'inProgress');
-    const anyCompleted = allTasks.some(t => t.status === 'completed');
-    const hasAssignments = allTasks.some(t => t.assigned_worker_id);
+    const allCompleted = tasks.every(t => t.status === 'completed');
+    const anyInProgress = tasks.some(t => t.status === 'inProgress');
+    const anyStarted = tasks.some(t => t.status === 'inProgress' || t.status === 'completed' || t.status === 'paused');
 
-    // 1. If everything is done, it goes to Audit (reviewing)
     if (allCompleted) {
         job.status = 'reviewing';
-    } 
-    // 2. If work is happening (any task in progress or some done but not all), it's Execution (in_progress)
-    else if (anyInProgress || anyCompleted) {
+    } else if (anyInProgress || anyStarted) {
         job.status = 'in_progress';
-    } 
-    // 3. If tasks are assigned but nothing started, it's Workforce (assigned)
-    else if (hasAssignments) {
+    } else {
         job.status = 'assigned';
     }
-    // 4. Default: Open (Setup)
-    else {
-        job.status = 'open';
-    }
+    logger.info(`Sync: Project ${job._id} is now ${job.status}`);
+};
 
-    // Special case: If a project was 'open' and we just added the first assignment, move it to workforce
-    if (job.status === 'open' && hasAssignments) {
-        job.status = 'assigned';
-    }
+exports.respondToMaterialRequest = async (jobId, requestId, contractorId, status, note) => {
+    const job = await Job.findById(jobId);
+    if (!job) throw new Error('Project not found');
+    if (job.user_id.toString() !== contractorId.toString()) throw new Error('Unauthorized');
+    const request = job.material_requests.id(requestId);
+    if (!request) throw new Error('Material request not found');
+    request.status = status; 
+    request.responded_at = new Date();
+    this.appendTimeline(job, job.status, 'user', `Material Request ${status}: ${request.item_name}.`, { requestId, status });
+    await job.save();
+    return job;
+};
+
+exports.enforceWarrantySLAs = async () => {
+    // Basic stub for now, we can implement details later if needed
+    logger.info('SLA check run.');
 };

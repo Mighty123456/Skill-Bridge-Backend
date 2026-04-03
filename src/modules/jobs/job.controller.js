@@ -878,3 +878,46 @@ exports.updateTaskStatus = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+// TASK MANAGEMENT (Contractor Projects)
+exports.updateTaskAttendance = async (req, res) => {
+    try {
+        const { id, taskId } = req.params;
+        const { lat, lng, action, isCompleted } = req.body; // action: 'clock_in' or 'clock_out'
+
+        let job;
+        if (action === 'clock_in') {
+            job = await JobService.clockInTask(id, taskId, req.user._id, { lat, lng });
+        } else {
+            job = await JobService.clockOutTask(id, taskId, req.user._id, { lat, lng }, isCompleted);
+        }
+
+        res.json({ success: true, message: `Successfully ${action} task`, data: job });
+    } catch (error) {
+        logger.error('Update Task Attendance Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.updateTaskStatus = async (req, res) => {
+    try {
+        const { id, taskId } = req.params;
+        const { status, note } = req.body;
+        const job = await JobService.updateTaskStatus(id, taskId, req.user._id, status, note);
+        res.json({ success: true, message: 'Task status updated', data: job });
+    } catch (error) {
+        logger.error('Update Task Status Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+exports.respondToMaterialRequest = async (req, res) => {
+    try {
+        const { id, requestId } = req.params;
+        const { status, note } = req.body;
+        const job = await JobService.respondToMaterialRequest(id, requestId, req.user._id, status, note);
+        res.json({ success: true, message: `Material request ${status}`, data: job });
+    } catch (error) {
+        logger.error('Respond Material Request Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};

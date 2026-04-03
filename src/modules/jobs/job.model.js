@@ -171,7 +171,7 @@ const jobSchema = new mongoose.Schema(
             description: { type: String },
             status: { 
                 type: String, 
-                enum: ['pending', 'inProgress', 'completed', 'delayed', 'cancelled'], 
+                enum: ['pending', 'inProgress', 'paused', 'completed', 'delayed', 'cancelled'], 
                 default: 'pending' 
             },
             assigned_worker_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -187,12 +187,16 @@ const jobSchema = new mongoose.Schema(
             },
             completion_photos: [{ type: String }],
             notes: { type: String },
-            attendance_metadata: {
+            sessions: [{
+                clock_in_at: { type: Date, required: true },
+                clock_out_at: { type: Date },
                 start_lat: Number,
                 start_lng: Number,
-                clock_in_at: Date,
-                clock_out_at: Date
-            },
+                end_lat: Number,
+                end_lng: Number,
+                duration_minutes: { type: Number, default: 0 }
+            }],
+            total_duration_minutes: { type: Number, default: 0 },
             dispute_metadata: {
                 evidence: String,
                 note: String
