@@ -459,17 +459,8 @@ exports.addTaskToJob = async (req, res) => {
 
         job.tasks.push(newTask);
         
-        // Phase 12 Enhancement: Auto-transition status when first worker assigned
-        if (job.status === 'open' && assigned_worker_id) {
-            job.status = 'assigned';
-        }
-        // Phase 4 Constraint: Log schedule updates
-        JobService.appendTimeline(
-            job, 
-            job.status, 
-            'user', 
-            `Scheduled new task: "${title}" assigned to ${assigned_worker_name} for ${new Date(due_date).toDateString()}`
-        );
+        // Phase 12 Enhancement: Auto-sync project status
+        await JobService.syncProjectStatus(job);
 
         await job.save();
 
@@ -556,23 +547,9 @@ exports.updateTask = async (req, res) => {
             `Updated task "${oldTitle}": ${updateData.status ? 'Status changed to ' + updateData.status : 'Schedule modified'}`
         );
 
-        // Phase 12 Enhancement: Auto-transition status when worker is assigned
-        if (job.status === 'open' && (updateData.assigned_worker_id || task.assigned_worker_id)) {
-            job.status = 'assigned';
-        }
-
         // Auto-sync parent job status from aggregate task states
         if (updateData.status) {
-            const allTasks = job.tasks;
-            const allCompleted = allTasks.length > 0 && allTasks.every(t => t.status === 'completed');
-            const anyInProgress = allTasks.some(t => t.status === 'inProgress');
-            const anyCompleted = allTasks.some(t => t.status === 'completed');
-
-            if (allCompleted) {
-                job.status = 'reviewing';
-            } else if (anyInProgress || anyCompleted) {
-                job.status = 'in_progress';
-            }
+            await JobService.syncProjectStatus(job);
         }
 
         await job.save();
@@ -706,6 +683,9 @@ exports.deleteTask = async (req, res) => {
             'user', 
             `Removed scheduled task: "${taskTitle}"`
         );
+
+        // Auto-sync project status after task removal
+        await JobService.syncProjectStatus(job);
 
         await job.save();
 

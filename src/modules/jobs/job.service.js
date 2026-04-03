@@ -556,6 +556,12 @@ exports.startJob = async (jobId, workerId, otp, isContractorRequest = false) => 
         if (!contract) {
             throw new Error('Contract access denied: An active signed contract is required before starting this professional work.');
         }
+
+        // NEW CONSTRAINT: Worker must have at least one task assigned
+        const hasTasks = job.tasks.some(t => t.assigned_worker_id?.toString() === workerId.toString());
+        if (!hasTasks) {
+            throw new Error('Action denied: No tasks have been assigned to you for this project yet. Please contact the contractor.');
+        }
     }
 
     if (!isContractorProject) {
@@ -1683,6 +1689,12 @@ exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
 
     await job.save();
 
+    // Auto-sync project status if it's a contractor project
+    if (job.is_contractor_project) {
+        await this.syncProjectStatus(job);
+        await job.save();
+    }
+
     // NOTIFY:
     const recipientId = isContractor ? task.assigned_worker_id : job.user_id;
     if (recipientId) {
@@ -1693,4 +1705,39 @@ exports.updateTaskStatus = async (jobId, taskId, userId, status, note) => {
     }
 
     return job;
+};
+/**
+ * Centralized logic to sync a Project's overall status based on its tasks' states.
+ * Phases: Setup (open) -> Workforce (assigned) -> Execution (in_progress) -> Audit (reviewing) -> Finalized (completed)
+ */
+exports.syncProjectStatus = async (job) => {
+    if (!job.is_contractor_project) return;
+
+    const allTasks = job.tasks;
+    const allCompleted = allTasks.length > 0 && allTasks.every(t => t.status === 'completed');
+    const anyInProgress = allTasks.some(t => t.status === 'inProgress');
+    const anyCompleted = allTasks.some(t => t.status === 'completed');
+    const hasAssignments = allTasks.some(t => t.assigned_worker_id);
+
+    // 1. If everything is done, it goes to Audit (reviewing)
+    if (allCompleted) {
+        job.status = 'reviewing';
+    } 
+    // 2. If work is happening (any task in progress or some done but not all), it's Execution (in_progress)
+    else if (anyInProgress || anyCompleted) {
+        job.status = 'in_progress';
+    } 
+    // 3. If tasks are assigned but nothing started, it's Workforce (assigned)
+    else if (hasAssignments) {
+        job.status = 'assigned';
+    }
+    // 4. Default: Open (Setup)
+    else {
+        job.status = 'open';
+    }
+
+    // Special case: If a project was 'open' and we just added the first assignment, move it to workforce
+    if (job.status === 'open' && hasAssignments) {
+        job.status = 'assigned';
+    }
 };
