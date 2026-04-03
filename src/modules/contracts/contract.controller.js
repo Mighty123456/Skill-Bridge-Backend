@@ -174,7 +174,7 @@ exports.respondToContract = async (req, res) => {
     try {
         const { id } = req.params;
         const { status, note, signature } = req.body;
-        const workerId = req.user._id;
+        const userId = req.user._id;
 
         if (!['active', 'rejected'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid response status' });
@@ -198,14 +198,17 @@ exports.respondToContract = async (req, res) => {
             return res.status(400).json({ success: false, message: `Contract is already ${contract.status}` });
         }
 
+        const User = require('../users/user.model');
+        const respondingUser = await User.findById(userId);
+
         // Start Transaction for atomic status update + escrow reversal
         const mongoose = require('mongoose');
         const session = await mongoose.startSession();
         session.startTransaction();
 
         try {
-            if (status === 'accepted') {
-                contract.status = 'accepted';
+            if (status === 'active' || status === 'accepted') {
+                contract.status = 'active';
                 contract.signed_at = new Date();
                 contract.worker_signature = signature;
             } else {
@@ -241,7 +244,7 @@ exports.respondToContract = async (req, res) => {
             await session.commitTransaction();
 
             // Notify contractor
-            await notifyHelper.onContractResponded(contract.contractor_id, contract.title, req.user.name, contract.status);
+            await notifyHelper.onContractResponded(contract.contractor_id, contract.title, respondingUser?.name || 'A Professional', contract.status);
 
             res.status(200).json({
                 success: true,
