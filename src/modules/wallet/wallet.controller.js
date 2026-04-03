@@ -141,6 +141,69 @@ exports.getInvoice = async (req, res, next) => {
 };
 
 /**
+ * Verify Wallet Top-up (Fallback for webhooks)
+ */
+exports.verifyTopup = async (req, res, next) => {
+    try {
+        const { sessionId } = req.query;
+        if (!sessionId) return res.status(400).json({ success: false, message: 'Session ID is required' });
+
+        // Reuse payment service to check Stripe directly
+        const session = await PaymentService.verifyStripeSession(sessionId);
+        
+        if (session && session.payment_status === 'paid' && session.metadata?.type === 'wallet_topup') {
+            const amount = Number(session.metadata.amount);
+            const userId = session.metadata.userId;
+
+            if (userId !== req.user._id.toString()) {
+                return res.status(403).json({ success: false, message: 'Unauthorized session' });
+            }
+
+            // Check if already processed to prevent double credit
+            const Payment = require('../payments/payment.model');
+            const existingPayment = await Payment.findOne({ transactionId: sessionId });
+            
+            if (existingPayment) {
+                const wallet = await WalletService.getWallet(userId);
+                return res.status(200).json({
+                    success: true,
+                    message: 'Top-up already processed',
+                    data: wallet
+                });
+            }
+
+            // Manually trigger the credit logic normally done by webhook
+            const payment = new Payment({
+                transactionId: sessionId,
+                user: userId,
+                amount: amount,
+                type: 'topup',
+                status: 'completed',
+                paymentMethod: 'stripe',
+                gatewayResponse: { stripeSessionId: sessionId, isManualVerify: true }
+            });
+            
+            await payment.save();
+            await WalletService.creditWallet(userId, amount);
+
+            const wallet = await WalletService.getWallet(userId);
+            return res.status(200).json({
+                success: true,
+                message: 'Top-up verified and credited successfully',
+                data: wallet
+            });
+        }
+
+        res.status(400).json({
+            success: false,
+            message: 'Payment not found or not completed yet'
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
  * Request Payout / Manual Withdrawal
  */
 exports.withdraw = async (req, res, next) => {

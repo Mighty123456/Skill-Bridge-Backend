@@ -31,6 +31,7 @@ router.get('/me', authenticate, WalletController.getMyWallet);
 
 // Worker Withdrawal (role-guarded + rate-limited)
 router.post('/withdraw', authenticate, authorize('worker'), withdrawLimiter, WalletController.withdraw);
+router.get('/verify', authenticate, WalletController.verifyTopup);
 router.get('/history', authenticate, WalletController.getHistory);
 router.get('/transactions', authenticate, WalletController.getHistory); // Alias for compatibility
 router.get('/payout-status', authenticate, WalletController.getPayoutStatus);

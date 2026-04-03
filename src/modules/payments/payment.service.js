@@ -895,7 +895,16 @@ exports.createStripeCheckoutSession = async (userId, amount, backEndUrl = null) 
 };
 
 /**
- * STRIPE: Create Checkout Session for specific Job (Direct Pay)
+ * STRIPE: Verify Session Directly (Fallback)
+ */
+exports.verifyStripeSession = async (sessionId) => {
+    const stripe = getStripe();
+    if (!stripe) throw new Error('Stripe is not configured');
+    return await stripe.checkout.sessions.retrieve(sessionId);
+};
+
+/**
+ * STRIPE: Create Checkout Session for Job Approval
  */
 exports.createJobCheckoutSession = async (jobId, userId, backEndUrl = null) => {
     const job = await Job.findById(jobId).populate('selected_worker_id');
