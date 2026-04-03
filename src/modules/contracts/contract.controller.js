@@ -388,17 +388,19 @@ exports.getContractDetails = async (req, res) => {
         };
 
         const contractorId = getRefId(contract.contractor_id);
-        const workerIdInContract = getRefId(contract.worker_id);
+        const workerUserIdInContract = getRefId(contract.worker_id);
 
         const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
-
+        
         const isContractor = userId.toString() === contractorId;
-        const isProfileMatch = workerProfile && (workerIdInContract === workerProfile._id.toString());
-        const isDirectWorker = userId.toString() === workerIdInContract;
+        const isDirectWorker = userId.toString() === workerUserIdInContract;
+        const isProfileMatch = workerProfile && (workerUserIdInContract === workerProfile._id.toString());
+        
+        const isAuthorized = isContractor || isDirectWorker || isProfileMatch || req.user.role === 'admin';
 
-        if (!isContractor && !isProfileMatch && !isDirectWorker && req.user.role !== 'admin') {
-            logger.warn(`[ContractController] Security: Attempted unauthorized access to contract ${id} by user ${userId}`);
+        if (!isAuthorized) {
+            logger.warn(`[ContractController] Security: Attempted unauthorized access to contract ${id} by user ${userId} (${req.user.role}). Expected Contractor: ${contractorId} or Worker: ${workerUserIdInContract}`);
             return res.status(403).json({ success: false, message: 'Unauthorized to view this agreement' });
         }
 
@@ -447,16 +449,58 @@ exports.terminateContract = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Unauthorized to terminate this contract' });
         }
 
-        contract.status = 'terminated';
-        contract.actual_end_date = new Date();
-        contract.timeline.push({
-            status: 'terminated',
-            timestamp: new Date(),
-            note: reason || `Contract terminated early by ${req.user.role}.`,
-            actor: req.user.role === 'contractor' ? 'contractor' : 'worker'
-        });
+        // ── Transactional Update for Safety ──
+        const mongoose = require('mongoose');
+        const session = await mongoose.startSession();
+        session.startTransaction();
 
-        await contract.save();
+        try {
+            const oldStatus = contract.status;
+            contract.status = 'terminated';
+            contract.actual_end_date = new Date();
+            contract.timeline.push({
+                status: 'terminated',
+                timestamp: new Date(),
+                note: reason || `Contract terminated early by ${req.user.role}.`,
+                actor: req.user.role === 'contractor' ? 'contractor' : 'worker'
+            });
+
+            // RELEASE FUNDS: Only if it was 'pending' or 'active' (not already paid/released)
+            // For now, if a contract is terminated, the contractor gets the full escrow back.
+            // In a more complex system, we might calculate prorated payments.
+            if (oldStatus === 'pending' || oldStatus === 'active') {
+                const Wallet = require('../wallet/wallet.model');
+                const wallet = await Wallet.findOne({ user: contract.contractor_id }).session(session);
+                
+                if (wallet) {
+                    const costToReturn = contract.agreement_type === 'fixed' ? Number(contract.total_value) : Number(contract.monthly_rate);
+                    
+                    if (!isNaN(costToReturn) && costToReturn > 0) {
+                        // Safety: Don't decrement below 0
+                        const amountToReturn = Math.min(wallet.escrowBalance, costToReturn);
+                        wallet.escrowBalance = Math.max(0, wallet.escrowBalance - amountToReturn);
+                        wallet.balance += amountToReturn;
+                        await wallet.save({ session });
+                        logger.info(`[Contract] Refunded ₹${amountToReturn} back to contractor ${contract.contractor_id} on termination.`);
+                        
+                        contract.timeline.push({
+                            status: 'refunded',
+                            timestamp: new Date(),
+                            note: `₹${amountToReturn} released from escrow back to wallet.`,
+                            actor: 'system'
+                        });
+                    }
+                }
+            }
+
+            await contract.save({ session });
+            await session.commitTransaction();
+        } catch (txnError) {
+            await session.abortTransaction();
+            throw txnError;
+        } finally {
+            session.endSession();
+        }
 
         // Notify the other party
         const recipientId = isContractor ? contract.worker_id : contract.contractor_id;
@@ -464,7 +508,7 @@ exports.terminateContract = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: 'Contract terminated successfully',
+            message: 'Contract terminated and funds returned to wallet.',
             data: contract
         });
     } catch (error) {

@@ -607,14 +607,31 @@ exports.refundPayment = async (jobId) => {
 
         let totalRefund = 0;
 
-        // Issue Stripe refunds for each escrow payment
+        // Issue refunds for each escrow payment
         const stripe = getStripe();
         for (const payment of escrowPayments) {
             totalRefund += payment.amount;
             payment.status = 'refunded';
 
-            // Attempt Stripe refund if paid via Stripe
-            if (stripe && payment.gatewayResponse?.gateway === 'stripe') {
+            // Case A: Wallet Escrow Refund
+            if (payment.paymentMethod === 'wallet') {
+                const updatedWallet = await Wallet.findOneAndUpdate(
+                    { user: payment.user },
+                    { 
+                        $inc: { 
+                            balance: payment.amount,
+                            escrowBalance: -payment.amount
+                        } 
+                    },
+                    { session, new: true }
+                );
+                
+                if (updatedWallet) {
+                    logger.info(`Wallet Escrow Refunded: ₹${payment.amount} returned to user ${payment.user}. New Balance: ₹${updatedWallet.balance}`);
+                }
+            }
+            // Case B: Stripe Escrow Refund (Direct Pay)
+            else if (stripe && payment.gatewayResponse?.gateway === 'stripe') {
                 try {
                     const paymentIntentId = payment.gatewayResponse?.paymentIntentId;
                     if (paymentIntentId) {
