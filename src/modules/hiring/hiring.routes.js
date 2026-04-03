@@ -13,6 +13,9 @@ router.post('/request', authorize('contractor'), hiringController.createHireRequ
 // Worker views pending requests
 router.get('/requests', authorize('worker'), hiringController.getWorkerRequests);
 
+// Contractor views sent requests
+router.get('/contractor/requests', authorize('contractor'), hiringController.getContractorRequests);
+
 // Worker responds to request
 router.post('/respond', authorize('worker'), hiringController.respondToHireRequest);
 

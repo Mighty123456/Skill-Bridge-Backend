@@ -14,6 +14,12 @@ const contractSchema = new mongoose.Schema(
             required: true,
             index: true
         },
+        project_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'Job',
+            required: true,
+            index: true
+        },
         title: {
             type: String,
             required: [true, 'Contract title is required'],

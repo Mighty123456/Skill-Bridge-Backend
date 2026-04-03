@@ -18,9 +18,10 @@ exports.createContract = async (req, res) => {
             totalValue, 
             monthlyRate, 
             paymentFrequency,
-            startDate, 
-            endDate, 
+            startDate,
+            endDate,
             termsAndConditions,
+            projectId,
             currency,
             autoRenew,
             terminationNoticePeriodDays
@@ -89,10 +90,21 @@ exports.createContract = async (req, res) => {
                     timestamp: new Date(),
                     note: 'Contract offer initiated. Funds secured in escrow.',
                     actor: 'contractor'
-                }]
+                }],
+                project_id: projectId
             });
 
             await contract.save({ session });
+            
+            // Link worker to project if projectId is provided
+            if (projectId) {
+                const Job = require('../jobs/job.model');
+                await Job.findByIdAndUpdate(
+                    projectId,
+                    { $addToSet: { worker_ids: workerId } },
+                    { session }
+                );
+            }
 
             // Rule 6.3: Contract created → funds locked (escrow)
             const WalletService = require('../wallet/wallet.service');
@@ -244,7 +256,8 @@ exports.listContracts = async (req, res) => {
         const contracts = await Contract.find(query)
             .sort({ createdAt: -1 })
             .populate('contractor_id', 'name profileImage')
-            .populate('worker_id', 'name profileImage');
+            .populate('worker_id', 'name profileImage')
+            .populate('project_id', 'job_title location');
 
         res.status(200).json({
             success: true,
@@ -273,7 +286,8 @@ exports.getContractDetails = async (req, res) => {
 
         const contract = await Contract.findById(id)
             .populate('contractor_id', 'name phone email profileImage')
-            .populate('worker_id', 'name phone email profileImage');
+            .populate('worker_id', 'name phone email profileImage')
+            .populate('project_id', 'job_title location');
 
         if (!contract) {
             return res.status(404).json({ success: false, message: 'Contract not found' });
@@ -490,7 +504,8 @@ exports.createBulkContracts = async (req, res) => {
             termsAndConditions,
             currency,
             autoRenew,
-            terminationNoticePeriodDays
+            terminationNoticePeriodDays,
+            projectId // Extract projectId
         } = req.body;
 
         const workersToHire = workerConfigs || (workerIds ? workerIds.map(id => ({ workerId: id })) : []);
@@ -545,10 +560,21 @@ exports.createBulkContracts = async (req, res) => {
                     timestamp: new Date(),
                     note: 'Bulk recruitment initiated via professional template.',
                     actor: 'contractor'
-                }]
+                }],
+                project_id: projectId
             }));
 
             const contracts = await Contract.insertMany(contractsData, { session });
+
+            // Link all workers to project if projectId is provided
+            if (projectId) {
+                const Job = require('../jobs/job.model');
+                await Job.findByIdAndUpdate(
+                    projectId,
+                    { $addToSet: { worker_ids: { $each: workersToHire.map(w => w.workerId) } } },
+                    { session }
+                );
+            }
 
             // Perform Bulk Escrow Lock
             const WalletService = require('../wallet/wallet.service');

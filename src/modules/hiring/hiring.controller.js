@@ -165,6 +165,12 @@ exports.createHireRequest = async (req, res) => {
                     status: 'pending'
                 });
 
+                // Link worker to project for recruitment visibility
+                await Job.findByIdAndUpdate(
+                   projectId,
+                   { $addToSet: { worker_ids: targetWorkerIdObj } }
+                );
+
                 // 5. Send Notification
                 notifyHelper.onHireRequestReceived(targetWorkerIdObj, project, req.user.name, currentRate).catch((err) => {
                     logger.warn(`[Hiring] Notification failed for worker ${currentWorkerId}: ${err.message}`);
@@ -351,5 +357,36 @@ exports.getWorkerRequests = async (req, res) => {
     } catch (error) {
         logger.error('Get Worker Hire Requests Error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch hire requests' });
+    }
+};
+
+/**
+ * Get Contractor Sent Hire Requests
+ * @route   GET /api/hiring/contractor/requests
+ * @access  Private (Contractor)
+ */
+exports.getContractorRequests = async (req, res) => {
+    try {
+        const contractorId = req.user._id;
+        const { projectId } = req.query;
+
+        const query = { contractor: contractorId };
+        if (projectId) {
+            query.project = projectId;
+        }
+
+        const requests = await HiringRequest.find(query)
+            .populate('worker', 'name profileImage')
+            .populate('project', 'job_title')
+            .sort({ createdAt: -1 });
+
+        res.status(200).json({
+            success: true,
+            count: requests.length,
+            data: requests
+        });
+    } catch (error) {
+        logger.error('Get Contractor Hire Requests Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch sent hire requests' });
     }
 };
