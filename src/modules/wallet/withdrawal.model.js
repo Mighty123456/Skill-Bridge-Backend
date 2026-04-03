@@ -59,6 +59,11 @@ const withdrawalSchema = new mongoose.Schema(
         lastRetryAt: Date,
         failureReason: String,
         stripeTransferId: String,
+
+        // Guard flag: true once the wallet has been credited back.
+        // Prevents CRON 5 from double-crediting a wallet that was already refunded
+        // (e.g. on rejection vs. on exhausted retries).
+        refunded: { type: Boolean, default: false },
     },
     {
         timestamps: true,

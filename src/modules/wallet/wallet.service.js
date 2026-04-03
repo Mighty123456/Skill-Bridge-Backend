@@ -291,26 +291,27 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
                     const stripeResult = await PaymentService.processStripeTransfer(withdrawal.user, withdrawal.netAmount, `WITHDRAWAL_${withdrawal._id}`);
                     
                     if (stripeResult.success) {
-                        withdrawal.status = 'completed'; // Ensure status is correctly set
+                        withdrawal.status = 'completed';
                         withdrawal.adminNotes = (notes || '') + ` (Stripe Transfer: ${stripeResult.transferId})`;
                         withdrawal.stripeTransferId = stripeResult.transferId;
+                        withdrawal.refunded = false; // Funds successfully sent — no refund needed
                     } else {
+                        // Mark as failed — do NOT immediately credit the wallet.
+                        // CRON 5 (scheduler) will retry up to 3 times and then auto-refund.
+                        // This prevents the double-refund bug where CRON 5 was crediting
+                        // the wallet a second time after the immediate credit here.
                         withdrawal.status = 'failed';
                         withdrawal.failureReason = stripeResult.message;
-                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Amount refunded to wallet.)`;
-                        
-                        // Give money back to user wallet if failed
-                        await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
-                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Refunded.`);
+                        withdrawal.refunded = false; // CRON 5 will set this to true when it refunds
+                        withdrawal.adminNotes = (notes || '') + ` (Stripe transfer failed: ${stripeResult.message}. Will retry automatically.)`;
+                        logger.warn(`Stripe auto-payout failed for withdrawal ${withdrawalId}: ${stripeResult.message}. Queued for retry by scheduler.`);
                     }
                 } catch (err) {
                     withdrawal.status = 'failed';
                     withdrawal.failureReason = err.message;
-                    withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Amount refunded to wallet.)`;
-                    
-                    // Give money back to user wallet if failed
-                    await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
-                    logger.error(`Withdrawal Stripe integration error: ${err.message}. Refunded.`);
+                    withdrawal.refunded = false; // CRON 5 will set this to true when it refunds
+                    withdrawal.adminNotes = (notes || '') + ` (Stripe error: ${err.message}. Will retry automatically.)`;
+                    logger.error(`Withdrawal Stripe integration error: ${err.message}. Queued for retry by scheduler.`);
                 }
             } else {
                 // Manual Payout Mode
@@ -323,6 +324,7 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
         if (status === 'rejected') {
             // Give money back to user wallet if rejected
             await exports.creditWallet(withdrawal.user, withdrawal.amount, session);
+            withdrawal.refunded = true;
         }
 
         await withdrawal.save({ session });
@@ -339,8 +341,9 @@ exports.processWithdrawal = async (withdrawalId, adminId, status, notes) => {
             emailNotes = notes || 'Please contact support for more information.';
         } else if (finalStatus === 'failed') {
             notificationTitle = 'Withdrawal Failed';
-            notificationBody = `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} failed due to a bank/network issue. The amount has been refunded to your wallet.`;
-            emailNotes = 'Your withdrawal failed and the amount has been refunded to your wallet. Please check your bank details and try again.';
+            // Funds are NOT yet refunded — scheduler will retry, then refund if all retries exhausted
+            notificationBody = `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} failed due to a bank/network issue. We will retry automatically. If all retries fail, the amount will be returned to your wallet.`;
+            emailNotes = 'Your withdrawal encountered an issue. We will retry it automatically up to 3 times. If unsuccessful, the amount will be returned to your wallet within 8 hours.';
         } else {
              notificationTitle = 'Withdrawal Successful';
         }

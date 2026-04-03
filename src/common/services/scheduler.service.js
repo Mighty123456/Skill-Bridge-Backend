@@ -108,6 +108,7 @@ const initializeScheduler = () => {
             const Wallet = require('../../modules/wallet/wallet.model');
             const Worker = require('../../modules/workers/worker.model');
             const PaymentService = require('../../modules/payments/payment.service');
+            const Withdrawal = require('../../modules/wallet/withdrawal.model');
 
             // Find workers who are Stripe-onboarded and have balance to pay out
             const onboardedWorkers = await Worker.find({
@@ -129,6 +130,19 @@ const initializeScheduler = () => {
 
                     // Skip if worker has too many recent failures (will be handled by health check)
                     if (worker.consecutivePayoutFailures >= 3) continue;
+
+                    // GUARD: Skip if worker has an active failed/processing withdrawal.
+                    // Those funds are already "spoken for" and will be retried or refunded
+                    // by CRON 5. Auto-paying them out here would create a parallel debit 
+                    // without a matching Withdrawal record.
+                    const activeFailedWithdrawal = await Withdrawal.findOne({
+                        user: worker.user,
+                        status: { $in: ['failed', 'processing'] }
+                    });
+                    if (activeFailedWithdrawal) {
+                        logger.info(`⏭️ Auto-payout skipped for worker ${worker.user}: has active failed/processing withdrawal ${activeFailedWithdrawal._id}.`);
+                        continue;
+                    }
 
                     const payoutAmount = wallet.balance;
 
@@ -178,79 +192,92 @@ const initializeScheduler = () => {
             const failedWithdrawals = await Withdrawal.find({
                 status: 'failed',
                 retryCount: { $lt: 3 },
+                refunded: { $ne: true } // Guard: skip already-refunded withdrawals
             }).populate('user', 'name email');
 
-            if (failedWithdrawals.length === 0) return;
+            if (failedWithdrawals.length === 0) {
+                // Still need to check for exhausted ones below
+            } else {
+                logger.info(`Found ${failedWithdrawals.length} failed withdrawals to retry.`);
 
-            logger.info(`Found ${failedWithdrawals.length} failed withdrawals to retry.`);
+                for (const withdrawal of failedWithdrawals) {
+                    try {
+                        // Skip manual-method withdrawals — only Stripe payouts can be retried automatically
+                        if (withdrawal.payoutMethod !== 'stripe') {
+                            logger.info(`Skipping retry for withdrawal ${withdrawal._id}: payout method is '${withdrawal.payoutMethod}' (not Stripe).`);
+                            continue;
+                        }
 
-            for (const withdrawal of failedWithdrawals) {
-                try {
-                    // Exponential backoff: skip if last retry was too recent
-                    // Retry 1: after 2 hours, Retry 2: after 4 hours, Retry 3: after 8 hours
-                    const backoffMs = Math.pow(2, withdrawal.retryCount) * 2 * 60 * 60 * 1000;
-                    if (withdrawal.lastRetryAt && (Date.now() - withdrawal.lastRetryAt.getTime()) < backoffMs) {
-                        continue; // Too soon for next retry
-                    }
+                        // Exponential backoff: skip if last retry was too recent
+                        // Retry 1: after 2 hours, Retry 2: after 4 hours, Retry 3: after 8 hours
+                        const backoffMs = Math.pow(2, withdrawal.retryCount) * 2 * 60 * 60 * 1000;
+                        if (withdrawal.lastRetryAt && (Date.now() - withdrawal.lastRetryAt.getTime()) < backoffMs) {
+                            continue; // Too soon for next retry
+                        }
 
-                    withdrawal.retryCount += 1;
-                    withdrawal.lastRetryAt = new Date();
-                    withdrawal.status = 'processing';
-                    await withdrawal.save();
-
-                    // Attempt Stripe transfer
-                    const result = await PaymentService.processStripeTransfer(
-                        withdrawal.user._id || withdrawal.user,
-                        withdrawal.netAmount,
-                        `WITHDRAWAL_RETRY_${withdrawal._id}`
-                    );
-
-                    if (result.success) {
-                        withdrawal.status = 'completed';
-                        withdrawal.processedAt = new Date();
-                        withdrawal.stripeTransferId = result.transferId;
-                        withdrawal.failureReason = null;
+                        withdrawal.retryCount += 1;
+                        withdrawal.lastRetryAt = new Date();
+                        withdrawal.status = 'processing';
                         await withdrawal.save();
 
-                        logger.info(`✅ Withdrawal ${withdrawal._id} retry #${withdrawal.retryCount} successful. Transfer: ${result.transferId}`);
-
-                        // Notify worker
-                        await notifyHelper.onWithdrawalStatus(
+                        // Attempt Stripe transfer
+                        const result = await PaymentService.processStripeTransfer(
                             withdrawal.user._id || withdrawal.user,
-                            'Withdrawal Successful',
-                            `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} has been processed after retry.`,
-                            { withdrawalId: withdrawal._id, status: 'completed' }
+                            withdrawal.netAmount,
+                            `WITHDRAWAL_RETRY_${withdrawal._id}`
                         );
-                    } else {
-                        withdrawal.status = 'failed';
-                        withdrawal.failureReason = result.message;
-                        await withdrawal.save();
 
-                        logger.warn(`⚠️ Withdrawal ${withdrawal._id} retry #${withdrawal.retryCount} failed: ${result.message}`);
+                        if (result.success) {
+                            withdrawal.status = 'completed';
+                            withdrawal.processedAt = new Date();
+                            withdrawal.stripeTransferId = result.transferId;
+                            withdrawal.failureReason = null;
+                            withdrawal.refunded = false; // Funds sent — no refund required
+                            await withdrawal.save();
+
+                            logger.info(`✅ Withdrawal ${withdrawal._id} retry #${withdrawal.retryCount} successful. Transfer: ${result.transferId}`);
+
+                            // Notify worker
+                            await notifyHelper.onWithdrawalStatus(
+                                withdrawal.user._id || withdrawal.user,
+                                'Withdrawal Successful',
+                                `Your withdrawal of ₹${withdrawal.amount.toFixed(2)} has been processed after retry.`,
+                                { withdrawalId: withdrawal._id, status: 'completed' }
+                            );
+                        } else {
+                            withdrawal.status = 'failed';
+                            withdrawal.failureReason = result.message;
+                            await withdrawal.save();
+
+                            logger.warn(`⚠️ Withdrawal ${withdrawal._id} retry #${withdrawal.retryCount} failed: ${result.message}`);
+                        }
+                    } catch (retryErr) {
+                        withdrawal.status = 'failed';
+                        withdrawal.failureReason = retryErr.message;
+                        await withdrawal.save();
+                        logger.error(`Withdrawal retry error for ${withdrawal._id}: ${retryErr.message}`);
                     }
-                } catch (retryErr) {
-                    withdrawal.status = 'failed';
-                    withdrawal.failureReason = retryErr.message;
-                    await withdrawal.save();
-                    logger.error(`Withdrawal retry error for ${withdrawal._id}: ${retryErr.message}`);
                 }
             }
 
-            // Auto-refund withdrawals that exhausted all retries
+            // Auto-refund withdrawals that exhausted all retries AND haven't been refunded yet
             const exhaustedWithdrawals = await Withdrawal.find({
                 status: 'failed',
                 retryCount: { $gte: 3 },
+                refunded: { $ne: true } // KEY GUARD: only refund once
             }).populate('user', 'name email');
 
             for (const withdrawal of exhaustedWithdrawals) {
                 try {
-                    // Return funds to worker wallet
+                    // Return funds to worker wallet — ONLY if not already refunded
                     const wallet = await Wallet.findOne({ user: withdrawal.user._id || withdrawal.user });
                     if (wallet) {
                         wallet.balance += withdrawal.amount;
                         await wallet.save();
+                        logger.info(`💰 Refunded ₹${withdrawal.amount} to wallet for worker ${withdrawal.user._id || withdrawal.user}`);
                     }
 
+                    withdrawal.refunded = true; // Mark as refunded to prevent future double-credits
                     withdrawal.status = 'rejected';
                     withdrawal.rejectionReason = `Auto-rejected after ${withdrawal.retryCount} failed payout attempts. Funds returned to wallet.`;
                     withdrawal.processedAt = new Date();
