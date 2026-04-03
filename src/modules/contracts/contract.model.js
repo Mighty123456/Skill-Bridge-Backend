@@ -17,7 +17,7 @@ const contractSchema = new mongoose.Schema(
         project_id: {
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Job',
-            required: true,
+            required: false,  // Optional: contracts can exist without a linked project
             index: true
         },
         title: {
