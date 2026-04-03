@@ -11,7 +11,7 @@ exports.createContract = async (req, res) => {
     try {
         const contractorId = req.user._id;
         const { 
-            workerId, 
+            workerId: rawWorkerId, 
             title, 
             description, 
             agreementType, 
@@ -26,6 +26,27 @@ exports.createContract = async (req, res) => {
             autoRenew,
             terminationNoticePeriodDays
         } = req.body;
+
+        // Resolve Worker ID (could be User ID or Worker Profile ID)
+        const User = require('../users/user.model');
+        const Worker = require('../workers/worker.model');
+        let workerUser = await User.findById(rawWorkerId);
+        let workerProfile;
+
+        if (workerUser) {
+            workerProfile = await Worker.findOne({ user: workerUser._id });
+        } else {
+            workerProfile = await Worker.findById(rawWorkerId).populate('user');
+            if (workerProfile) {
+                workerUser = workerProfile.user;
+            }
+        }
+
+        if (!workerUser) {
+            return res.status(404).json({ success: false, message: 'Professional not found' });
+        }
+
+        const workerId = workerUser._id;
 
         // Rule 4.4: One contract per worker
         const existing = await Contract.findOne({
@@ -159,7 +180,16 @@ exports.respondToContract = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid response status' });
         }
 
-        const contract = await Contract.findOne({ _id: id, worker_id: workerId });
+        const Worker = require('../workers/worker.model');
+        const workerProfile = await Worker.findOne({ user: userId });
+
+        const contract = await Contract.findOne({ 
+            _id: id, 
+            $or: [
+                { worker_id: userId },
+                { worker_id: workerProfile ? workerProfile._id : null }
+            ]
+        });
         if (!contract) {
             return res.status(404).json({ success: false, message: 'Contract not found or not authorized' });
         }
@@ -245,9 +275,17 @@ exports.listContracts = async (req, res) => {
         const { role } = req.user;
         const { status } = req.query;
 
+        const Worker = require('../workers/worker.model');
+        const workerProfile = await Worker.findOne({ user: userId });
+
         const query = role === 'contractor' 
             ? { contractor_id: userId } 
-            : { worker_id: userId };
+            : { 
+                $or: [
+                    { worker_id: userId },
+                    { worker_id: workerProfile ? workerProfile._id : null }
+                ]
+            };
 
         if (status) {
             query.status = status;
@@ -294,10 +332,15 @@ exports.getContractDetails = async (req, res) => {
         }
 
         // Basic authorization
-        const isAuthorized = 
-            contract.contractor_id._id.toString() === userId.toString() || 
-            contract.worker_id._id.toString() === userId.toString() || 
-            req.user.role === 'admin';
+        const isContractor = contract.contractor_id._id.toString() === userId.toString();
+        
+        const Worker = require('../workers/worker.model');
+        const workerProfile = await Worker.findOne({ user: userId });
+        const isWorkerMatch = contract.worker_id.toString() === userId.toString();
+        const isProfileMatch = workerProfile && (contract.worker_id.toString() === workerProfile._id.toString());
+        const isWorker = isWorkerMatch || isProfileMatch;
+
+        const isAuthorized = isContractor || isWorker || req.user.role === 'admin';
 
         if (!isAuthorized) {
             return res.status(403).json({ success: false, message: 'Unauthorized to view this contract' });
@@ -339,7 +382,12 @@ exports.terminateContract = async (req, res) => {
 
         // Check ownership
         const isContractor = contract.contractor_id.toString() === userId.toString();
-        const isWorker = contract.worker_id.toString() === userId.toString();
+        
+        const Worker = require('../workers/worker.model');
+        const workerProfile = await Worker.findOne({ user: userId });
+        const isWorkerMatch = contract.worker_id.toString() === userId.toString();
+        const isProfileMatch = workerProfile && (contract.worker_id.toString() === workerProfile._id.toString());
+        const isWorker = isWorkerMatch || isProfileMatch;
         
         if (!isContractor && !isWorker) {
             return res.status(403).json({ success: false, message: 'Unauthorized to terminate this contract' });
@@ -508,7 +556,27 @@ exports.createBulkContracts = async (req, res) => {
             projectId // Extract projectId
         } = req.body;
 
-        const workersToHire = workerConfigs || (workerIds ? workerIds.map(id => ({ workerId: id })) : []);
+        const User = require('../users/user.model');
+        const Worker = require('../workers/worker.model');
+
+        const rawWorkersToHire = workerConfigs || (workerIds ? workerIds.map(id => ({ workerId: id })) : []);
+        const workersToHire = [];
+
+        // Resolve each worker
+        for (const w of rawWorkersToHire) {
+            let workerUser = await User.findById(w.workerId);
+            if (!workerUser) {
+                const profile = await Worker.findById(w.workerId).populate('user');
+                if (profile) workerUser = profile.user;
+            }
+            
+            if (workerUser) {
+                workersToHire.push({
+                    ...w,
+                    workerId: workerUser._id
+                });
+            }
+        }
 
         if (workersToHire.length === 0) {
             return res.status(400).json({ success: false, message: 'workerIds or workerConfigs must be a non-empty array.' });
