@@ -799,15 +799,28 @@ exports.clearPayoutError = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Worker profile not found' });
         }
 
+        // Clear the error state entirely.
+        // If the worker is not Stripe-onboarded (manual payouts only), also re-enable
+        // payoutEnabled which may have been set to false by repeated Stripe failures from
+        // old test withdrawals. Manual workers should always have payoutEnabled = true.
         worker.lastPayoutError = null;
+        worker.consecutivePayoutFailures = 0;
+
+        if (!worker.stripeOnboarded) {
+            // Non-Stripe worker: always safe to re-enable
+            worker.payoutEnabled = true;
+        }
+        // For Stripe-onboarded workers, leave payoutEnabled as-is — only the
+        // daily health check (CRON 6) or a real Stripe fix should re-enable it.
+
         await worker.save();
 
         res.status(200).json({
             success: true,
-            message: 'Payout error cleared successfully'
+            message: 'Payout alert cleared successfully'
         });
     } catch (error) {
         logger.error(`Clear Payout Error: ${error.message}`);
-        res.status(500).json({ success: false, message: 'Failed to clear payout error' });
+        res.status(500).json({ success: false, message: 'Failed to clear payout alert' });
     }
 };
