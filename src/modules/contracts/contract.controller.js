@@ -1,4 +1,7 @@
 const Contract = require('./contract.model');
+const User = require('../users/user.model');
+const Worker = require('../workers/worker.model');
+const Job = require('../jobs/job.model');
 const logger = require('../../config/logger');
 const notifyHelper = require('../../common/notification.helper');
 
@@ -28,8 +31,6 @@ exports.createContract = async (req, res) => {
         } = req.body;
 
         // Resolve Worker ID (could be User ID or Worker Profile ID)
-        const User = require('../users/user.model');
-        const Worker = require('../workers/worker.model');
         let workerUser = await User.findById(rawWorkerId);
         let workerProfile;
 
@@ -182,7 +183,6 @@ exports.respondToContract = async (req, res) => {
     }
 
     try {
-        const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
 
         // Find contract checking both direct User ID and Worker Profile ID (just in case)
@@ -202,11 +202,6 @@ exports.respondToContract = async (req, res) => {
         if (contract.status !== 'pending') {
             return res.status(400).json({ success: false, message: `Contract is already ${contract.status}` });
         }
-
-        const User = require('../users/user.model');
-        const Job = require('../jobs/job.model');
-        const respondingUser = await User.findById(userId);
-
         const mongoose = require('mongoose');
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -214,7 +209,7 @@ exports.respondToContract = async (req, res) => {
         let transactionCommitted = false;
 
         try {
-            if (status === 'active' || status === 'accepted' || status === 'accepted') {
+            if (status === 'active' || status === 'accepted') {
                 contract.status = 'active';
                 contract.signed_at = new Date();
                 contract.worker_signature = signature;
@@ -291,7 +286,7 @@ exports.respondToContract = async (req, res) => {
             await notifyHelper.onContractResponded(
                 contract.contractor_id, 
                 contract.title, 
-                respondingUser?.name || 'A Professional', 
+                req.user.name, 
                 contract.status
             );
         } catch (notifyErr) {
@@ -372,6 +367,11 @@ exports.getContractDetails = async (req, res) => {
         const { id } = req.params;
         const userId = req.user._id;
 
+        const mongoose = require('mongoose');
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: 'Invalid agreement ID format' });
+        }
+
         const contract = await Contract.findById(id)
             .populate('contractor_id', 'name phone email profileImage')
             .populate('worker_id', 'name phone email profileImage')
@@ -393,7 +393,6 @@ exports.getContractDetails = async (req, res) => {
         // Basic authorization
         const isContractor = contractorId === userId.toString();
         
-        const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
         
         const isWorkerMatch = workerIdInContract === userId.toString();
