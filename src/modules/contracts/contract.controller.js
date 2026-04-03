@@ -390,32 +390,26 @@ exports.getContractDetails = async (req, res) => {
         const contractorId = getRefId(contract.contractor_id);
         const workerIdInContract = getRefId(contract.worker_id);
 
-        // Basic authorization
-        const isContractor = contractorId === userId.toString();
-        
+        const Worker = require('../workers/worker.model');
         const workerProfile = await Worker.findOne({ user: userId });
-        
-        const isWorkerMatch = workerIdInContract === userId.toString();
+
+        const isContractor = userId.toString() === contractorId;
         const isProfileMatch = workerProfile && (workerIdInContract === workerProfile._id.toString());
-        const isWorker = isWorkerMatch || isProfileMatch;
+        const isDirectWorker = userId.toString() === workerIdInContract;
 
-        const isAuthorized = isContractor || isWorker || req.user.role === 'admin';
-
-        if (!isAuthorized) {
-            logger.warn(`[ContractController] Unauthorized access attempt for contract ${id} by user ${userId}`);
-            return res.status(403).json({ success: false, message: 'Unauthorized to view this contract' });
+        if (!isContractor && !isProfileMatch && !isDirectWorker && req.user.role !== 'admin') {
+            logger.warn(`[ContractController] Security: Attempted unauthorized access to contract ${id} by user ${userId}`);
+            return res.status(403).json({ success: false, message: 'Unauthorized to view this agreement' });
         }
 
-        res.status(200).json({
-            success: true,
-            data: contract
-        });
+        res.json({ success: true, data: contract });
+
     } catch (error) {
-        logger.error('Get Contract Details Error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to fetch contract details',
-            error: error.message
+        logger.error('[ContractController] Get Contract Details ERROR:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to fetch agreement details',
+            error: error.message 
         });
     }
 };

@@ -205,10 +205,14 @@ exports.getWorkerJobs = async (req, res) => {
             selected_worker_id: req.user._id
         };
 
-        if (status === 'active') {
-            query.status = { $in: ['assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] };
+        if (status === 'assigned') {
+            query.status = 'assigned';
+        } else if (status === 'active') {
+            query.status = { $in: ['eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] };
         } else if (status === 'completed') {
             query.status = 'completed';
+        } else if (status === 'history') {
+            query.status = { $in: ['completed', 'cancelled'] };
         }
 
         const jobs = await Job.find(query)
