@@ -319,7 +319,13 @@ exports.getDashboardStats = async (req, res) => {
         });
         const totalWorkersCount = uniqueWorkers.length;
 
-        // 5. Build final response
+        // 5. Total Spend (Lifetime)
+        const lifetimeSpend = await Payment.aggregate([
+            { $match: { user: contractorId, type: { $in: ['escrow', 'payout'] }, status: 'completed' } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+
+        // 6. Build final response
         let wallet = await Wallet.findOne({ user: contractorId });
         
         res.status(200).json({
@@ -329,8 +335,8 @@ exports.getDashboardStats = async (req, res) => {
                 completedProjects: completedProjectsCount || 0,
                 todayWorkers: todayWorkersCount || 0,
                 totalWorkers: totalWorkersCount || 0,
-                totalEarnings: wallet ? wallet.balance : 0,
-                pendingPayments: wallet ? wallet.pendingBalance : 0,
+                totalEarnings: lifetimeSpend[0]?.total || 0,
+                pendingPayments: wallet ? wallet.escrowBalance : 0,
                 monthlySpend: monthSpend[0]?.total || 0,
                 alerts: alerts
             }
