@@ -4,13 +4,17 @@ const workerController = require('./worker.controller');
 const { authenticate: protect } = require('../../common/middleware/auth.middleware');
 const { authorize } = require('../../common/middleware/role.middleware');
 const rateLimit = require('express-rate-limit');
+const config = require('../../config/env');
 
 // Stricter rate limit for search queries (20 requests per 15 mins)
-const searchLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20,
-    message: { success: false, message: 'Too many search queries. Please wait a few minutes.' }
-});
+const searchLimiter = (req, res, next) => {
+  if (config.NODE_ENV === 'development') return next();
+  return rateLimit({
+    windowMs: 1 * 60 * 1000,
+    max: 100,
+    message: { success: false, message: 'Too many searches. Cool down.' }
+  })(req, res, next);
+};
 
 // Public / Protected Routes
 router.get('/nearby', protect, searchLimiter, workerController.getNearbyWorkers);

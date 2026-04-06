@@ -412,24 +412,28 @@ exports.getContractorWorkers = async (req, res) => {
 exports.addTaskToJob = async (req, res) => {
     try {
         const contractorId = req.user._id;
-        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date, start_date, end_date, priority, is_recurring } = req.body;
+        const { jobId, title, description, assigned_worker_id, assigned_worker_name, due_date, start_date, end_date, priority, is_recurring, is_short_term, gig_rate } = req.body;
 
         const job = await Job.findOne({ _id: jobId, user_id: contractorId });
         if (!job) return res.status(404).json({ success: false, message: 'Job not found or unauthorized' });
 
-        // Rule 11.2: Contract must exist before scheduling
-        const Contract = require('../contracts/contract.model');
-        const contract = await Contract.findOne({
-            contractor_id: contractorId,
-            worker_id: assigned_worker_id,
-            status: 'active'
-        });
-
-        if (!contract) {
-            return res.status(403).json({ 
-                success: false, 
-                message: `Scheduling restricted: This professional must have an ACTIVE signed contract for your project before they can be assigned to tasks. Please hire them first and wait for their acceptance.` 
+        // Rule 11.2 Bypass: If short-term gig, no contract required
+        if (!is_short_term) {
+            const Contract = require('../contracts/contract.model');
+            const contract = await Contract.findOne({
+                contractor_id: contractorId,
+                worker_id: assigned_worker_id,
+                status: 'active'
             });
+
+            if (!contract) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: `Scheduling restricted: This professional must have an ACTIVE signed contract for your project before they can be assigned to tasks. Please hire them first and wait for their acceptance.` 
+                });
+            }
+        } else if (!gig_rate || gig_rate <= 0) {
+            return res.status(400).json({ success: false, message: 'Gig rate is required for short-term tasks' });
         }
 
         const sDate = start_date || due_date;
@@ -454,8 +458,22 @@ exports.addTaskToJob = async (req, res) => {
             start_date: sDate ? new Date(sDate) : undefined,
             end_date: eDate ? new Date(eDate) : undefined,
             priority: priority || 'medium',
-            is_recurring: is_recurring || false
+            is_recurring: is_recurring || false,
+            is_short_term: is_short_term || false,
+            gig_rate: is_short_term ? gig_rate : undefined
         };
+
+        // If short-term gig, lock escrow funds immediately
+        if (is_short_term) {
+            const WalletService = require('../wallet/wallet.service');
+            await WalletService.lockEscrow(
+                contractorId, 
+                jobId, 
+                assigned_worker_id, 
+                gig_rate, 
+                `Short-term gig escrow: ${title}`
+            );
+        }
 
         job.tasks.push(newTask);
         

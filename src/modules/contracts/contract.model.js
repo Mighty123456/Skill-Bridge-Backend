@@ -41,7 +41,7 @@ const contractSchema = new mongoose.Schema(
         // Agreement Classification
         agreement_type: {
             type: String,
-            enum: ['fixed', 'retainer', 'milestone_based'],
+            enum: ['fixed', 'retainer', 'milestone_based', 'hourly'],
             default: 'fixed'
         },
         
@@ -53,6 +53,14 @@ const contractSchema = new mongoose.Schema(
         monthly_rate: { 
             type: Number,
             required: function() { return this.agreement_type === 'retainer'; }
+        },
+        hourly_rate: {
+            type: Number,
+            required: function() { return this.agreement_type === 'hourly'; }
+        },
+        max_hours_per_week: {
+            type: Number,
+            default: 48
         },
         currency: { 
             type: String, 
@@ -120,7 +128,39 @@ const contractSchema = new mongoose.Schema(
         
         metadata: {
             type: mongoose.Schema.Types.Mixed
-        }
+        },
+
+        // Hourly Contract Tracking
+        work_sessions: [
+            {
+                date: { type: Date, required: true },
+                start_time: { type: Date, required: true },
+                end_time: { type: Date },
+                hours: { type: Number, default: 0 },
+                status: { type: String, enum: ['active', 'paused', 'completed'], default: 'completed' },
+                task_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Task' },
+                note: { type: String }
+            }
+        ],
+
+        billing_cycles: [
+            {
+                start_date: { type: Date, required: true },
+                end_date: { type: Date, required: true },
+                total_hours: { type: Number, default: 0 },
+                gross_amount: { type: Number, default: 0 },
+                net_amount: { type: Number, default: 0 },
+                platform_fee: { type: Number, default: 0 },
+                status: { 
+                    type: String, 
+                    enum: ['pending_approval', 'approved', 'disputed', 'paid'], 
+                    default: 'pending_approval' 
+                },
+                invoice_id: { type: String },
+                escrow_locked: { type: Boolean, default: false },
+                paid_at: { type: Date }
+            }
+        ]
     },
     {
         timestamps: true

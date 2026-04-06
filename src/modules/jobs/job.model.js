@@ -180,6 +180,8 @@ const jobSchema = new mongoose.Schema(
             start_date: { type: Date },
             end_date: { type: Date },
             is_recurring: { type: Boolean, default: false },
+            is_short_term: { type: Boolean, default: false },
+            gig_rate: { type: Number },
             priority: { 
                 type: String, 
                 enum: ['low', 'medium', 'high'], 

@@ -1725,7 +1725,173 @@ const getCalendarOverview = async (req, res) => {
   }
 };
 
+/**
+ * Hourly Contract Performance Audit
+ * GET /api/admin/contracts/hourly/audit
+ */
+const getHourlyContractAudits = async (req, res) => {
+  try {
+    const contracts = await Contract.find({ agreement_type: 'hourly', status: 'active' })
+      .populate('contractor_id', 'name email')
+      .populate('worker_id', 'name email');
 
+    const auditData = contracts.map(c => {
+      const pendingCycles = (c.billing_cycles || []).filter(cy => cy.status === 'pending_approval');
+      const totalHoursLogged = (c.work_sessions || []).reduce((acc, s) => acc + (s.hours || 0), 0);
+      
+      return {
+        id: c._id,
+        title: c.title,
+        contractor: c.contractor_id,
+        worker: c.worker_id,
+        hourlyRate: c.hourly_rate,
+        totalHoursLogged: Math.round(totalHoursLogged * 100) / 100,
+        pendingCyclesCount: pendingCycles.length,
+        hasDisputedCycle: (c.billing_cycles || []).some(cy => cy.status === 'disputed'),
+        maxHoursPerWeek: c.max_hours_per_week
+      };
+    });
+
+    return successResponse(res, 'Hourly contract audits fetched', { count: auditData.length, contracts: auditData });
+  } catch (error) {
+    logger.error(`Admin getHourlyContractAudits error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch hourly audits', 500);
+  }
+};
+
+/**
+ * Short-Term (Short-Gig) Escrow Monitoring
+ * GET /api/admin/contracts/short-term/monitoring
+ */
+const getShortTermGigAudits = async (req, res) => {
+  try {
+    const contracts = await Contract.find({ 
+      'metadata.is_short_term_gig': true,
+      status: { $in: ['pending', 'active', 'completed'] }
+    })
+    .populate('contractor_id', 'name email')
+    .populate('worker_id', 'name email');
+
+    const monitoringData = contracts.map(c => ({
+      id: c._id,
+      title: c.title,
+      contractor: c.contractor_id,
+      worker: c.worker_id,
+      amount: c.total_value,
+      status: c.status,
+      deadline: c.end_date,
+      proofRequired: c.metadata?.proof_required || false,
+      isFunded: c.status !== 'pending' // fixed contracts are auto-funded on backend
+    }));
+
+    return successResponse(res, 'Short-term gig monitoring data fetched', { count: monitoringData.length, gigs: monitoringData });
+  } catch (error) {
+    logger.error(`Admin getShortTermGigAudits error: ${error.message}`);
+    return errorResponse(res, 'Failed to fetch short-term gig data', 500);
+  }
+};
+
+/**
+ * Admin: Force Terminate Contract
+ * POST /api/admin/contracts/:id/force-terminate
+ */
+const forceTerminateContract = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { reason, refundEscrow } = req.body;
+
+    const contract = await Contract.findById(id);
+    if (!contract) return errorResponse(res, 'Contract not found', 404);
+
+    if (['completed', 'terminated'].includes(contract.status)) {
+      return errorResponse(res, 'Contract already finished or terminated', 400);
+    }
+
+    const mongoose = require('mongoose');
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      contract.status = 'terminated';
+      contract.timeline.push({
+        status: 'terminated',
+        timestamp: new Date(),
+        note: `ADMIN FORCE TERMINATION: ${reason || 'Admin intervention due to policy violation or critical dispute.'}`,
+        actor: 'admin'
+      });
+
+      if (refundEscrow) {
+        const Wallet = require('../wallet/wallet.model');
+        const wallet = await Wallet.findOne({ user: contract.contractor_id }).session(session);
+        if (wallet) {
+          const amountToReturn = contract.agreement_type === 'fixed' ? Number(contract.total_value) : Number(contract.monthly_rate);
+          if (!isNaN(amountToReturn) && amountToReturn > 0) {
+            wallet.escrowBalance = Math.max(0, wallet.escrowBalance - amountToReturn);
+            wallet.balance += amountToReturn;
+            await wallet.save({ session });
+            
+            contract.timeline.push({
+              status: 'refunded',
+              timestamp: new Date(),
+              note: `Admin forces refund of ₹${amountToReturn} back to contractor wallet.`,
+              actor: 'admin'
+            });
+          }
+        }
+      }
+
+      await contract.save({ session });
+      await session.commitTransaction();
+
+      await logAdminAction(req.userId, 'force_terminate_contract', id, 'contract', `Force terminated contract ${id}. Reason: ${reason}`, req.ip);
+
+    } catch (txnError) {
+      await session.abortTransaction();
+      throw txnError;
+    } finally {
+      session.endSession();
+    }
+
+    return successResponse(res, 'Contract force terminated successfully');
+  } catch (error) {
+    logger.error(`Admin forceTerminateContract error: ${error.message}`);
+    return errorResponse(res, 'Failed to force terminate contract', 500);
+  }
+};
+
+/**
+ * Admin: Resolve Billing Cycle Dispute
+ * POST /api/admin/contracts/:id/cycles/:cycleId/resolve
+ */
+const resolveCycleDispute = async (req, res) => {
+  try {
+    const { id, cycleId } = req.params;
+    const { resolution, note } = req.body;
+
+    const contract = await Contract.findById(id);
+    if (!contract) return errorResponse(res, 'Contract not found', 404);
+
+    const cycle = contract.billing_cycles.id(cycleId);
+    if (!cycle) return errorResponse(res, 'Cycle not found', 404);
+
+    cycle.status = resolution; // 'approved', 'rejected', etc.
+    contract.timeline.push({
+      status: 'cycle_resolved',
+      timestamp: new Date(),
+      note: `ADMIN DISPUTE RESOLUTION for cycle ending ${cycle.end_date.toDateString()}: Decided as ${resolution.toUpperCase()}. Note: ${note}`,
+      actor: 'admin'
+    });
+
+    await contract.save();
+    
+    await logAdminAction(req.userId, 'resolve_cycle_dispute', id, 'contract', `Resolved cycle ${cycleId} dispute as ${resolution}`, req.ip);
+
+    return successResponse(res, 'Billing cycle dispute resolved successfully');
+  } catch (error) {
+    logger.error(`Admin resolveCycleDispute error: ${error.message}`);
+    return errorResponse(res, 'Failed to resolve billing cycle dispute', 500);
+  }
+};
 
 
 module.exports = {
@@ -1766,9 +1932,13 @@ module.exports = {
   listHiringRequests,
   getContractorPool,
   listAllWorkforcePools,
-  listAllContracts,
-  forceReleasePayment,
-  cancelAndRefundJob,
   getCalendarOverview,
-  getContractById
+  listAllContracts,
+  getContractById,
+  getHourlyContractAudits,
+  getShortTermGigAudits,
+  forceTerminateContract,
+  resolveCycleDispute,
+  forceReleasePayment,
+  cancelAndRefundJob
 };

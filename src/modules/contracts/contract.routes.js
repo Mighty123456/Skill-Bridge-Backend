@@ -91,4 +91,12 @@ router.post(
   contractController.addWorkLog
 );
 
+// Timer System (Worker only)
+router.post('/:id/timer/start', authorize('worker'), contractController.startHourlyTimer);
+router.post('/:id/timer/stop', authorize('worker'), contractController.stopHourlyTimer);
+
+// Cycle Approval & Payment (Contractor only)
+router.patch('/:id/cycles/:cycleId/approve', authorize('contractor'), contractController.approveWeeklyCycle);
+router.post('/:id/cycles/:cycleId/payout', authorize('contractor'), contractController.payoutWeeklyCycle);
+
 module.exports = router;

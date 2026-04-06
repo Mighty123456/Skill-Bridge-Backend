@@ -27,7 +27,8 @@ exports.createContract = async (req, res) => {
             projectId,
             currency,
             autoRenew,
-            terminationNoticePeriodDays
+            terminationNoticePeriodDays,
+            metadata
         } = req.body;
 
         // Resolve Worker ID (could be User ID or Worker Profile ID)
@@ -65,7 +66,11 @@ exports.createContract = async (req, res) => {
         // Rule 4.5: Payment must be backed by wallet balance
         const Wallet = require('../wallet/wallet.model');
         const wallet = await Wallet.findOne({ user: contractorId });
-        const costToReserve = agreementType === 'fixed' ? Number(totalValue) : Number(monthlyRate);
+        const costToReserve = agreementType === 'fixed' 
+            ? Number(totalValue) 
+            : agreementType === 'hourly' 
+                ? Number(req.body.hourlyRate) * 40 // Reserve 40 hours upfront for hourly
+                : Number(monthlyRate);
 
         if (!wallet || wallet.balance < costToReserve) {
             return res.status(402).json({ 
@@ -99,6 +104,8 @@ exports.createContract = async (req, res) => {
                 agreement_type: agreementType,
                 total_value: totalValue,
                 monthly_rate: monthlyRate,
+                hourly_rate: req.body.hourlyRate,
+                max_hours_per_week: req.body.maxHoursPerWeek || 48,
                 currency: currency || 'INR',
                 payment_frequency: paymentFrequency,
                 start_date: startDate,
@@ -113,7 +120,8 @@ exports.createContract = async (req, res) => {
                     note: 'Contract offer initiated. Funds secured in escrow.',
                     actor: 'contractor'
                 }],
-                project_id: projectId
+                project_id: projectId,
+                metadata: metadata || {}
             });
 
             await contract.save({ session });
@@ -829,7 +837,9 @@ exports.createBulkContracts = async (req, res) => {
                 description,
                 agreement_type: agreementType,
                 total_value: agreementType === 'fixed' ? (w.totalValue || globalTotalValue) : undefined,
-                monthly_rate: agreementType === 'monthly' ? (w.monthlyRate || globalMonthlyRate) : undefined,
+                monthly_rate: agreementType === 'retainer' ? (w.monthlyRate || globalMonthlyRate) : undefined,
+                hourly_rate: agreementType === 'hourly' ? (w.hourlyRate || req.body.hourlyRate) : undefined,
+                max_hours_per_week: req.body.maxHoursPerWeek || 48,
                 currency: currency || 'INR',
                 payment_frequency: paymentFrequency,
                 start_date: startDate,
@@ -917,10 +927,11 @@ exports.downloadContractPDF = async (req, res) => {
             return res.status(404).json({ success: false, message: 'Contract not found' });
         }
 
-        // Auth check
+        // Auth check: Contractor, Worker, or Admin
         const isAuthorized = 
             contract.contractor_id._id.toString() === userId.toString() || 
-            contract.worker_id._id.toString() === userId.toString();
+            contract.worker_id._id.toString() === userId.toString() ||
+            req.user.role === 'admin';
 
         if (!isAuthorized) {
             return res.status(403).json({ success: false, message: 'Unauthorized to download this contract' });
@@ -1021,4 +1032,371 @@ exports.downloadContractPDF = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to generate PDF' });
     }
 };
+
+/**
+ * Start Hourly Timer (Worker only)
+ * @route   POST /api/v1/contracts/:id/timer/start
+ */
+exports.startHourlyTimer = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { taskId, note } = req.body;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract || contract.worker_id.toString() !== userId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        if (contract.status !== 'active') {
+            return res.status(400).json({ success: false, message: 'Contract must be active to start timer' });
+        }
+
+        // Rule: Only one active timer
+        const activeSession = contract.work_sessions.find(s => s.status === 'active');
+        if (activeSession) {
+            return res.status(400).json({ success: false, message: 'Active work session already exists. Pause or complete it first.' });
+        }
+
+        contract.work_sessions.push({
+            date: new Date(),
+            start_time: new Date(),
+            status: 'active',
+            task_id: taskId,
+            note: note || 'Clocked in.'
+        });
+
+        await contract.save();
+        res.status(200).json({ success: true, message: 'Timer started!', data: contract });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Stop Hourly Timer (Worker only)
+ * @route   POST /api/v1/contracts/:id/timer/stop
+ */
+exports.stopHourlyTimer = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.user._id;
+
+        const contract = await Contract.findById(id);
+        if (!contract || contract.worker_id.toString() !== userId.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        const activeSession = contract.work_sessions.find(s => s.status === 'active');
+        if (!activeSession) {
+            return res.status(404).json({ success: false, message: 'No active work session found.' });
+        }
+
+        activeSession.end_time = new Date();
+        activeSession.status = 'completed';
+        
+        // Calculate hours (rounded to 2 decimal places)
+        const diffMs = activeSession.end_time - activeSession.start_time;
+        const hours = Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
+        activeSession.hours = hours;
+
+        await contract.save();
+        res.status(200).json({ success: true, message: `Clocked out! Logged: ${hours} hours.`, data: contract });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Approve Weekly Cycle & Lock Escrow (Contractor only)
+ * @route   PATCH /api/v1/contracts/:id/cycles/:cycleId/approve
+ */
+exports.approveWeeklyCycle = async (req, res) => {
+    try {
+        const { id, cycleId } = req.params;
+        const userId = req.user._id;
+
+        const contract = await Contract.findOne({ _id: id, contractor_id: userId });
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        const cycle = contract.billing_cycles.id(cycleId);
+        if (!cycle) return res.status(404).json({ success: false, message: 'Cycle not found' });
+
+        if (cycle.status !== 'pending_approval') {
+            return res.status(400).json({ success: false, message: `Cycle is already ${cycle.status}` });
+        }
+
+        const mongoose = require('mongoose');
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            cycle.status = 'approved';
+            cycle.escrow_locked = true;
+
+            // Rule 6.3 & 9.4: Lock Escrow upon approval
+            const WalletService = require('../wallet/wallet.service');
+            const escrowRecord = await WalletService.lockEscrow(
+                userId,
+                null,
+                contract.worker_id,
+                cycle.gross_amount,
+                `Weekly cycle approval: ${cycle.start_date.toDateString()}`
+            );
+
+            // Link cycleId in escrow record metadata
+            const Payment = require('../payments/payment.model');
+            await Payment.findByIdAndUpdate(escrowRecord._id, {
+                $set: { 
+                    'gatewayResponse.cycleId': cycleId,
+                    'gatewayResponse.contractId': id 
+                }
+            }, { session });
+
+            await contract.save({ session });
+            await session.commitTransaction();
+
+            notifyHelper.onContractStatusChanged(contract.worker_id, contract.title, 'Payment Approved').catch(e => {});
+
+            res.status(200).json({ success: true, message: 'Cycle approved and funds locked in escrow.', data: cycle });
+        } catch (txnError) {
+            await session.abortTransaction();
+            throw txnError;
+        } finally {
+            session.endSession();
+        }
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Payout Approved Weekly Cycle (Contractor only)
+ * Moves money from escrow to worker balance
+ * @route   POST /api/v1/contracts/:id/cycles/:cycleId/payout
+ */
+exports.payoutWeeklyCycle = async (req, res) => {
+    try {
+        const { id, cycleId } = req.params;
+        const userId = req.user._id;
+
+        const contract = await Contract.findOne({ _id: id, contractor_id: userId });
+        if (!contract) return res.status(404).json({ success: false, message: 'Contract not found' });
+
+        const cycle = contract.billing_cycles.id(cycleId);
+        if (!cycle) return res.status(404).json({ success: false, message: 'Cycle not found' });
+
+        if (cycle.status !== 'approved') {
+            return res.status(400).json({ success: false, message: `Only approved cycles can be paid out. Current status: ${cycle.status}` });
+        }
+
+        const Wallet = require('../wallet/wallet.model');
+        const WalletService = require('../wallet/wallet.service');
+        const Payment = require('../payments/payment.model');
+        const PaymentService = require('../payments/payment.service');
+        const mongoose = require('mongoose');
+
+        const session = await mongoose.startSession();
+        session.startTransaction();
+
+        try {
+            // 1. Calculations
+            // For contracts, we use a fixed 10% platform fee if not specified
+            const platformFee = Math.round(cycle.gross_amount * 0.10);
+            const netAmount = cycle.gross_amount - platformFee;
+
+            // 2. Deduct from Contractor's Escrow
+            const contractorWallet = await Wallet.findOne({ user: userId }).session(session);
+            if (!contractorWallet || contractorWallet.escrowBalance < cycle.gross_amount) {
+                throw new Error('Insufficient escrow balance to process this payout.');
+            }
+            contractorWallet.escrowBalance -= cycle.gross_amount;
+            await contractorWallet.save({ session });
+
+            // 3. Mark Escrow Payment as Released
+            await Payment.findOneAndUpdate(
+                { 
+                    user: userId, 
+                    type: 'escrow', 
+                    status: 'completed',
+                    'gatewayResponse.cycleId': cycleId.toString()
+                },
+                { $set: { status: 'released' } },
+                { session }
+            );
+
+            // 4. Credit Worker's Balance
+            const workerWallet = await WalletService.getWallet(contract.worker_id);
+            // Re-fetch within session or use update query
+            await Wallet.findOneAndUpdate(
+                { user: contract.worker_id },
+                { $inc: { balance: netAmount } },
+                { session }
+            );
+
+            // 4. Credit Platform Revenue
+            await WalletService.creditPlatformRevenue(platformFee, session);
+
+            // 5. Record Payments
+            const payoutId = `TXN_CTR_PAYOUT_${Date.now()}_${id.toString().slice(-4)}`;
+            const payout = new Payment({
+                transactionId: payoutId,
+                user: userId,
+                worker: contract.worker_id,
+                amount: netAmount,
+                type: 'payout',
+                status: 'completed',
+                paymentMethod: 'escrow',
+                gatewayResponse: { 
+                    contractId: id,
+                    cycleId: cycleId,
+                    gross_amount: cycle.gross_amount,
+                    platform_fee: platformFee
+                }
+            });
+            await payout.save({ session });
+
+            const commission = new Payment({
+                transactionId: `TXN_CTR_COMM_${Date.now()}_${id.toString().slice(-4)}`,
+                user: userId,
+                amount: platformFee,
+                type: 'commission',
+                status: 'completed',
+                paymentMethod: 'escrow'
+            });
+            await commission.save({ session });
+
+            // 6. Update Cycle Status
+            cycle.status = 'paid';
+            cycle.paid_at = new Date();
+            cycle.net_amount = netAmount;
+            cycle.platform_fee = platformFee;
+
+            contract.timeline.push({
+                status: 'paid',
+                timestamp: new Date(),
+                note: `Weekly payout of ₹${netAmount} released to professional. Platform fee: ₹${platformFee}.`,
+                actor: 'system'
+            });
+
+            await contract.save({ session });
+            await session.commitTransaction();
+
+            notifyHelper.onWalletTransaction(
+                contract.worker_id,
+                'Funds Released!',
+                `₹${netAmount} from contract "${contract.title}" has been added to your balance.`,
+                { type: 'payout_released', contractId: id }
+            ).catch(e => {});
+
+            res.status(200).json({ success: true, message: 'Payout processed successfully.', data: cycle });
+        } catch (txnError) {
+            await session.abortTransaction();
+            throw txnError;
+        } finally {
+            session.endSession();
+        }
+    } catch (error) {
+        logger.error('Payout Weekly Cycle Error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * Background Task: Process Weekly Billing Cycles
+ * Scheduled to run every Monday morning at 1 AM
+ */
+exports.processWeeklyBillingCycles = async () => {
+    logger.info('🔄 [Cron] Processing Weekly Billing Cycles...');
+    try {
+        // Find all active hourly/retainer contracts
+        const activeContracts = await Contract.find({
+            status: 'active',
+            agreement_type: { $in: ['hourly', 'retainer'] }
+        });
+
+        if (activeContracts.length === 0) {
+            logger.info('[Cron] No active hourly/retainer contracts found to process.');
+            return;
+        }
+
+        let createdCount = 0;
+        const now = new Date();
+        
+        // Calculate the previous week's range (Monday to Sunday)
+        const lastMonday = new Date(now);
+        lastMonday.setDate(now.getDate() - (now.getDay() === 0 ? 13 : now.getDay() + 6)); // Previous Monday
+        lastMonday.setHours(0, 0, 0, 0);
+
+        const lastSunday = new Date(lastMonday);
+        lastSunday.setDate(lastMonday.getDate() + 6);
+        lastSunday.setHours(23, 59, 59, 999);
+
+        logger.info(`[Cron] Target Period: ${lastMonday.toDateString()} to ${lastSunday.toDateString()}`);
+
+        for (const contract of activeContracts) {
+            try {
+                // Check if a cycle for this period already exists
+                const existingCycle = contract.billing_cycles.find(c => 
+                    c.start_date.getTime() === lastMonday.getTime()
+                );
+                if (existingCycle) continue;
+
+                // For hourly contracts, sum up work sessions in that period
+                let totalHours = 0;
+                if (contract.agreement_type === 'hourly') {
+                    totalHours = contract.work_sessions
+                        .filter(s => s.status === 'completed' && s.date >= lastMonday && s.date <= lastSunday)
+                        .reduce((sum, s) => sum + (s.hours || 0), 0);
+                    
+                    if (totalHours === 0) continue; // No work logged, skip cycle creation
+                }
+
+                // Calculate amounts
+                let grossAmount = 0;
+                if (contract.agreement_type === 'hourly') {
+                    grossAmount = Math.round(totalHours * contract.hourly_rate);
+                } else if (contract.agreement_type === 'retainer') {
+                    // For retainer, we create a full month or split by week? 
+                    // Usually retainer is monthly. If paymentFrequency is weekly, we divide.
+                    if (contract.payment_frequency === 'weekly') {
+                        grossAmount = Math.round(contract.monthly_rate / 4);
+                    } else {
+                        // If monthly, only create at start of month? 
+                        // For now, let's only auto-create hourly cycles weekly.
+                        continue; 
+                    }
+                }
+
+                if (grossAmount <= 0) continue;
+
+                contract.billing_cycles.push({
+                    start_date: lastMonday,
+                    end_date: lastSunday,
+                    total_hours: totalHours,
+                    gross_amount: grossAmount,
+                    status: 'pending_approval'
+                });
+
+                await contract.save();
+                createdCount++;
+
+                // Notify contractor
+                notifyHelper.onContractStatusChanged(
+                    contract.contractor_id, 
+                    contract.title, 
+                    `New Billing Cycle Generated (₹${grossAmount})`
+                ).catch(e => {});
+
+            } catch (contractErr) {
+                logger.error(`[Cron] Error processing cycles for contract ${contract._id}: ${contractErr.message}`);
+            }
+        }
+
+        logger.info(`✅ [Cron] Weekly Billing Cycles Processed: ${createdCount} cycles generated.`);
+    } catch (error) {
+        logger.error(`[Cron] Critical error in processWeeklyBillingCycles: ${error.message}`);
+    }
+};
+
 

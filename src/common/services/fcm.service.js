@@ -62,11 +62,6 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
         Object.entries(data).map(([k, v]) => [k, String(v)])
     );
 
-    // CRITICAL: Always include click_action for Flutter handlers to wake up
-    if (!stringifiedData.click_action) {
-        stringifiedData.click_action = 'FLUTTER_NOTIFICATION_CLICK';
-    }
-
     const message = {
         notification: {
             title: notification.title,
@@ -74,16 +69,14 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
         },
         data: stringifiedData,
         android: {
-            priority: 'high',
+            priority: 'high', // Controls internal queueing priority
             notification: {
-                icon: 'launcher_icon',
-                color: '#2196F3',
+                channelId: 'skillbridge_main_channel', // Matches mobile fcm_service.dart
+                icon: 'launcher_icon', // Matches res/mipmap/launcher_icon.png
+                color: '#008080',      // Brand priority color
                 sound: 'default',
-                channelId: 'skillbridge_main_channel',
-                clickAction: 'FLUTTER_NOTIFICATION_CLICK',
-                visibility: 'public', // Show even on lock screen
-                priority: 'max',     // Internal importance
-                // collapseKey causes a new notification to REPLACE the previous one with the same key
+                visibility: 'public',  // Display on lock screen
+                priority: 'max',       // Controls OS importance/heads-up
                 ...(collapseKey && { tag: collapseKey }),
             },
         },
@@ -92,13 +85,13 @@ const sendPushNotification = async (tokens, notification, data = {}, collapseKey
                 aps: {
                     sound: 'default',
                     badge: 1,
-                    mutableContent: true,
-                    contentAvailable: true,
+                    mutableContent: true, // Required for iOS extensions
+                    contentAvailable: true, // Forces background wake-up
                     ...(collapseKey && { 'thread-id': collapseKey }),
                 },
             },
             headers: {
-                'apns-priority': '10', // High priority for APNS
+                'apns-priority': '10', // High priority for APNS immediate delivery
             }
         },
         tokens: tokenArray,

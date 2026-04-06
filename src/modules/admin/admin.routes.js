@@ -313,6 +313,35 @@ router.get(
   adminController.getContractById
 );
 
+router.post(
+  '/contracts/:id/force-terminate',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.forceTerminateContract
+);
+
+router.post(
+  '/contracts/:id/cycles/:cycleId/resolve',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.resolveCycleDispute
+);
+
+// Contract Audits & Monitoring
+router.get(
+  '/contracts/monitoring/hourly',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getHourlyContractAudits
+);
+
+router.get(
+  '/contracts/monitoring/short-term',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.getShortTermGigAudits
+);
+
 
 // Workforce Pool Monitoring
 router.get(

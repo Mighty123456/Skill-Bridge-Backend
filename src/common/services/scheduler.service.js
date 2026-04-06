@@ -432,6 +432,19 @@ const initializeScheduler = () => {
             logger.error(`Critical error in stale withdrawal cleanup: ${error.message}`);
         }
     });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CRON 8: Every Monday at 1 AM — Auto-generate Billing Cycles
+    //   Processes active hourly/retainer contracts for the previous week
+    // ─────────────────────────────────────────────────────────────────────
+    cron.schedule('0 1 * * 1', async () => {
+        try {
+            const ContractController = require('../../modules/contracts/contract.controller');
+            await ContractController.processWeeklyBillingCycles();
+        } catch (error) {
+            logger.error(`Critical error in auto-billing cycle task: ${error.message}`);
+        }
+    });
 };
 
 module.exports = {

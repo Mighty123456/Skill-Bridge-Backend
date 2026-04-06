@@ -6,14 +6,18 @@ const { authenticate } = require('../../common/middleware/auth.middleware');
 const { authorize } = require('../../common/middleware/role.middleware');
 
 // Rate limiter: max 5 withdrawal requests per user per 10 minutes
-const withdrawLimiter = rateLimit({
+const config = require('../../config/env');
+const withdrawLimiter = (req, res, next) => {
+  if (config.NODE_ENV === 'development') return next();
+  return rateLimit({
     windowMs: 10 * 60 * 1000, // 10 minutes
     max: 5,
     keyGenerator: (req) => req.user?._id?.toString() || req.ip, // per-user, not per-IP
     message: { success: false, message: 'Too many withdrawal requests. Please wait 10 minutes and try again.' },
     standardHeaders: true,
     legacyHeaders: false,
-});
+  })(req, res, next);
+};
 
 /**
  * @route   GET /api/wallet
