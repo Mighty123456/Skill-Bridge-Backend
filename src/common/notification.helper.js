@@ -664,21 +664,25 @@ exports.onRefundProcessed = async (tenant, job, amount) => {
 };
 
 // =============================================================================
-// ✅ EVENT 12.5: Dispute Raised → Notify Worker
+// ✅ EVENT 12.5: Dispute Raised → Notify Counterparty
 // =============================================================================
-exports.onDisputeRaised = async (worker, job, reason) => {
-    const title = '⚖️ Dispute Raised';
-    const body = `A dispute has been raised for "${job.job_title}". Payment is on hold until admin review.`;
+exports.onDisputeRaised = async (recipientId, title, reason, type = 'contract') => {
+    const displayTitle = '⚖️ Dispute Raised';
+    const body = `A formal dispute has been raised regarding "${title}". Reason: ${reason}`;
 
-    await _sendPushToUser(worker._id, title, body, {
+    await _sendPushToUser(recipientId, displayTitle, body, {
         type: 'dispute',
-        jobId: String(job._id),
-        recipientRole: 'worker',
+        displayTitle: title,
+        reason: reason,
+        itemType: type
     });
 
     await notificationService.createNotification({
-        recipient: worker._id, title, message: body,
-        type: 'dispute', data: { jobId: job._id },
+        recipient: recipientId,
+        title: displayTitle,
+        message: body,
+        type: 'dispute',
+        data: { title, reason, type },
     });
 };
 
@@ -821,6 +825,58 @@ exports.onContractReceived = async (workerId, contractTitle, contractorName) => 
     });
 
     logger.info(`[NotifyHelper] onContractReceived: Worker ${workerId} notified for contract ${contractTitle}`);
+};
+
+// =============================================================================
+// ✅ EVENT 20.5: Contract Status Changed (Active/Paused/Resumed) → Notify Party
+// =============================================================================
+exports.onContractStatusChanged = async (recipientId, contractTitle, status) => {
+    const statusMap = {
+        'active': '✅ Contract Activated',
+        'paused': '⏸️ Contract Paused',
+        'terminated': '🛑 Contract Terminated',
+        'disputed': '⚖️ Contract Disputed'
+    };
+
+    const title = statusMap[status] || '📋 Contract Status Updated';
+    const body = `The status of "${contractTitle}" has been updated to: ${status.toUpperCase()}.`;
+
+    await _sendPushToUser(recipientId, title, body, {
+        type: 'contract_status',
+        screen: 'contracts',
+        status: status,
+    });
+
+    await notificationService.createNotification({
+        recipient: recipientId,
+        title,
+        message: body,
+        type: 'contract_status',
+        data: { contractTitle, status },
+    });
+};
+
+// =============================================================================
+// ✅ EVENT 20.6: Contract Extended → Notify Worker
+// =============================================================================
+exports.onContractExtended = async (workerId, contractTitle, newEndDate) => {
+    const title = '⏳ Contract Extended';
+    const dateStr = new Date(newEndDate).toDateString();
+    const body = `The contract "${contractTitle}" has been extended until ${dateStr}.`;
+
+    await _sendPushToUser(workerId, title, body, {
+        type: 'contract_extended',
+        screen: 'contracts',
+        newEndDate: String(newEndDate),
+    });
+
+    await notificationService.createNotification({
+        recipient: workerId,
+        title,
+        message: body,
+        type: 'contract_extended',
+        data: { contractTitle, newEndDate },
+    });
 };
 
 // =============================================================================
