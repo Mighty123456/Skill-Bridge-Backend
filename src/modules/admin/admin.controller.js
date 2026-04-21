@@ -956,6 +956,44 @@ const getWorkerFinancials = async (req, res) => {
 };
 
 /**
+ * ADMIN: Force-release warranty reserve for a specific worker
+ * POST /api/admin/workers/:workerId/force-release-warranty
+ */
+const forceReleaseWorkerWarranty = async (req, res) => {
+  try {
+    const { workerId } = req.params;
+
+    let userId;
+    const workerProfile = await Worker.findById(workerId).populate('user', 'name email');
+    if (workerProfile) {
+      userId = workerProfile.user._id;
+    } else {
+      const user = await User.findById(workerId).select('_id name');
+      if (!user) return errorResponse(res, 'Worker not found', 404);
+      userId = user._id;
+    }
+
+    const WalletService = require('../wallet/wallet.service');
+    const result = await WalletService.forceReleaseWarrantyReserve(userId);
+
+    await logAdminAction(
+      req.userId,
+      'force_release_warranty',
+      workerId,
+      'worker',
+      `Force-released warranty reserve of ₹${result.released} for worker. New balance: ₹${result.newBalance}`,
+      req.ip
+    );
+
+    logger.info(`Admin ${req.userId} force-released warranty reserve for worker ${workerId}: ₹${result.released}`);
+    return successResponse(res, `Successfully released ₹${result.released} warranty reserve to worker wallet`, result);
+  } catch (error) {
+    logger.error(`Admin forceReleaseWorkerWarranty error: ${error.message}`);
+    return errorResponse(res, error.message || 'Failed to release warranty reserve', 500);
+  }
+};
+
+/**
  * List all active disputes
  * GET /api/admin/disputes
  */
@@ -1940,5 +1978,6 @@ module.exports = {
   forceTerminateContract,
   resolveCycleDispute,
   forceReleasePayment,
-  cancelAndRefundJob
+  cancelAndRefundJob,
+  forceReleaseWorkerWarranty
 };

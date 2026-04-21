@@ -125,6 +125,14 @@ router.get(
   adminController.getWorkerFinancials
 );
 
+// Force-release worker's warranty reserve (admin override)
+router.post(
+  '/workers/:workerId/force-release-warranty',
+  authenticate,
+  authorize(ROLES.ADMIN),
+  adminController.forceReleaseWorkerWarranty
+);
+
 // Tenant Financials
 router.get(
   '/tenants/:tenantId/financials',

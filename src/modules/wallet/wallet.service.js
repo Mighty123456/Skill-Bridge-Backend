@@ -93,6 +93,49 @@ exports.checkAndReleasePending = async (userId) => {
 };
 
 /**
+ * ADMIN: Force-release all warranty reserves for a worker (bypasses date check).
+ * Also fixes orphaned warrantyReserveBalance where activeWarranties array is empty.
+ */
+exports.forceReleaseWarrantyReserve = async (userId) => {
+    const wallet = await Wallet.findOne({ user: userId });
+    if (!wallet) throw new Error('Wallet not found for this user');
+
+    const currentReserve = wallet.warrantyReserveBalance || 0;
+    if (currentReserve <= 0) {
+        return { released: 0, message: 'No warranty reserve balance to release' };
+    }
+
+    // Release all entries from activeWarranties
+    let releasedFromArray = 0;
+    if (wallet.activeWarranties && wallet.activeWarranties.length > 0) {
+        for (const w of wallet.activeWarranties) {
+            releasedFromArray += w.amount;
+        }
+        wallet.activeWarranties = [];
+    }
+
+    // Handle orphaned balance (warrantyReserveBalance > 0 but activeWarranties is empty)
+    // This can happen if the job was saved but the array wasn't updated correctly
+    const totalToRelease = currentReserve; // Release the full recorded reserve
+
+    wallet.balance += totalToRelease;
+    wallet.warrantyReserveBalance = 0;
+    await wallet.save();
+
+    // Notify the worker via in-app notification
+    NotificationService.createNotification({
+        recipient: userId,
+        title: '💰 Warranty Reserve Released!',
+        message: `₹${totalToRelease.toFixed(2)} from your warranty reserve has been released to your balance by admin.`,
+        type: 'payment_received',
+        data: { type: 'warranty_released_admin' }
+    }).catch(err => logger.error(`Failed to send warranty release notification: ${err.message}`));
+
+    logger.info(`Admin force-released ₹${totalToRelease} warranty reserve for user ${userId}`);
+    return { released: totalToRelease, newBalance: wallet.balance };
+};
+
+/**
  * Credit amount to wallet
  */
 exports.creditWallet = async (userId, amount, session = null) => {
