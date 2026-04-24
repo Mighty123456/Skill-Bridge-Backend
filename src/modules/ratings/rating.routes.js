@@ -11,5 +11,6 @@ router.use(authenticate);
 // Both 'user' (client) and 'contractor' can submit a rating
 router.post('/submit', authorize('user', 'contractor'), ratingController.submitRating);
 router.get('/worker/:workerId', ratingController.getWorkerRatings);
+router.get('/project/:projectId', ratingController.getProjectRatings);
 
 module.exports = router;

@@ -73,3 +73,22 @@ exports.getWorkerRatings = async (req, res) => {
         res.status(500).json({ success: false, message: 'Failed to fetch worker ratings' });
     }
 };
+exports.getProjectRatings = async (req, res) => {
+    try {
+        const { projectId } = req.params;
+
+        if (!projectId) {
+            return res.status(400).json({ success: false, message: 'Project ID is required' });
+        }
+
+        const ratings = await ratingService.getProjectRatings(projectId);
+
+        res.status(200).json({
+            success: true,
+            data: ratings,
+        });
+    } catch (error) {
+        logger.error('Get Project Ratings Error:', error);
+        res.status(500).json({ success: false, message: 'Failed to fetch project ratings' });
+    }
+};

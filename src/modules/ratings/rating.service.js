@@ -153,18 +153,13 @@ class RatingService {
             }
         });
 
-        // Handle revocations implicitly: If they no longer meet previous badge criteria, it will just not be included in earnedBadgeIds.
-        // Except for maybe foundational badges like KYC which are not dynamically based on ratings. 
-        // Usually, we only want to auto-manage performance-based badges here.
-
-        // Keep non-performance badges (kyc, background-check, etc.)
+        // Combine kept manual badges + newly earned performance badges (unique array)
         const currentBadges = worker.badges || [];
         const manualBadgeSlugs = ['kyc-verified', 'background-checked'];
         const keptBadgeIds = currentBadges
             .filter(b => manualBadgeSlugs.includes(b.slug))
             .map(b => b._id);
 
-        // Combine kept manual badges + newly earned performance badges (unique array)
         const combinedBadgeIds = [...new Set([...keptBadgeIds, ...earnedBadgeIds])];
 
         worker.rating = avgRating;
@@ -198,6 +193,15 @@ class RatingService {
                 pages: Math.ceil(total / limit)
             }
         };
+    }
+
+    /**
+     * Get all ratings for a specific project
+     */
+    async getProjectRatings(projectId) {
+        return await Rating.find({ job: projectId })
+            .populate('worker', 'user')
+            .populate('client', 'name profileImage');
     }
 }
 
