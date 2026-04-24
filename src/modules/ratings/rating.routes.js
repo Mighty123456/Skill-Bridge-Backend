@@ -8,8 +8,8 @@ const router = express.Router();
 // Allow authenticated users to view
 router.use(authenticate);
 
-// Only 'user' (client) can submit a rating
-router.post('/submit', authorize('user'), ratingController.submitRating);
+// Both 'user' (client) and 'contractor' can submit a rating
+router.post('/submit', authorize('user', 'contractor'), ratingController.submitRating);
 router.get('/worker/:workerId', ratingController.getWorkerRatings);
 
 module.exports = router;

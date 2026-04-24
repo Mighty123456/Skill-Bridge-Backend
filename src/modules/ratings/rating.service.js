@@ -186,7 +186,7 @@ class RatingService {
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
-            .populate('client', 'firstName lastName profilePicture');
+            .populate('client', 'name profileImage');
 
         const total = await Rating.countDocuments({ worker: workerId });
 
