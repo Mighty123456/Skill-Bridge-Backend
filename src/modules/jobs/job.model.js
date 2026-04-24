@@ -72,10 +72,15 @@ const jobSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['open', 'assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed', 'warranty_in_progress'],
+            enum: ['open', 'assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'completed', 'cancelled', 'disputed', 'warranty_in_progress', 'draft', 'active', 'archived'],
             default: 'open',
             index: true,
         },
+        is_contractor_project: {
+            type: Boolean,
+            default: false,
+        },
+
         is_emergency: {
             type: Boolean,
             default: false,
@@ -88,7 +93,9 @@ const jobSchema = new mongoose.Schema(
             type: String, // URLs for work completion proof
         }],
         work_summary: { type: String, trim: true },
-        digital_signature: { type: String }, // URL to signature image
+        digital_signature: { type: String }, // URL to signature image (Worker)
+        worker_signature: { type: String },  // Explicit Worker Signature
+        client_signature: { type: String },  // Explicit Client/User Signature
 
         // Execution Details
         start_otp: { type: String, select: false }, // Hidden by default
@@ -204,6 +211,11 @@ const jobSchema = new mongoose.Schema(
                 note: String
             }
         }],
+        worker_ids: [{ 
+            type: mongoose.Schema.Types.ObjectId, 
+            ref: 'User' 
+        }],
+
 
         // Module 4: Execution & Timeline
         // Security & Constraints

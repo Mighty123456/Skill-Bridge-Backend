@@ -477,6 +477,12 @@ exports.addTaskToJob = async (req, res) => {
 
         job.tasks.push(newTask);
         
+        // Ensure worker is in project worker list
+        if (assigned_worker_id) {
+            job.worker_ids.addToSet(assigned_worker_id);
+        }
+
+        
         // Phase 12 Enhancement: Auto-sync project status
         await JobService.syncProjectStatus(job);
 
@@ -549,7 +555,11 @@ exports.updateTask = async (req, res) => {
         if (updateData.title) task.title = updateData.title;
         if (updateData.description) task.description = updateData.description;
         if (updateData.status) task.status = updateData.status;
-        if (updateData.assigned_worker_id) task.assigned_worker_id = updateData.assigned_worker_id;
+        if (updateData.assigned_worker_id) {
+            task.assigned_worker_id = updateData.assigned_worker_id;
+            job.worker_ids.addToSet(updateData.assigned_worker_id);
+        }
+
         if (updateData.assigned_worker_name) task.assigned_worker_name = updateData.assigned_worker_name;
         if (updateData.due_date) task.due_date = new Date(updateData.due_date);
         if (updateData.start_date) task.start_date = new Date(updateData.start_date);

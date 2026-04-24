@@ -555,6 +555,8 @@ exports.releasePayment = async (jobId) => {
         }
 
         job.payment_released = true;
+        job.status = 'completed';
+        job.completed_at = new Date();
         await job.save({ session });
 
         await session.commitTransaction();

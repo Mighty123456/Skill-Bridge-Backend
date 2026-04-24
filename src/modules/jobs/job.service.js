@@ -880,7 +880,7 @@ exports.respondToMaterial = async (jobId, userId, requestId, approved) => {
 /**
  * Submit Completion Proof (Updated with Summary & Signature)
  */
-exports.submitCompletion = async (jobId, workerId, files, summary, signatureFile) => {
+exports.submitCompletion = async (jobId, workerId, files, summary, workerSignatureFile, clientSignatureFile) => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     if (job.selected_worker_id.toString() !== workerId.toString()) throw new Error('Unauthorized');
@@ -899,16 +899,25 @@ exports.submitCompletion = async (jobId, workerId, files, summary, signatureFile
     const uploadResults = await Promise.all(uploadPromises);
     completion_photos = uploadResults.map(r => r.url);
 
-    let digital_signature = null;
-    if (signatureFile) {
-        const uploadResult = await cloudinaryService.uploadOptimizedImage(signatureFile.buffer, `skillbridge/signatures/${jobId}`);
-        digital_signature = uploadResult.url;
+    let worker_signature = null;
+    let client_signature = null;
+    if (workerSignatureFile) {
+        const uploadResult = await cloudinaryService.uploadOptimizedImage(workerSignatureFile.buffer, `skillbridge/signatures/worker_${jobId}`);
+        worker_signature = uploadResult.url;
+    }
+
+    if (clientSignatureFile) {
+        const uploadResult = await cloudinaryService.uploadOptimizedImage(clientSignatureFile.buffer, `skillbridge/signatures/client_${jobId}`);
+        client_signature = uploadResult.url;
     }
 
     job.status = 'reviewing';
     job.completion_photos = completion_photos;
-    job.digital_signature = digital_signature;
+    job.digital_signature = worker_signature; // Legacy fallback
+    job.worker_signature = worker_signature;
+    job.client_signature = client_signature;
     job.work_summary = summary;
+
     job.completed_at = new Date();
 
     appendTimeline(job, 'reviewing', 'worker', 'Completion proof & digital signature submitted');
@@ -1799,7 +1808,10 @@ exports.clockInTask = async (jobId, taskId, workerId, location) => {
 /**
  * Clock Out from a Specific Task
  */
-exports.clockOutTask = async (jobId, taskId, workerId, location, isCompleted = false) => {
+/**
+ * Clock Out from a Specific Task
+ */
+exports.clockOutTask = async (jobId, taskId, workerId, location, isCompleted = false, completionPhotos = [], notes = '') => {
     const job = await Job.findById(jobId);
     if (!job) throw new Error('Job not found');
     const task = job.tasks.id(taskId);
@@ -1817,8 +1829,19 @@ exports.clockOutTask = async (jobId, taskId, workerId, location, isCompleted = f
         task.total_duration_minutes = (task.total_duration_minutes || 0) + session.duration_minutes;
     }
 
-    task.status = isCompleted ? 'completed' : 'paused';
-    this.appendTimeline(job, job.status, 'worker', `${isCompleted ? 'Completed' : 'Paused'} task: "${task.title}"`, { taskId });
+    if (isCompleted) {
+        task.status = 'completed';
+        if (completionPhotos && completionPhotos.length > 0) {
+            task.completion_photos = completionPhotos;
+        }
+        if (notes) {
+            task.notes = notes;
+        }
+    } else {
+        task.status = 'paused';
+    }
+
+    appendTimeline(job, job.status, 'worker', `${isCompleted ? 'Completed' : 'Paused'} task: "${task.title}"`, { taskId });
     await this.syncProjectStatus(job);
     await job.save();
     return job;
@@ -1832,15 +1855,14 @@ exports.syncProjectStatus = async (job) => {
     const tasks = job.tasks || [];
     if (tasks.length === 0) return;
 
-    const allCompleted = tasks.every(t => t.status === 'completed');
+    const allCompleted = tasks.length > 0 && tasks.every(t => t.status === 'completed');
     const anyInProgress = tasks.some(t => t.status === 'inProgress');
-    const anyStarted = tasks.some(t => t.status === 'inProgress' || t.status === 'completed' || t.status === 'paused');
 
     if (allCompleted) {
         job.status = 'reviewing';
-    } else if (anyInProgress || anyStarted) {
+    } else if (anyInProgress || (job.status === 'assigned' && tasks.some(t => t.status !== 'pending'))) {
         job.status = 'in_progress';
-    } else {
+    } else if (job.status !== 'completed' && job.status !== 'cancelled') {
         job.status = 'assigned';
     }
     logger.info(`Sync: Project ${job._id} is now ${job.status}`);

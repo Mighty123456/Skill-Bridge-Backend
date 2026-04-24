@@ -28,7 +28,8 @@ router.post('/:id/materials/:requestId/respond', protect, authorize('user', 'con
 
 const completionUpload = uploadFields([
     { name: 'completion_photos', maxCount: 5 },
-    { name: 'signature', maxCount: 1 }
+    { name: 'worker_signature', maxCount: 1 },
+    { name: 'client_signature', maxCount: 1 }
 ]);
 router.post('/:id/complete', protect, authorize('worker'), catchUploadErrors(completionUpload), jobController.submitCompletion);
 router.post('/:id/confirm-completion', protect, authorize('user', 'contractor'), jobController.confirmCompletion);
@@ -46,7 +47,7 @@ router.get('/:id/invoice', protect, jobController.getInvoice);
 router.get('/:id/warranty-card', protect, jobController.getWarrantyCard);
 
 // Phase 4: Contractor Operations
-router.post('/:id/tasks/:taskId/attendance', protect, jobController.updateTaskAttendance);
+router.post('/:id/tasks/:taskId/attendance', protect, catchUploadErrors(uploadMultiple('completion_photos', 5)), jobController.updateTaskAttendance);
 router.put('/:id/tasks/:taskId/status', protect, jobController.updateTaskStatus);
 router.post('/:id/materials/:requestId/respond', protect, authorize('user', 'contractor'), jobController.respondToMaterialRequest);
 

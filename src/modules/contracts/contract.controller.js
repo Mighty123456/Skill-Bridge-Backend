@@ -140,11 +140,12 @@ exports.createContract = async (req, res) => {
             const WalletService = require('../wallet/wallet.service');
             await WalletService.lockEscrow(
                 contractorId, 
-                null, // Project ID is null for generic contracts or use contract._id
+                contract.project_id, // Pass project ID for better tracking
                 workerId, 
                 costToReserve, 
                 `Escrow for contract: ${title}`
             );
+
 
             await session.commitTransaction();
             

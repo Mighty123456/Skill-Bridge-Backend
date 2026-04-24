@@ -460,9 +460,10 @@ exports.submitCompletion = async (req, res) => {
 
         // When using uploadFields, req.files is an object keyed by fieldname
         const completionFiles = req.files['completion_photos'] || [];
-        const signatureFile = req.files['signature'] ? req.files['signature'][0] : null;
+        const workerSignatureFile = req.files['worker_signature'] ? req.files['worker_signature'][0] : null;
+        const clientSignatureFile = req.files['client_signature'] ? req.files['client_signature'][0] : null;
 
-        const job = await JobService.submitCompletion(id, req.user._id, completionFiles, summary, signatureFile);
+        const job = await JobService.submitCompletion(id, req.user._id, completionFiles, summary, workerSignatureFile, clientSignatureFile);
         res.json({ success: true, message: 'Completion proof submitted. Waiting for tenant confirmation.', data: job });
     } catch (error) {
         logger.error('Submit Completion Error:', error);
@@ -882,13 +883,24 @@ exports.updateTaskStatus = async (req, res) => {
 exports.updateTaskAttendance = async (req, res) => {
     try {
         const { id, taskId } = req.params;
-        const { lat, lng, action, isCompleted } = req.body; // action: 'clock_in' or 'clock_out'
+        const { lat, lng, action, isCompleted, notes } = req.body; // action: 'clock_in' or 'clock_out'
+
+        // 1. Handle Task Photos
+        let completionPhotos = [];
+        if (req.files && req.files.length > 0) {
+            logger.info(`Uploading ${req.files.length} task completion photos...`);
+            const uploadPromises = req.files.map(file =>
+                uploadOptimizedImage(file.buffer, `skillbridge/tasks/${id}/${taskId}`)
+            );
+            const uploadResults = await Promise.all(uploadPromises);
+            completionPhotos = uploadResults.map(r => r.url);
+        }
 
         let job;
         if (action === 'clock_in') {
             job = await JobService.clockInTask(id, taskId, req.user._id, { lat, lng });
         } else {
-            job = await JobService.clockOutTask(id, taskId, req.user._id, { lat, lng }, isCompleted);
+            job = await JobService.clockOutTask(id, taskId, req.user._id, { lat, lng }, isCompleted === 'true' || isCompleted === true, completionPhotos, notes);
         }
 
         res.json({ success: true, message: `Successfully ${action} task`, data: job });
