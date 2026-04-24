@@ -411,8 +411,8 @@ const getDashboardStats = async (req, res) => {
       Contractor.countDocuments({ verificationStatus: 'verified' }),
       User.countDocuments({ role: ROLES.CONTRACTOR }),
       User.countDocuments({ role: ROLES.USER }),
-      Job.countDocuments({ status: { $in: ['assigned', 'eta_confirmed', 'diagnosis_mode', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] } }),
-      Job.countDocuments({ status: 'completed' }),
+      Job.countDocuments({ status: { $in: ['assigned', 'eta_confirmed', 'diagnosis_mode', 'material_pending_approval', 'in_progress'] } }),
+      Job.countDocuments({ status: { $in: ['completed', 'reviewing', 'cooling_window'] } }),
       Job.countDocuments({ urgency_level: 'emergency', status: { $ne: 'completed' } }), // Active emergency jobs
       Payment.aggregate([
         { $match: { type: 'commission', status: 'completed' } },
@@ -1625,24 +1625,31 @@ const getContractById = async (req, res) => {
 const forceReleasePayment = async (req, res) => {
   try {
     const { id } = req.params;
-    const { reason } = req.body;
+    const { reason, escrowId } = req.body;
     
     const job = await Job.findById(id);
     if (!job) return errorResponse(res, 'Job not found', 404);
-    if (job.payment_released) return errorResponse(res, 'Payment already released', 400);
+    
+    // If no escrowId, we check the global flag. If escrowId is provided, we allow it if that specific escrow isn't released.
+    if (!escrowId && job.payment_released) return errorResponse(res, 'Payment already fully released', 400);
 
-    const payout = await paymentService.releasePayment(id);
+    // Call service with optional escrowId
+    const payout = await paymentService.releasePayment(id, escrowId);
     
     // Add to timeline
     job.timeline.push({
       status: job.status,
-      note: `ADMIN FORCE RELEASE: ${reason || 'Admin intervention to resolve dispute/delay.'}`,
+      note: `ADMIN FORCE RELEASE${escrowId ? ' (Partial)' : ''}: ${reason || 'Admin intervention to resolve dispute/delay.'}`,
       actor: 'admin',
       timestamp: new Date()
     });
+    
+    // Note: job.save() is handled after the service call if needed, 
+    // but the service itself might have updated the job status if all escrows are done.
+    // Let's re-fetch or use the result to be safe, but usually we just want to log the action.
     await job.save();
 
-    return successResponse(res, 'Payment released successfully via admin intervention', payout);
+    return successResponse(res, `Payment ${escrowId ? 'for worker ' : ''}released successfully via admin intervention`, payout);
   } catch (error) {
     logger.error(`Admin forceReleasePayment error: ${error.message}`);
     return errorResponse(res, error.message || 'Failed to release payment', 500);

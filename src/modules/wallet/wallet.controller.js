@@ -99,7 +99,7 @@ exports.releaseEscrow = async (req, res, next) => {
             jobId = payment.job;
         }
 
-        const result = await PaymentService.releasePayment(jobId);
+        const result = await PaymentService.releasePayment(jobId, escrowId);
         
         res.status(200).json({
             success: true,

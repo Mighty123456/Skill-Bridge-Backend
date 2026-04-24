@@ -334,7 +334,7 @@ exports.createMaterialCheckoutSession = async (jobId, userId, materialAmount, re
  * Release Job Payment
  * Moves funds from User Escrow -> Worker Balance + Platform Revenue
  */
-exports.releasePayment = async (jobId) => {
+exports.releasePayment = async (jobId, escrowId = null) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -353,169 +353,164 @@ exports.releasePayment = async (jobId) => {
              throw new Error('Payment release suspended: This project is currently under formal dispute. Resolve the dispute via admin desk to proceed.');
         }
 
-        // 2. Find ALL Escrow Payments
-        const escrowPayments = await Payment.find({
-            job: jobId,
-            type: 'escrow',
-            status: 'completed'
-        }).session(session);
+        // 2. Find relevant Escrow Payments
+        const query = { job: jobId, type: 'escrow', status: 'completed' };
+        if (escrowId) {
+            query._id = escrowId;
+        }
+        
+        const escrowPayments = await Payment.find(query).session(session);
 
         if (escrowPayments.length === 0) {
             throw new Error('No escrow payments found for this job');
         }
 
-        let totalWorkerPayout = 0;
-        let totalPlatformRevenue = 0;
-        let totalLocked = 0;
+        // 2b. Group Payouts by Worker
+        const payoutsByWorker = new Map();
 
-        for (const payment of escrowPayments) {
-            totalLocked += payment.amount;
-
-            // Check metadata to see if it's material or labor
-            if (payment.gatewayResponse && payment.gatewayResponse.isMaterial) {
-                // Material: 100% to worker
-                totalWorkerPayout += payment.amount;
-            } else if (payment.gatewayResponse && payment.gatewayResponse.breakdown) {
-                // Labor: Use stored breakdown
-                const bd = payment.gatewayResponse.breakdown;
-                totalWorkerPayout += bd.workerAmount;
-                totalPlatformRevenue += bd.platformRevenue;
-            } else {
-                // Fallback (Shouldn't happen if structure preserved)
-                // Assume it's labor? Or safe 100% worker? 
-                // Let's assume 100% worker to avoid stealing.
-                totalWorkerPayout += payment.amount;
-            }
-
-            // Mark escrow as released/closed?
-            // Actually we leave them as 'completed' but maybe add a flag 'released'?
-            // Payment model doesn't have 'released' status. 
-            // We'll rely on Job.payment_released flag to prevent double pay.
-        }
-
-        // 3. Mark escrow payments as released.
-        // If funds were locked via internal wallet, we must also decrement the user's escrowBalance.
         for (const ep of escrowPayments) {
-            ep.status = 'released';
-            await ep.save({ session });
+            const workerUserId = ep.worker || job.selected_worker_id;
+            if (!workerUserId) continue;
 
-            if (ep.paymentMethod === 'wallet') {
-                await Wallet.findOneAndUpdate(
-                    { user: ep.user },
-                    { $inc: { escrowBalance: -ep.amount } },
-                    { session }
-                );
-                logger.info(`Decremented escrowBalance for user ${ep.user} by ${ep.amount} (Wallet Escrow Released)`);
+            const wId = workerUserId.toString();
+            if (!payoutsByWorker.has(wId)) {
+                payoutsByWorker.set(wId, { 
+                    userId: workerUserId, 
+                    laborAmount: 0, 
+                    materialAmount: 0, 
+                    platformRevenue: 0, 
+                    payments: [] 
+                });
+            }
+            const data = payoutsByWorker.get(wId);
+            data.payments.push(ep);
+
+            if (ep.gatewayResponse && ep.gatewayResponse.isMaterial) {
+                data.materialAmount += ep.amount;
+            } else if (ep.gatewayResponse && ep.gatewayResponse.breakdown) {
+                const bd = ep.gatewayResponse.breakdown;
+                data.laborAmount += bd.workerAmount;
+                data.platformRevenue += bd.platformRevenue;
+            } else {
+                data.laborAmount += ep.amount;
             }
         }
 
-        // 4. Credit Worker Wallet (With Delay Logic & Warranty Reserve)
-        const worker = await Worker.findOne({ user: job.selected_worker_id }).session(session);
-        const isNewWorker = !worker || (worker.totalJobsCompleted || 0) < 5;
+        let totalPlatformRevenue = 0;
+        let lastPayoutRecord = null;
 
-        // Increment Worker Stats
-        if (worker) {
-            worker.totalJobsCompleted = (worker.totalJobsCompleted || 0) + 1;
-            // Also boost reliability score slightly for successful completion
-            worker.reliabilityScore = Math.min(100, (worker.reliabilityScore || 60) + 1);
-            await worker.save({ session });
-        }
+        // 3. Process payouts for each worker
+        for (const [wId, data] of payoutsByWorker) {
+            const targetWorkerUserId = data.userId;
+            const workerPayoutAmount = data.laborAmount + data.materialAmount;
+            totalPlatformRevenue += data.platformRevenue;
 
-        let warrantyReserve = 0;
-        if (job.diagnosis_report && job.diagnosis_report.warranty_offered && job.diagnosis_report.warranty_duration_days > 0) {
-            // Reserve 5% of the total labor payout. For simplicity, we assume totalWorkerPayout captures labor mostly here.
-            warrantyReserve = Math.round(totalWorkerPayout * 0.05);
-            job.warranty_reserve_locked = warrantyReserve;
-            await job.save({ session });
-        }
+            // Mark escrow payments as released and decrement contractor escrow balance
+            for (const ep of data.payments) {
+                ep.status = 'released';
+                await ep.save({ session });
 
-        const payoutToWallet = totalWorkerPayout - warrantyReserve;
-        const warrantyExpiryDate = new Date(Date.now() + (job.diagnosis_report?.warranty_duration_days || 0) * 24 * 60 * 60 * 1000);
+                if (ep.paymentMethod === 'wallet') {
+                    await Wallet.findOneAndUpdate(
+                        { user: ep.user },
+                        { $inc: { escrowBalance: -ep.amount } },
+                        { session }
+                    );
+                }
+            }
 
-        const workerWallet = await Wallet.findOne({ user: job.selected_worker_id }).session(session);
-        if (!workerWallet) {
-            // ... (Wallet creation logic remains)
-            const initialWallet = {
-                user: job.selected_worker_id,
-                balance: isNewWorker ? 0 : payoutToWallet,
-                pendingBalance: isNewWorker ? payoutToWallet : 0,
-                pendingPayouts: isNewWorker ? [{
-                    amount: payoutToWallet,
-                    releaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000), // 72 Hour Delay
-                    jobId: jobId
-                }] : [],
-                warrantyReserveBalance: warrantyReserve,
-                activeWarranties: warrantyReserve > 0 ? [{
-                    amount: warrantyReserve,
-                    releaseAt: warrantyExpiryDate,
-                    jobId: jobId
-                }] : []
-            };
-            await Wallet.create([initialWallet], { session });
-        } else {
+            // Credit Worker Wallet
+            const worker = await Worker.findOne({ user: targetWorkerUserId }).session(session);
+            const isNewWorker = !worker || (worker.totalJobsCompleted || 0) < 5;
+
+            // Increment Worker Stats (Only once per job per worker)
+            if (worker) {
+                const alreadyCredited = await Payment.findOne({ 
+                    job: jobId, 
+                    worker: targetWorkerUserId, 
+                    type: 'payout', 
+                    status: 'completed' 
+                }).session(session);
+                
+                if (!alreadyCredited) {
+                    worker.totalJobsCompleted = (worker.totalJobsCompleted || 0) + 1;
+                    worker.reliabilityScore = Math.min(100, (worker.reliabilityScore || 60) + 1);
+                    await worker.save({ session });
+                }
+            }
+
+            // Handle Warranty Reserve (Simplified for now, using labor share)
+            let warrantyReserve = 0;
+            if (job.diagnosis_report && job.diagnosis_report.warranty_offered && job.diagnosis_report.warranty_duration_days > 0) {
+                warrantyReserve = Math.round(data.laborAmount * 0.05);
+            }
+            const netPayout = workerPayoutAmount - warrantyReserve;
+            const warrantyExpiryDate = new Date(Date.now() + (job.diagnosis_report?.warranty_duration_days || 0) * 24 * 60 * 60 * 1000);
+
+            let workerWallet = await Wallet.findOne({ user: targetWorkerUserId }).session(session);
+            if (!workerWallet) {
+                const created = await Wallet.create([{ user: targetWorkerUserId, balance: 0, pendingBalance: 0 }], { session });
+                workerWallet = created[0];
+            }
+
             if (warrantyReserve > 0) {
                 workerWallet.warrantyReserveBalance = (workerWallet.warrantyReserveBalance || 0) + warrantyReserve;
                 if (!workerWallet.activeWarranties) workerWallet.activeWarranties = [];
-                workerWallet.activeWarranties.push({
-                    amount: warrantyReserve,
-                    releaseAt: warrantyExpiryDate,
-                    jobId: jobId
-                });
+                workerWallet.activeWarranties.push({ amount: warrantyReserve, releaseAt: warrantyExpiryDate, jobId });
             }
 
-            if (isNewWorker) {
-                workerWallet.pendingBalance = (workerWallet.pendingBalance || 0) + payoutToWallet;
+            const skipCoolingWindow = job.is_contractor_project === true;
+
+            if (isNewWorker && !skipCoolingWindow) {
+                workerWallet.pendingBalance = (workerWallet.pendingBalance || 0) + netPayout;
                 if (!workerWallet.pendingPayouts) workerWallet.pendingPayouts = [];
-                workerWallet.pendingPayouts.push({
-                    amount: payoutToWallet,
-                    releaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000),
-                    jobId: jobId
+                workerWallet.pendingPayouts.push({ 
+                    amount: netPayout, 
+                    releaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000), 
+                    jobId 
                 });
             } else {
-                // AUTO-PAYOUT LOGIC (Stripe Connect)
-                // If worker is NOT new and has a Stripe account, attempt automated transfer
-                const stripeResult = await exports.processStripeTransfer(job.selected_worker_id, payoutToWallet, jobId);
-
+                // Attempt Stripe Transfer or direct credit for established workers or contractor projects
+                const stripeResult = await exports.processStripeTransfer(targetWorkerUserId, netPayout, jobId);
                 if (stripeResult.success) {
-                    workerWallet.balance = (workerWallet.balance || 0) + payoutToWallet;
-                    // We still record it in our wallet for ledger consistency, 
-                    // but we might want to mark it as withdrawn/processed externally.
-                    // For now, increasing balance is fine as the worker can see it as "paid".
-                    const { appendTimeline } = require('../jobs/job.service');
-                    appendTimeline(job, 'completed', 'system', `Automated payout via Stripe Connect successful. Transfer ID: ${stripeResult.transferId}`);
+                    workerWallet.balance = (workerWallet.balance || 0) + netPayout;
                 } else {
-                    workerWallet.balance += payoutToWallet;
-                    logger.info(`Manual payout required for Job ${jobId}. Reason: ${stripeResult.message}`);
+                    workerWallet.balance = (workerWallet.balance || 0) + netPayout;
+                    logger.info(`Manual payout fallback for worker ${targetWorkerUserId} on job ${jobId}`);
                 }
             }
             await workerWallet.save({ session });
-        }
 
-        if (isNewWorker) {
-            const { appendTimeline } = require('../jobs/job.service');
-            appendTimeline(job, 'completed', 'system', 'Worker is new (< 5 jobs). Payout scheduled with 72-hour fraud prevention delay.');
+            // Create Payout Record
+            const payout = new Payment({
+                job: jobId,
+                user: job.user_id,
+                worker: targetWorkerUserId,
+                amount: workerPayoutAmount,
+                type: 'payout',
+                status: 'completed',
+                transactionId: `TXN_PAYOUT_${Date.now()}_${jobId}_${wId.slice(-4)}`,
+                currency: config.DEFAULT_CURRENCY || 'INR',
+                gatewayResponse: { labor: data.laborAmount, material: data.materialAmount }
+            });
+            await signPayment(payout, session);
+            await payout.save({ session });
+            lastPayoutRecord = payout;
+
+            // Notify Worker
+            try {
+                await notifyHelper.onJobStatusUpdate(
+                    targetWorkerUserId,
+                    'Payment Released',
+                    `You have received ₹${netPayout} for work on "${job.job_title}".`,
+                    { jobId, type: 'payout', amount: netPayout }
+                );
+            } catch (nErr) {}
         }
 
         // 5. Credit Platform Wallet (Revenue)
         if (totalPlatformRevenue > 0) {
             await WalletService.creditPlatformRevenue(totalPlatformRevenue, session);
-        }
-        const payout = new Payment({
-            job: jobId,
-            user: job.user_id,
-            worker: job.selected_worker_id,
-            amount: totalWorkerPayout,
-            type: 'payout',
-            status: 'completed',
-            transactionId: `TXN_PAYOUT_${Date.now()}_${jobId}`,
-            currency: config.DEFAULT_CURRENCY || 'INR',
-            gatewayResponse: { revenue: totalPlatformRevenue }
-        });
-        await signPayment(payout, session);
-        await payout.save({ session });
-
-        // 7. Create Commission Record
-        if (totalPlatformRevenue > 0) {
             const commissionRecord = new Payment({
                 job: jobId,
                 user: job.user_id,
@@ -529,38 +524,37 @@ exports.releasePayment = async (jobId) => {
             await commissionRecord.save({ session });
         }
 
-        // Send Multi-Channel Notifications
-        try {
-            const tenant = await User.findById(job.user_id).session(session);
-            const workerUser = await User.findById(job.selected_worker_id).session(session);
-            if (workerUser) {
-                await notifyHelper.onPaymentReleased(workerUser, job, {
-                    netPayout: totalWorkerPayout
-                });
-            }
-            if (tenant) {
-                // Custom push for tenant notifying completion
-                const tTitle = 'Job Finalized';
-                const tBody = `Payment has been released to the worker for job "${job.job_title}".`;
-                // Simple DB notification for tenant
-                await notifyHelper.onJobStatusUpdate(
-                    job.user_id,
-                    tTitle,
-                    tBody,
-                    { jobId, type: 'release' }
-                );
-            }
-        } catch (notifyErr) {
-            logger.error(`Release notification failed: ${notifyErr.message}`);
+
+        // 4. Finalize Job Status (Only if ALL escrows for this job are now released)
+        const remainingEscrows = await Payment.countDocuments({
+            job: jobId,
+            type: 'escrow',
+            status: 'completed'
+        }).session(session);
+
+        if (remainingEscrows === 0) {
+            job.payment_released = true;
+            job.status = 'completed';
+            job.completed_at = new Date();
+            await job.save({ session });
+
+            // Notify Tenant/Contractor of project completion
+            try {
+                const User = require('../users/user.model');
+                const tenant = await User.findById(job.user_id).session(session);
+                if (tenant) {
+                    await notifyHelper.onJobStatusUpdate(
+                        job.user_id,
+                        'Project Finalized',
+                        `All payments released and project "${job.job_title}" is now completed.`,
+                        { jobId, type: 'project_completed' }
+                    );
+                }
+            } catch (nErr) {}
         }
 
-        job.payment_released = true;
-        job.status = 'completed';
-        job.completed_at = new Date();
-        await job.save({ session });
-
         await session.commitTransaction();
-        return payout;
+        return { success: true, count: payoutsByWorker.size };
     } catch (error) {
         await session.abortTransaction();
         throw error;

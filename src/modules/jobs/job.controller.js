@@ -150,9 +150,21 @@ exports.getJob = async (req, res) => {
 
         // Fetch Contract details if it's a contractor project
         let contract = null;
+        let myEscrowStatus = null;
         if (job.is_contractor_project) {
             const Contract = require('../contracts/contract.model');
             contract = await Contract.findOne({ project_id: job._id });
+            
+            // For contractor projects, worker needs to know their specific escrow status
+            if (req.user && req.user.role === 'worker') {
+                const Payment = require('../payments/payment.model');
+                const myEscrow = await Payment.findOne({
+                    job: job._id,
+                    worker: req.user._id,
+                    type: 'escrow'
+                });
+                if (myEscrow) myEscrowStatus = myEscrow.status;
+            }
         }
 
         res.json({
@@ -162,7 +174,8 @@ exports.getJob = async (req, res) => {
                 hasSubmittedQuotation,
                 submittedQuotation,
                 start_otp, // Will be undefined for non-owners
-                contract
+                contract,
+                myEscrowStatus
             }
         });
     } catch (error) {
@@ -234,7 +247,26 @@ exports.getWorkerJobs = async (req, res) => {
             .sort({ updated_at: -1 })
             .populate('user_id', 'name phone address profileImage');
 
-        res.json({ success: true, data: jobs });
+        // Add myEscrowStatus to each job in the list
+        const Payment = require('../payments/payment.model');
+        const jobsWithEscrowStatus = await Promise.all(jobs.map(async (job) => {
+            let myEscrowStatus = null;
+            if (job.is_contractor_project) {
+                const myEscrow = await Payment.findOne({
+                    job: job._id,
+                    worker: req.user._id,
+                    type: 'escrow'
+                });
+                if (myEscrow) myEscrowStatus = myEscrow.status;
+            }
+            
+            return {
+                ...job.toObject(),
+                myEscrowStatus
+            };
+        }));
+
+        res.json({ success: true, data: jobsWithEscrowStatus });
 
     } catch (error) {
         console.error('Get Worker Jobs Error:', error);
@@ -572,12 +604,12 @@ exports.getInvoice = async (req, res) => {
 
         if (!job) return res.status(404).send('Invoice not found');
 
-        const isContractor = job.is_contractor_project;
+        const iscontractor = job.is_contractor_project;
         let laborCost = 0;
         let materialCost = 0;
         let items = [];
 
-        if (isContractor) {
+        if (iscontractor) {
             // Aggregate all tasks for contractors
             laborCost = job.budget || 0; // The total contract value
             
@@ -639,7 +671,7 @@ exports.getInvoice = async (req, res) => {
                         <div style="font-size: 12px; color: #64748b; margin-top: 5px;">Project Settlement & Claims Proof</div>
                     </div>
                     <div class="invoice-details">
-                        <h1 style="margin: 0; font-size: 26px; color: #008080;">${isContractor ? 'PROJECT SETTLEMENT' : 'TAX INVOICE'}</h1>
+                        <h1 style="margin: 0; font-size: 26px; color: #008080;">${iscontractor ? 'PROJECT SETTLEMENT' : 'TAX INVOICE'}</h1>
                         <div style="margin-top: 5px; color: #64748b; font-weight: bold;">#INV-${job._id.toString().slice(-8).toUpperCase()}</div>
                         <div style="font-size: 14px; margin-top: 5px;">Date: ${invoiceDate}</div>
                     </div>
