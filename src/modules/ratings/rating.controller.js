@@ -45,7 +45,7 @@ exports.submitRating = async (req, res) => {
     } catch (error) {
         logger.error('Submit Rating Error:', error);
         if (error.code === 11000) {
-            return res.status(400).json({ success: false, message: 'You have already submitted a rating for this job.' });
+            return res.status(400).json({ success: false, message: 'You have already submitted a rating for this worker on this job.' });
         }
         res.status(500).json({ success: false, message: error.message || 'Failed to submit rating' });
     }

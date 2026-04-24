@@ -6,7 +6,6 @@ const ratingSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: 'Job',
             required: true,
-            unique: true, // One rating per job
         },
         client: {
             type: mongoose.Schema.Types.ObjectId,
@@ -62,6 +61,7 @@ const ratingSchema = new mongoose.Schema(
 );
 
 // Indexes for faster querying
+ratingSchema.index({ job: 1, worker: 1 }, { unique: true });
 ratingSchema.index({ worker: 1, createdAt: -1 });
 ratingSchema.index({ client: 1, createdAt: -1 });
 
