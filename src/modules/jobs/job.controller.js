@@ -217,10 +217,17 @@ exports.getWorkerJobs = async (req, res) => {
             query.status = 'assigned';
         } else if (status === 'active') {
             query.status = { $in: ['eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] };
+            query.payment_released = { $ne: true }; // Exclude released ones
         } else if (status === 'completed') {
-            query.status = 'completed';
+            query.$or = [
+                { status: 'completed' },
+                { payment_released: true }
+            ];
         } else if (status === 'history') {
-            query.status = { $in: ['completed', 'cancelled'] };
+            query.$or = [
+                { status: { $in: ['completed', 'cancelled'] } },
+                { payment_released: true }
+            ];
         }
 
         const jobs = await Job.find(query)
@@ -247,8 +254,12 @@ exports.getTenantJobs = async (req, res) => {
             query.status = 'open';
         } else if (status === 'active') {
             query.status = { $in: ['assigned', 'eta_confirmed', 'on_the_way', 'arrived', 'diagnosis_mode', 'diagnosed', 'material_pending_approval', 'in_progress', 'reviewing', 'cooling_window', 'disputed'] };
+            query.payment_released = { $ne: true }; // Exclude released ones
         } else if (status === 'completed') {
-            query.status = 'completed';
+            query.$or = [
+                { status: 'completed' },
+                { payment_released: true }
+            ];
         }
 
         const jobs = await Job.find(query)
